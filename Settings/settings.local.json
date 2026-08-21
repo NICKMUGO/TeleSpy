@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm lint *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(node *)",
+      "Bash(pnpm dlx *)",
+      "Read(//home/mugo/Projects/TeleSpy/.claude/**)",
+      "Read(//home/mugo/Projects/TeleSpy/**)"
+    ]
+  }
+}
