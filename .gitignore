@@ -77,6 +77,17 @@ web_modules/
 # Next.js build output
 .next
 out
+next-env.d.ts
+
+# Playwright
+/playwright-report
+/test-results
+/blob-report
+
+# misc
+.DS_Store
+*.pem
+.vercel
 
 # Nuxt.js build / generate output
 .nuxt
@@ -141,3 +152,18 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Python
+__pycache__/
+*.pyc
+
+# Design docs (diagrams, flowcharts, lab assignments) - kept local, not tracked
+Design_Docs/
+
+# CDR data (contains PII: phone numbers, call metadata) - never commit real records
+ML/data/cdr_incoming/*
+!ML/data/cdr_incoming/.gitkeep
+ML/data/processed/*
+!ML/data/processed/.gitkeep
+ML/data/archive/*
+!ML/data/archive/.gitkeep

@@ -1,9 +1,20 @@
 {
   "permissions": {
     "allow": [
+      "Bash(pnpm exec *)",
+      "Bash(pnpm dlx *)",
       "Bash(pnpm lint *)",
       "Bash(pnpm typecheck *)",
-      "Bash(node *)"
+      "Bash(pnpm format:check)",
+      "Bash(pnpm test:e2e)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm check-contrast *)",
+      "Bash(pnpm start *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/dashboard)",
+      "Bash(node .tmp-screenshot.mjs)",
+      "Bash(pkill -f \"next-server\")",
+      "Bash(pnpm format *)",
+      "Bash(pnpm build *)"
     ]
   }
 }
