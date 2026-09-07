@@ -269,6 +269,17 @@ needs it repeatedly. It has no real backend — submission just toasts and
 navigates to `/dashboard` — clearly commented as a Phase 5 replacement
 point, same as the mock user.
 
+### Sidebar nav never scrolls internally
+
+shadcn's `SidebarContent` ships with `overflow-auto` so the nav list scrolls
+independently if it's taller than the viewport. Per the project owner's
+explicit preference, changed to `overflow-visible` in
+`components/ui/sidebar.tsx` — the current 12-item nav fits comfortably on
+any real screen, so the tradeoff (nav could visually overflow past the
+sidebar's fixed height on an extremely short viewport, rather than scroll)
+is acceptable. If the nav grows enough to matter, revisit rather than
+silently reintroducing scroll.
+
 ### `/settings` reuses the Display Settings dialog's controls, not a second copy
 
 Extracted the theme/font-size/density/motion controls out of
