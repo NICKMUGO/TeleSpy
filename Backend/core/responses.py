@@ -1,31 +1,13 @@
-"""Uniform JSON envelope + pagination helpers shared by every Resource.
+"""Pagination helpers shared by every Resource.
 
-`ok()` / `err()` are the only two shapes the API ever returns, so they
-live in one place rather than being re-implemented per blueprint.
+Response bodies (success and error) are built inline at each call site
+in api/*.py rather than through a shared envelope helper.
 """
-from flask import jsonify, make_response, request
+from flask import request
 
 # Hard ceiling on page size so a caller can't ask for the whole table.
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 25
-
-
-def err(message, status=400, code="error", details=None):
-    body = {"error": code, "message": message}
-    if details is not None:
-        body["details"] = details
-    return make_response(jsonify(body), status)
-
-
-def ok(data=None, message=None, status=200, meta=None):
-    body = {}
-    if message is not None:
-        body["message"] = message
-    if data is not None:
-        body["data"] = data
-    if meta is not None:
-        body["meta"] = meta
-    return make_response(jsonify(body), status)
 
 
 def paginate_args():

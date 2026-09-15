@@ -82,13 +82,19 @@ class Role(db.Model):
     def get_call_unit(self) -> float | None:
         return self.call_limit_kshs
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, *, include: "set[str] | None" = None) -> dict:
+        include = include or set()
+        out = {
             "id": self.role_id,
             "role_name": self.role_name,
             "permissions": self.permissions or [],
             "call_limit_kshs": self.call_limit_kshs,
         }
+        # Opt-in nested collection: only walked when the caller asks for it,
+        # so a plain GET /roles stays one query instead of one-per-role.
+        if "users" in include:
+            out["users"] = [u.to_dict() for u in self.users]
+        return out
 
 
 # ============================================================================
@@ -112,13 +118,23 @@ class Department(db.Model):
             return "unmonitored"
         return "over_budget" if spend > self.budget_ceiling else "within_budget"
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, *, include: "set[str] | None" = None) -> dict:
+        include = include or set()
+        out = {
             "id": self.department_id,
             "name": self.name,
             "cost_centre_code": self.cost_centre_code,
             "budget_ceiling": self.budget_ceiling,
         }
+        # One-to-many children, each opt-in via `include` so the list
+        # endpoint doesn't fan out into N extra queries by default.
+        if "employees" in include:
+            out["employees"] = [e.to_dict() for e in self.employees]
+        if "forecast_results" in include:
+            out["forecast_results"] = [
+                f.to_dict() for f in sorted(self.forecast_results, key=lambda f: f.period)
+            ]
+        return out
 
 
 # ============================================================================
@@ -135,6 +151,10 @@ class Employee(db.Model):
     # PATCH /employees/<id>. Still unique whenever it IS set.
     staff_number = db.Column(db.String(32), unique=True)
     full_name = db.Column(db.String(120), nullable=False)
+    # Permanent 3-digit PBX extension, e.g. "083" — independent of whichever
+    # SIM is currently allocated (that has its own separate msisdn_pbx).
+    # Nullable/unique like staff_number: assigned once, stays fixed.
+    extension_code = db.Column(db.String(3), unique=True)
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     department = db.relationship("Department", back_populates="employees")
@@ -147,7 +167,7 @@ class Employee(db.Model):
         now = _utcnow()
         return next((a for a in self.allocations if a.is_active_at(now)), None)
 
-    def to_dict(self, *, viewer: "User | None" = None) -> dict:
+    def to_dict(self, *, viewer: "User | None" = None, include: "set[str] | None" = None) -> dict:
         """Field-level protections the brief calls out: the assigned
         extension is decrypted only for authorized viewers, and
         total_cost_kes is stripped entirely (not nulled — omitted) unless
@@ -157,11 +177,13 @@ class Employee(db.Model):
         from constants import Role as RoleNames
         from security import decrypt_value
 
+        include = include or set()
         out = {
             "id": self.employee_id,
             "staff_number": self.staff_number,
             "full_name": self.full_name,
             "department_id": self.department_id,
+            "extension_code": self.extension_code,
         }
         if self.user:
             out["email"] = self.user.email
@@ -184,6 +206,18 @@ class Employee(db.Model):
             current_month = _utcnow().strftime("%Y-%m")
             summary = next((s for s in self.usage_summaries if s.month == current_month), None)
             out["total_cost_kes"] = summary.total_cost if summary else 0
+
+        # Opt-in one-to-many expansions. Cost history is gated behind the
+        # same can_view_cost check as the single-month figure above — the
+        # `include` flag never widens what a viewer is allowed to see.
+        if "usage_summaries" in include and can_view_cost:
+            out["usage_summaries"] = [
+                s.to_dict() for s in sorted(self.usage_summaries, key=lambda s: s.month)
+            ]
+        if "allocations" in include:
+            out["allocations"] = [
+                a.to_dict() for a in sorted(self.allocations, key=lambda a: a.start_at)
+            ]
 
         return out
 
@@ -326,16 +360,12 @@ class TelcoPlan(db.Model):
 
     sims = db.relationship("SimCard", back_populates="plan", foreign_keys="SimCard.plan_id")
 
-    def calculate_cost(self, duration_minutes: float) -> float:
-        from constants import EXTERNAL_CALL_RATE_KES_PER_MINUTE
-        rate = self.rate_per_minute_kes if self.rate_per_minute_kes is not None else EXTERNAL_CALL_RATE_KES_PER_MINUTE
-        return round(duration_minutes * rate, 2)
-
     def get_rate_card(self) -> dict:
         return {"rate_per_minute_kes": self.rate_per_minute_kes}
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, *, viewer: "User | None" = None, include: "set[str] | None" = None) -> dict:
+        include = include or set()
+        out = {
             "id": self.plan_id,
             "name": self.name,
             "provider": self.provider,
@@ -343,6 +373,11 @@ class TelcoPlan(db.Model):
             "lifecycle_state": self.lifecycle_state,
             "rate_per_minute_kes": self.rate_per_minute_kes,
         }
+        # SimCard.to_dict needs a viewer for its field-level masking, so a
+        # plan can only expand its SIMs when one is supplied.
+        if "sims" in include and viewer is not None:
+            out["sims"] = [s.to_dict(viewer=viewer) for s in self.sims]
+        return out
 
 
 # ============================================================================
@@ -382,10 +417,11 @@ class SimCard(db.Model):
     def is_available_for_allocation(self) -> bool:
         return self.lifecycle_state == "active" and self.get_current_allocation() is None
 
-    def to_dict(self, *, viewer: "User") -> dict:
+    def to_dict(self, *, viewer: "User", include: "set[str] | None" = None) -> dict:
         from constants import Role as RoleNames
         from security import decrypt_value
 
+        include = include or set()
         current = self.get_current_allocation()
         out = {
             "id": self.sim_id,
@@ -395,6 +431,10 @@ class SimCard(db.Model):
             "employee_id": current.employee_id if current else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+        if "allocations" in include:
+            out["allocations"] = [
+                a.to_dict() for a in sorted(self.allocations, key=lambda a: a.start_at)
+            ]
         if viewer.role and viewer.role.role_name == RoleNames.ADMIN:
             out["iccid"] = decrypt_value(self.iccid_enc)
             out["msisdn"] = decrypt_value(self.msisdn_enc)
@@ -428,14 +468,24 @@ class SimAllocation(db.Model):
     def close_allocation(self, end_at: datetime | None = None):
         self.end_at = end_at or _utcnow()
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, *, include: "set[str] | None" = None) -> dict:
+        include = include or set()
+        out = {
             "id": self.allocation_id,
             "sim_id": self.sim_id,
             "employee_id": self.employee_id,
             "start_at": self.start_at.isoformat() if self.start_at else None,
             "end_at": self.end_at.isoformat() if self.end_at else None,
         }
+        # usage_events is potentially huge (one row per call) — only ever
+        # expanded when explicitly asked for, and even then bounded by the
+        # caller slicing the result. Kept here for symmetry with the other
+        # parent models rather than as a routinely-used path.
+        if "usage_events" in include:
+            out["usage_events"] = [
+                e.to_dict() for e in sorted(self.usage_events, key=lambda e: e.occured_at)
+            ]
+        return out
 
 
 # ============================================================================
@@ -473,16 +523,6 @@ class UsageEvent(db.Model):
     def flag_as_unattributed(self):
         self.allocation_id = None
         self.attribution_state = "unattributed"
-
-    def compute_cost(self, plan: "TelcoPlan | None" = None) -> float:
-        from constants import CALL_CLASS_EXTERNAL, EXTERNAL_CALL_RATE_KES_PER_MINUTE
-        if self.call_classification != CALL_CLASS_EXTERNAL:
-            self.computed_cost = 0.0
-        elif plan is not None:
-            self.computed_cost = plan.calculate_cost(self.duration_minutes)
-        else:
-            self.computed_cost = round(self.duration_minutes * EXTERNAL_CALL_RATE_KES_PER_MINUTE, 2)
-        return self.computed_cost
 
     def to_dict(self) -> dict:
         return {
@@ -570,6 +610,11 @@ class UsageSummary(db.Model):
     employee_id = db.Column(db.String(36), db.ForeignKey("employees.employee_id"), nullable=False)
     month = db.Column(db.String(7), nullable=False)  # "YYYY-MM"
     total_cost = db.Column(db.Float, default=0)
+    # Denormalized copy of employees.extension_code as of when this row was
+    # last written — filled in by ML/training/billing.py (see that module's
+    # docstring), so a usage_summaries row is self-contained for reporting
+    # without a join back to employees.
+    extension_code = db.Column(db.String(3))
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
 
     employee = db.relationship("Employee", back_populates="usage_summaries")
@@ -583,6 +628,8 @@ class UsageSummary(db.Model):
             "employee_id": self.employee_id,
             "month": self.month,
             "total_cost": self.total_cost,
+            "extension_code": self.extension_code,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 

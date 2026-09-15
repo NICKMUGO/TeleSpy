@@ -15,7 +15,7 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { NAV_SECTIONS, isNavItemVisible } from "@/components/layout/nav-items";
-import { mockCurrentUser } from "@/lib/auth/mock-user";
+import { useSession } from "@/lib/auth/session-store";
 
 function isItemActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -23,6 +23,7 @@ function isItemActive(pathname: string, href: string) {
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const role = useSession((state) => state.user?.role) ?? "Employee";
 
   return (
     <Sidebar collapsible="icon">
@@ -50,7 +51,7 @@ export function AppSidebar() {
         <SidebarContent>
           {NAV_SECTIONS.map((section, index) => {
             const visibleItems = section.items.filter((item) =>
-              isNavItemVisible(item, mockCurrentUser.role),
+              isNavItemVisible(item, role),
             );
             if (visibleItems.length === 0) return null;
 

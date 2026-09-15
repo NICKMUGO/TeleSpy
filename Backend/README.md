@@ -143,10 +143,13 @@ account after that.
     charged.
 
   A rule-based anomaly pass (cost-ceiling breaches) is live at `GET
-  /analytics/anomalies` (`services/anomaly.py`); the trained-model layer
-  (Isolation Forest / Prophet / KMeans per `Design_Docs/`) has a marked
-  seam (`services/anomaly.py`, `Forecasts`/`Profiles` in `api/analytics.py`)
-  to plug into once a model artifact exists in `ML/`.
+  /analytics/anomalies` (`services/anomaly.py`). The trained-model layer
+  (Isolation Forest / Prophet-or-trend / KMeans per `Design_Docs/`) is
+  `ML/training/` — a single shared implementation (not duplicated per
+  backend) that writes straight to `anomaly_flags`, `usage_profiles`, and
+  `forecast_results` via plain SQL, since both backends share the same
+  schema. Run `ML/training/run_ml.ipynb` to (re)populate those tables;
+  `Forecasts`/`Profiles` in `api/analytics.py` just read what it wrote.
 
   Note: `UsageEvent.compute_cost()` / `TelcoPlan.calculate_cost()` remain
   on the models untouched (the DB layer is unchanged) but are no longer on

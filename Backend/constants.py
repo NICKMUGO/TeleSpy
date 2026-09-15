@@ -58,26 +58,20 @@ MAX_FAILED_LOGIN_ATTEMPTS = 5
 ACCOUNT_LOCKOUT_MINUTES = 15
 
 # --- Call classification -----------------------------------------------
-# There are two kinds of chargeable outbound call, each recognised by its
-# own pattern:
+# "9" is the trunk-access digit for *any* outside-line call, local or
+# international — a near-universal PBX convention (still the default
+# pattern in Cisco CUCM route plans, e.g. "9.@"/"9.0011!") — so
+# classify_number() always strips it first, then classifies what's left:
 #
-#   1. Kenyan external call  -> KENYAN_EXTERNAL_NUMBER_REGEX
-#   2. International call     -> INTERNATIONAL_NUMBER_REGEX
+#   - "9" + local Kenyan number (0 + 9 digits)       -> External (local)
+#   - "9" + IDD marker (+/00/000) + 254 + number      -> External (local,
+#     dialled in full international form)
+#   - "9" + IDD marker (+/00/000) + other cc + number -> International
 #
-# Kenyan external call: dialled out through the "9" trunk-access prefix
-# followed by a 10-digit subscriber number -> 11 characters total, e.g.
-# 9712345678X. This is the original EXTERNAL_NUMBER_REGEX, unchanged -
-# only renamed now that it sits next to the international pattern. It still
-# starts with "9".
-KENYAN_EXTERNAL_NUMBER_REGEX = r"^9\d{10}$"
-# Back-compat alias for anything still importing the old name.
-EXTERNAL_NUMBER_REGEX = KENYAN_EXTERNAL_NUMBER_REGEX
-
 # Kenyan number in plain local form: leading "0" + 9 digits, e.g.
-# 0712345678. Not normally dialled this way through the PBX, but it's what
-# a +254... number collapses to once normalised (see
-# KENYAN_INTERNATIONAL_PREFIX_REGEX) - and such a call bills exactly like a
-# KENYAN_EXTERNAL_NUMBER_REGEX one.
+# 0712345678. What a call to +254... collapses to once normalised (see
+# KENYAN_INTERNATIONAL_PREFIX_REGEX below) - and what's left after
+# stripping "9" from a local external call, e.g. "90712345678".
 KENYAN_LOCAL_NUMBER_REGEX = r"^0\d{9}$"
 
 # International call: "+" (or "00" / "000"), then the country code, then the
@@ -85,16 +79,19 @@ KENYAN_LOCAL_NUMBER_REGEX = r"^0\d{9}$"
 # the prefix. Kenya (+254) is deliberately excluded by the (?!254)
 # lookahead: a +254 number is a Kenyan call written internationally, not an
 # international one, and is normalised + billed as a Kenyan external call.
+# Matched against the number *after* the leading "9" has been stripped,
+# e.g. "9" + "000442035301762" -> this matches "000442035301762".
 INTERNATIONAL_NUMBER_REGEX = r"^(?:\+|00|000)(?!254)\d{6,15}$"
 
 # Recognises a Kenyan number that was dialled in international form
-# (+254..., 00254..., 000254...). group(1) is the national part, which is
-# re-prefixed with "0" to get the local form.
+# (+254..., 00254..., 000254...), after the leading "9" has been stripped.
+# group(1) is the national part, which is re-prefixed with "0" to get the
+# local form.
 KENYAN_INTERNATIONAL_PREFIX_REGEX = r"^(?:\+|00|000)254(\d+)$"
 
 # Internal call: a bare 3-digit extension, e.g. 206, 389, 400. Never
 # charged - internal-cluster traffic carries no charge at all (see
-# CHARGEABLE_CALL_CLASSES below and services/billing.py).
+# ML/training/billing.py, the only place call rates live now).
 INTERNAL_EXTENSION_REGEX = r"^\d{3}$"
 
 # Extensions permanently excluded from anomaly detection even though their
@@ -107,14 +104,3 @@ CALL_CLASS_EXTERNAL = "External"
 CALL_CLASS_INTERNATIONAL = "International"
 CALL_CLASS_UNKNOWN = "Unknown"
 
-# The only call classes that accrue cost. Internal and Unknown calls are
-# never billed, even when a CDR row carries a charge column. The billing
-# service (services/billing.py) is the single place this is enforced.
-CHARGEABLE_CALL_CLASSES = frozenset({CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL})
-
-# Internal calls always bill at 0 (confirmed by the CUCM CDR exports, which
-# carry no charge column for internal-cluster traffic). This is only a
-# fallback rate for chargeable events (External / International) on a SIM
-# whose telco_plan has no rate_per_minute_kes of its own (or isn't
-# attributed to a plan at all) — see services/billing.py.
-EXTERNAL_CALL_RATE_KES_PER_MINUTE = 5.0

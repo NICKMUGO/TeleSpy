@@ -48,7 +48,7 @@ def create_app(config_object=Config):
     config_object.validate()
 
     db.init_app(app)
-    Migrate(app, db)
+    Migrate(app, db) 
     models_bcrypt.init_app(app)  # backs User.password/check_password in models/models.py
     init_extensions(app)  # JWT + Mail
     CORS(app, resources={r"/*": {"origins": app.config["FRONTEND_ORIGINS"]}}, supports_credentials=True)

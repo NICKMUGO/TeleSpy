@@ -1,17 +1,23 @@
 """Call classification + the anomaly-detection carve-out rule.
 
-Four outcomes:
+"9" is the trunk-access digit for *any* outside-line call, local or
+international — a near-universal PBX convention (still the default in
+Cisco CUCM route plans, e.g. "9.@"/"9.0011!") — so classify_number() always
+strips it first, then classifies what's left. Four outcomes:
 
-- External call (Kenyan): dialled through the "9" trunk-access prefix + a
-  10-digit subscriber number, e.g. 9712345678X (11 chars, starts with 9).
-  A Kenyan number dialled in international form (+254..., 00254...) is
-  normalised to local form and lands here too.
-- International call: "+"/"00"/"000" + country code (not 254) + subscriber
-  number. Chargeable, like an external call.
-- Internal call: a bare 3-digit extension, e.g. 206, 389, 400. Never
-  charged.
+- External call (Kenyan): "9" + a 10-digit local number (0 + 9 digits), e.g.
+  90712345678. A Kenyan number dialled in international form after the "9"
+  (+254.., 00254..) is normalised to local form and lands here too.
+- International call: "9" + "+"/"00"/"000" + country code (not 254) +
+  subscriber number. Chargeable, like an external call.
+- Internal call: a bare 3-digit extension, e.g. 206, 389, 400 (no "9"
+  prefix — never leaves the PBX). Never charged.
 - Extensions 256 and 400 are always logged normally but are permanently
   excluded from anomaly detection (see ANOMALY_EXCLUDED_EXTENSIONS).
+
+A trailing "#" (a CUCM dial-termination digit — how a caller signals "done
+dialling" immediately instead of waiting out the inter-digit timeout on a
+variable-length route pattern) is stripped before any of the above.
 """
 import re
 
@@ -23,12 +29,10 @@ from constants import (
     CALL_CLASS_UNKNOWN,
     INTERNAL_EXTENSION_REGEX,
     INTERNATIONAL_NUMBER_REGEX,
-    KENYAN_EXTERNAL_NUMBER_REGEX,
     KENYAN_INTERNATIONAL_PREFIX_REGEX,
     KENYAN_LOCAL_NUMBER_REGEX,
 )
 
-_KENYAN_EXTERNAL_RE = re.compile(KENYAN_EXTERNAL_NUMBER_REGEX)
 _KENYAN_LOCAL_RE = re.compile(KENYAN_LOCAL_NUMBER_REGEX)
 _INTERNATIONAL_RE = re.compile(INTERNATIONAL_NUMBER_REGEX)
 _KENYAN_INTL_PREFIX_RE = re.compile(KENYAN_INTERNATIONAL_PREFIX_REGEX)
@@ -36,16 +40,13 @@ _INTERNAL_RE = re.compile(INTERNAL_EXTENSION_REGEX)
 
 
 def normalize_number(number: str) -> str:
-    """Trim whitespace and collapse a Kenyan number dialled internationally
-    (+254.., 00254.., 000254..) to its local leading-0 form, so it is
-    classified and billed as a Kenyan external call rather than an
-    international one. Any other value is returned as-is (bar whitespace)."""
+    """Trim whitespace and strip a trailing CUCM dial-termination "#". Any
+    other value is returned as-is."""
     if not number:
         return ""
     number = number.strip().replace(" ", "")
-    match = _KENYAN_INTL_PREFIX_RE.match(number)
-    if match:
-        return "0" + match.group(1)
+    if number.endswith("#"):
+        number = number[:-1]
     return number
 
 
@@ -53,12 +54,19 @@ def classify_number(number: str) -> str:
     number = normalize_number(number)
     if not number:
         return CALL_CLASS_UNKNOWN
-    if _KENYAN_EXTERNAL_RE.match(number) or _KENYAN_LOCAL_RE.match(number):
-        return CALL_CLASS_EXTERNAL
-    if _INTERNATIONAL_RE.match(number):
-        return CALL_CLASS_INTERNATIONAL
     if _INTERNAL_RE.match(number):
         return CALL_CLASS_INTERNAL
+    if not number.startswith("9") or len(number) < 2:
+        return CALL_CLASS_UNKNOWN
+    rest = number[1:]  # drop the trunk-access digit
+    if _KENYAN_LOCAL_RE.match(rest):
+        return CALL_CLASS_EXTERNAL
+    if _KENYAN_INTL_PREFIX_RE.match(rest):
+        # Kenya's own country code, dialled in full international form —
+        # bill as a local Kenyan call, not International.
+        return CALL_CLASS_EXTERNAL
+    if _INTERNATIONAL_RE.match(rest):
+        return CALL_CLASS_INTERNATIONAL
     return CALL_CLASS_UNKNOWN
 
 

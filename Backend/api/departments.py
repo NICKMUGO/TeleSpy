@@ -1,13 +1,14 @@
 """Departments: CRUD (admin) + department spend / budget status
 (admin or the department's own manager).
 """
-from flask import request
+from datetime import datetime, timezone
+
+from flask import jsonify, make_response, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
 
 from constants import ROLE_SLUGS, Role
 from core.decorators import role_id_required
-from core.responses import err, ok
 from models.models import Department, UsageSummary, db
 from services.audit import record_audit
 
@@ -18,7 +19,7 @@ class Departments(Resource):
     @jwt_required()
     def get(self):
         depts = db.session.query(Department).order_by(Department.name).all()
-        return ok(data=[d.to_dict() for d in depts])
+        return make_response(jsonify({"data": [d.to_dict() for d in depts]}), 200)
 
     @jwt_required()
     @role_id_required(ROLE_SLUGS[Role.ADMIN])
@@ -26,15 +27,36 @@ class Departments(Resource):
         data = request.get_json(silent=True) or {}
         name = (data.get("name") or "").strip()
         if not name:
-            return err("Department name is required.", 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "validation_error",
+                "message": "Department name is required.",
+                "field": "name",
+                "hint": "Include a non-empty name for the department.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 422)
         if db.session.query(Department).filter_by(name=name).first():
-            return err("A department with that name already exists.", 409, "duplicate_department")
+            return make_response(jsonify({
+                "error_type": "duplicate_department",
+                "message": "A department with that name already exists.",
+                "field": "name",
+                "hint": "Choose a different department name, or update the existing one instead.",
+                "status": 409,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 409)
 
         dept = Department(name=name, cost_centre_code=data.get("cost_centre_code"), budget_ceiling=data.get("budget_ceiling"))
         db.session.add(dept)
         db.session.commit()
         record_audit("department_created", "department", dept.department_id)
-        return ok(data=dept.to_dict(), status=201, message="Created.")
+        return make_response(jsonify({
+            "data": dept.to_dict(),
+            "message": "Created.",
+        }), 201)
 
 
 class DepartmentById(Resource):
@@ -43,7 +65,16 @@ class DepartmentById(Resource):
     def patch(self, department_id):
         dept = db.session.get(Department, department_id)
         if not dept:
-            return err("Department not found.", 404, "department_not_found")
+            return make_response(jsonify({
+                "error_type": "department_not_found",
+                "message": "Department not found.",
+                "field": "department_id",
+                "hint": f"No department exists with id {department_id!r}. Check /departments for valid ids.",
+                "status": 404,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 404)
         data = request.get_json(silent=True) or {}
         if data.get("name"):
             dept.name = data["name"].strip()
@@ -53,7 +84,7 @@ class DepartmentById(Resource):
             dept.budget_ceiling = data["budget_ceiling"]
         db.session.commit()
         record_audit("department_updated", "department", dept.department_id)
-        return ok(data=dept.to_dict())
+        return make_response(jsonify({"data": dept.to_dict()}), 200)
 
 
 class DepartmentSpend(Resource):
@@ -65,10 +96,28 @@ class DepartmentSpend(Resource):
     def get(self, department_id):
         viewer = loaded_user()
         if viewer.role.role_name == Role.MANAGER and viewer_department_id(viewer) != department_id:
-            return err("Department not found.", 404, "department_not_found")
+            return make_response(jsonify({
+                "error_type": "department_not_found",
+                "message": "Department not found.",
+                "field": "department_id",
+                "hint": "Managers can only view spend for their own department.",
+                "status": 404,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 404)
         dept = db.session.get(Department, department_id)
         if not dept:
-            return err("Department not found.", 404, "department_not_found")
+            return make_response(jsonify({
+                "error_type": "department_not_found",
+                "message": "Department not found.",
+                "field": "department_id",
+                "hint": f"No department exists with id {department_id!r}. Check /departments for valid ids.",
+                "status": 404,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 404)
 
         month = request.args.get("month", current_month())
         employee_ids = [e.employee_id for e in dept.employees]
@@ -77,13 +126,13 @@ class DepartmentSpend(Resource):
             summaries = db.session.query(UsageSummary).filter(UsageSummary.employee_id.in_(employee_ids), UsageSummary.month == month).all()
             total = round(sum(s.total_cost for s in summaries), 2)
 
-        return ok(data={
+        return make_response(jsonify({"data": {
             "department_id": department_id,
             "month": month,
             "total_spend": total,
             "budget_ceiling": dept.budget_ceiling,
             "budget_status": dept.get_budget_status(total),
-        })
+        }}), 200)
 
 
 RESOURCES = [

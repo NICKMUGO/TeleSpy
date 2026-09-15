@@ -1,11 +1,11 @@
 """Audit log read (admin only)."""
-from flask import request
+from flask import jsonify, make_response, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
 
 from constants import ROLE_SLUGS, Role
 from core.decorators import role_id_required
-from core.responses import ok, paginate_args, paginate_meta
+from core.responses import paginate_args, paginate_meta
 from models.models import AuditLog, db
 
 
@@ -22,7 +22,10 @@ class AuditLogResource(Resource):
 
         total = query.count()
         rows = query.order_by(AuditLog.occured_at.desc()).offset((page - 1) * limit).limit(limit).all()
-        return ok(data=[a.to_dict() for a in rows], meta=paginate_meta(page, limit, total))
+        return make_response(jsonify({
+            "data": [a.to_dict() for a in rows],
+            "meta": paginate_meta(page, limit, total),
+        }), 200)
 
 
 RESOURCES = [

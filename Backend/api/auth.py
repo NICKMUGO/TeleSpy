@@ -5,7 +5,7 @@ bank-enforcement flow.
 from datetime import datetime, timedelta
 from datetime import timezone as tz
 
-from flask import current_app, request
+from flask import current_app, jsonify, make_response, request
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
@@ -24,7 +24,6 @@ from constants import (
     SELF_REGISTERABLE_ROLES,
 )
 from core.legal import TERMS_AND_CONDITIONS_TEXT, dpa_notice_text
-from core.responses import err, ok
 from core.time import utcnow
 from models.models import (
     Consent,
@@ -46,11 +45,11 @@ from api.common import loaded_user, viewer_department_id
 
 class LegalNotice(Resource):
     def get(self):
-        return ok(data={
+        return make_response(jsonify({"data": {
             "terms_and_conditions": TERMS_AND_CONDITIONS_TEXT,
             "dpa_notice": dpa_notice_text(),
             "dpa_policy_version": current_app.config["DPA_KE_POLICY_VERSION"],
-        })
+        }}), 200)
 
 
 class Register(Resource):
@@ -58,23 +57,80 @@ class Register(Resource):
         data = request.get_json(silent=True) or {}
         try:
             email = require_valid_email(data.get("email", ""))
+        except ValidationFailed as exc:
+            return make_response(jsonify({
+                "error_type": "validation_error",
+                "message": exc.message,
+                "field": "email",
+                "hint": "Provide a valid email address, e.g. name@example.com.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
+        try:
             password = require_strong_password(data.get("password", ""))
         except ValidationFailed as exc:
-            return err(exc.message, 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "validation_error",
+                "message": exc.message,
+                "field": "password",
+                "hint": "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         full_name = (data.get("full_name") or "").strip()
         if not full_name:
-            return err("Full name is required.", 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "validation_error",
+                "message": "Full name is required.",
+                "field": "full_name",
+                "hint": "Include your full name in the registration request.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         # Terms & Conditions / Kenya Data Protection Act (2019) consent
         # checkboxes — required, not implied.
         if not data.get("accept_terms"):
-            return err("You must accept the Terms and Conditions to register.", 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "consent_required",
+                "message": "You must accept the Terms and Conditions to register.",
+                "field": "accept_terms",
+                "hint": "Set accept_terms to true after the user has reviewed the Terms and Conditions.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
         if not data.get("accept_dpa_notice"):
-            return err("You must acknowledge the Data Protection notice (Kenya DPA, 2019) to register.", 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "consent_required",
+                "message": "You must acknowledge the Data Protection notice (Kenya DPA, 2019) to register.",
+                "field": "accept_dpa_notice",
+                "hint": "Set accept_dpa_notice to true after the user has reviewed the DPA notice.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         if db.session.query(User).filter_by(email=email).first():
-            return err("An account with that email already exists.", 409, "email_taken")
+            return make_response(jsonify({
+                "error_type": "email_taken",
+                "message": "An account with that email already exists.",
+                "field": "email",
+                "hint": "Sign in instead, or use a different email address.",
+                "status": 409,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 409)
 
         # Self-registration creates a bare Employee record (no
         # department/staff_number yet — HR assigns those later) plus the
@@ -109,7 +165,10 @@ class Register(Resource):
         db.session.commit()
 
         record_audit("register", "user", user.user_id, actor_id=user.user_id, actor_role=role)
-        return ok(data=user.to_dict(), message="Account created. You can now sign in.", status=201)
+        return make_response(jsonify({
+            "data": user.to_dict(),
+            "message": "Account created. You can now sign in.",
+        }), 201)
 
 
 class Login(Resource):
@@ -119,13 +178,38 @@ class Login(Resource):
         password = data.get("password") or ""
 
         user = db.session.query(User).filter_by(email=email).first()
-        invalid = err("Invalid email or password.", 401, "invalid_credentials")
+
         if not user:
-            return invalid
+            return make_response(jsonify({
+                "error_type": "invalid_credentials",
+                "message": "Invalid email or password.",
+                "field": "password",
+                "hint": "Check the email and password and try again.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
         if not user.is_active:
-            return err("This account has been deactivated.", 403, "account_deactivated")
+            return make_response(jsonify({
+                "error_type": "account_deactivated",
+                "message": "This account has been deactivated.",
+                "hint": "Contact your administrator to reactivate this account.",
+                "status": 403,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 403)
         if user.locked_until and user.locked_until > utcnow():
-            return err("Account temporarily locked due to repeated failed sign-ins. Try again later.", 423, "account_locked")
+            return make_response(jsonify({
+                "error_type": "account_locked",
+                "message": "Account temporarily locked due to repeated failed sign-ins. Try again later.",
+                "hint": f"The account unlocks automatically at {user.locked_until.isoformat()}.",
+                "status": 423,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 423)
 
         if not user.check_password(password):
             user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
@@ -134,7 +218,16 @@ class Login(Resource):
                 user.failed_login_attempts = 0
             db.session.commit()
             record_audit("login_failed", "user", user.user_id, actor_id=user.user_id, actor_role=user.role.role_name if user.role else None)
-            return invalid
+            return make_response(jsonify({
+                "error_type": "invalid_credentials",
+                "message": "Invalid email or password.",
+                "field": "password",
+                "hint": "Check the email and password and try again.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
 
         user.failed_login_attempts = 0
         user.locked_until = None
@@ -151,7 +244,10 @@ class Login(Resource):
             additional_claims={"purpose": "mfa"},
             expires_delta=timedelta(minutes=current_app.config["JWT_MFA_TOKEN_EXPIRES_MINUTES"]),
         )
-        return ok(data={"mfa_token": mfa_token, "expires_in_minutes": expires_minutes}, message="Verification code sent to your email.")
+        return make_response(jsonify({
+            "data": {"mfa_token": mfa_token, "expires_in_minutes": expires_minutes},
+            "message": "Verification code sent to your email.",
+        }), 200)
 
 
 def _user_from_mfa_token(mfa_token: str) -> User:
@@ -173,14 +269,26 @@ class ResendOtp(Resource):
         try:
             user = _user_from_mfa_token(data.get("mfa_token", ""))
         except ValidationFailed as exc:
-            return err(exc.message, 401, "invalid_mfa_token")
+            return make_response(jsonify({
+                "error_type": "invalid_mfa_token",
+                "message": exc.message,
+                "field": "mfa_token",
+                "hint": "Sign in again to obtain a fresh MFA session token.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
 
         otp = generate_otp()
         expires_minutes = current_app.config["MFA_OTP_EXPIRES_MINUTES"]
         set_otp(user.user_id, hash_token(otp), expires_minutes * 60)
         send_mail_safe(user.email, "Your TeleSpy verification code",
                        f"Your TeleSpy sign-in code is: {otp}\n\nIt expires in {expires_minutes} minutes.")
-        return ok(data={"expires_in_minutes": expires_minutes}, message="A new verification code has been sent.")
+        return make_response(jsonify({
+            "data": {"expires_in_minutes": expires_minutes},
+            "message": "A new verification code has been sent.",
+        }), 200)
 
 
 class VerifyOtp(Resource):
@@ -189,13 +297,30 @@ class VerifyOtp(Resource):
         try:
             user = _user_from_mfa_token(data.get("mfa_token", ""))
         except ValidationFailed as exc:
-            return err(exc.message, 401, "invalid_mfa_token")
+            return make_response(jsonify({
+                "error_type": "invalid_mfa_token",
+                "message": exc.message,
+                "field": "mfa_token",
+                "hint": "Sign in again to obtain a fresh MFA session token.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
 
         otp = data.get("otp") or ""
         stored_hash = get_otp_hash(user.user_id)
-        invalid_otp = err("Incorrect or expired code.", 401, "invalid_otp")
         if not stored_hash or hash_token(otp) != stored_hash:
-            return invalid_otp
+            return make_response(jsonify({
+                "error_type": "invalid_otp",
+                "message": "Incorrect or expired code.",
+                "field": "otp",
+                "hint": "Request a new code with /auth/resend-otp and enter it before it expires.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
 
         consume_otp(user.user_id)
 
@@ -204,12 +329,15 @@ class VerifyOtp(Resource):
         refresh_token = create_refresh_token(identity=user.user_id, additional_claims=claims)
         record_audit("login_success", "user", user.user_id, actor_id=user.user_id, actor_role=claims["role"])
 
-        return ok(data={
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "user": user.to_dict(),
-            "must_change_password": user.must_change_password,
-        }, message="Signed in.")
+        return make_response(jsonify({
+            "data": {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "user": user.to_dict(),
+                "must_change_password": user.must_change_password,
+            },
+            "message": "Signed in.",
+        }), 200)
 
 
 class Refresh(Resource):
@@ -220,7 +348,7 @@ class Refresh(Resource):
             identity=get_jwt_identity(),
             additional_claims={"role": claims.get("role"), "role_id": claims.get("role_id"), "department_id": claims.get("department_id")},
         )
-        return ok(data={"access_token": access_token})
+        return make_response(jsonify({"data": {"access_token": access_token}}), 200)
 
 
 class ForgotPassword(Resource):
@@ -232,7 +360,9 @@ class ForgotPassword(Resource):
             issue_password_reset(user)
         # Always the same response, whether or not the account exists, so
         # this can't be used to enumerate registered emails.
-        return ok(message="If an account exists for that email, a password reset link has been sent.")
+        return make_response(jsonify({
+            "message": "If an account exists for that email, a password reset link has been sent.",
+        }), 200)
 
 
 def issue_password_reset(user: User) -> str:
@@ -277,26 +407,64 @@ class ResetPassword(Resource):
         try:
             new_password = require_strong_password(data.get("new_password", ""))
         except ValidationFailed as exc:
-            return err(exc.message, 422, "validation_error")
+            return make_response(jsonify({
+                "error_type": "validation_error",
+                "message": exc.message,
+                "field": "new_password",
+                "hint": "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         record = db.session.query(PasswordResetToken).filter_by(token_hash=hash_token(token), consumed=False).first()
-        invalid = err("This reset link is invalid or has expired.", 400, "invalid_reset_token")
+
         if not record or record.expires_at < utcnow():
-            return invalid
+            return make_response(jsonify({
+                "error_type": "invalid_reset_token",
+                "message": "This reset link is invalid or has expired.",
+                "field": "token",
+                "hint": "Request a new password reset link via /auth/forgot-password.",
+                "status": 400,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 400)
 
         user = db.session.get(User, record.user_id)
         if not user:
-            return invalid
+            return make_response(jsonify({
+                "error_type": "invalid_reset_token",
+                "message": "This reset link is invalid or has expired.",
+                "field": "token",
+                "hint": "Request a new password reset link via /auth/forgot-password.",
+                "status": 400,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 400)
 
         try:
             rotate_password(user, new_password)
         except ValidationFailed as exc:
-            return err(exc.message, 422, "password_reused")
+            return make_response(jsonify({
+                "error_type": "password_reused",
+                "message": exc.message,
+                "field": "new_password",
+                "hint": "Choose a password you haven't used recently.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         record.consumed = True
         db.session.commit()
         record_audit("password_reset", "user", user.user_id, actor_id=user.user_id, actor_role=user.role.role_name if user.role else None)
-        return ok(message="Password reset. You can now sign in with your new password.")
+        return make_response(jsonify({
+            "message": "Password reset. You can now sign in with your new password.",
+        }), 200)
 
 
 class ChangePassword(Resource):
@@ -305,16 +473,35 @@ class ChangePassword(Resource):
         user = loaded_user()
         data = request.get_json(silent=True) or {}
         if not user or not user.check_password(data.get("current_password") or ""):
-            return err("Current password is incorrect.", 401, "invalid_credentials")
+            return make_response(jsonify({
+                "error_type": "invalid_credentials",
+                "message": "Current password is incorrect.",
+                "field": "current_password",
+                "hint": "Enter your current password correctly before choosing a new one.",
+                "status": 401,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 401)
         try:
             new_password = require_strong_password(data.get("new_password", ""))
             rotate_password(user, new_password)
         except ValidationFailed as exc:
-            code = "password_reused" if "reuse" in exc.message else "validation_error"
-            return err(exc.message, 422, code)
+            is_reused = "reuse" in exc.message
+            return make_response(jsonify({
+                "error_type": "password_reused" if is_reused else "validation_error",
+                "message": exc.message,
+                "field": "new_password",
+                "hint": "Choose a password you haven't used recently." if is_reused
+                        else "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                "status": 422,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(tz.utc).isoformat(),
+            }), 422)
 
         record_audit("password_changed", "user", user.user_id)
-        return ok(message="Password changed.")
+        return make_response(jsonify({"message": "Password changed."}), 200)
 
 
 class Logout(Resource):
@@ -323,7 +510,7 @@ class Logout(Resource):
         claims = get_jwt()
         ttl_seconds = max(1, int(claims["exp"] - datetime.now(tz.utc).timestamp()))
         revoke_token(claims["jti"], ttl_seconds)
-        return ok(message="Signed out.")
+        return make_response(jsonify({"message": "Signed out."}), 200)
 
 
 RESOURCES = [

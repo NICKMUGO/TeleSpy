@@ -1,6 +1,7 @@
 import {
   Activity,
   Building2,
+  FileText,
   FingerprintPattern,
   LayoutDashboard,
   Lock,
@@ -13,13 +14,15 @@ import {
   Wallet,
   type LucideIcon,
 } from "lucide-react";
-import type { Role } from "@/lib/auth/mock-user";
+import type { Role } from "@/lib/api/types";
 
 export interface NavItem {
   title: string;
   href: string;
   icon: LucideIcon;
-  /** Undefined = visible to every role. UI convenience only — see mock-user.ts. */
+  /** Undefined = visible to every role. UI convenience only — the API
+   * enforces the real access control (RoleIdRequired), this just avoids
+   * pointing someone at a page that would 403. */
   roles?: Role[];
 }
 
@@ -35,43 +38,80 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: "SIM management",
     items: [
-      { title: "SIM inventory", href: "/sims", icon: Smartphone },
-      { title: "Employees", href: "/employees", icon: Users },
-      { title: "Departments", href: "/departments", icon: Building2 },
+      {
+        title: "SIM inventory",
+        href: "/sims",
+        icon: Smartphone,
+        roles: ["Admin", "Manager"],
+      },
+      {
+        title: "Employees",
+        href: "/employees",
+        icon: Users,
+        roles: ["Admin", "Manager"],
+      },
+      {
+        title: "Departments",
+        href: "/departments",
+        icon: Building2,
+        roles: ["Admin", "Manager"],
+      },
     ],
   },
   {
     title: "Usage",
     items: [
-      { title: "Usage events", href: "/usage", icon: Activity },
+      {
+        title: "Usage events",
+        href: "/usage",
+        icon: Activity,
+        roles: ["Admin", "Manager"],
+      },
       {
         title: "CDR upload",
         href: "/ingestion",
         icon: Upload,
-        roles: ["SuperAdmin", "Admin"],
+        roles: ["Admin"],
       },
     ],
   },
   {
     title: "Analytics",
     items: [
-      { title: "Anomalies", href: "/analytics/anomalies", icon: TriangleAlert },
-      { title: "Forecasts", href: "/analytics/forecasts", icon: TrendingUp },
+      {
+        title: "Anomalies",
+        href: "/analytics/anomalies",
+        icon: TriangleAlert,
+        roles: ["Admin", "Manager"],
+      },
+      {
+        title: "Forecasts",
+        href: "/analytics/forecasts",
+        icon: TrendingUp,
+        roles: ["Admin", "Manager"],
+      },
       {
         title: "Usage profiles",
         href: "/analytics/profiles",
         icon: FingerprintPattern,
+        roles: ["Admin", "Manager"],
       },
     ],
   },
   {
     items: [
-      { title: "Budgets", href: "/budgets", icon: Wallet },
+      {
+        title: "Budgets",
+        href: "/budgets",
+        icon: Wallet,
+        roles: ["Admin", "Manager"],
+      },
+      { title: "Invoices", href: "/invoices", icon: FileText },
       {
         title: "Audit log",
         href: "/audit",
         icon: Lock,
-        roles: ["SuperAdmin", "Auditor"],
+        roles: ["Admin"],
       },
       { title: "Settings", href: "/settings", icon: Settings },
     ],

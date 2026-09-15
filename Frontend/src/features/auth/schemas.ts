@@ -9,3 +9,12 @@ export const loginSchema = z.object({
 });
 
 export type LoginValues = z.infer<typeof loginSchema>;
+
+export const otpSchema = z.object({
+  otp: z
+    .string()
+    .min(1, "Enter the verification code.")
+    .regex(/^\d{6}$/, "Enter the 6-digit code from your email."),
+});
+
+export type OtpValues = z.infer<typeof otpSchema>;

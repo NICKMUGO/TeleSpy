@@ -1,24 +1,28 @@
 """CDR ingestion + the operational usage list.
 
-Ingestion is where each raw call row is classified, attributed to the SIM
-allocation active at call time, costed (via services/billing.py), rolled
-into the employee's monthly summary, and scored for anomalies.
+Ingestion is where each raw call row is classified and attributed to the
+SIM allocation active at call time. Costing and usage_summaries are no
+longer produced here — see ML/training/billing.py, the sole place a KES
+figure now gets attached to usage (computed straight from the CDR
+dataset, on its own schedule, not live as calls are ingested). Rule-based
+budget-ceiling anomaly flagging at ingest is gone with it, since it
+depended on a live-updated monthly total that no longer exists here;
+Isolation Forest (ML/training/anomaly_detection.py) still runs against
+usage_events independently of cost.
 """
 from datetime import datetime
 
-from flask import request
+from flask import jsonify, make_response, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
 
 from constants import ROLE_SLUGS, Role
 from core.decorators import role_id_required
-from core.responses import ok, paginate_args, paginate_meta
+from core.responses import paginate_args, paginate_meta
 from core.time import utcnow
-from models.models import Employee, SimAllocation, SimCard, UsageEvent, UsageSummary, db
+from models.models import Employee, SimAllocation, SimCard, UsageEvent, db
 from security import blind_index
-from services.anomaly import score_usage_event
 from services.audit import record_audit
-from services.billing import compute_event_cost
 from services.call_classification import classify_call, is_excluded_from_anomaly_detection
 
 from api.common import loaded_user, viewer_department_id
@@ -33,7 +37,7 @@ class CdrIngest(Resource):
         records = data.get("records") or []
         source_file = data.get("source_file")
 
-        ingested = attributed = unattributed = anomalies_flagged = 0
+        ingested = attributed = unattributed = 0
 
         for row in records:
             orig, dest = row.get("orig", ""), row.get("dest", "")
@@ -59,45 +63,23 @@ class CdrIngest(Resource):
                 source_file=source_file, ingested_at=utcnow(),
             )
             event.attribute_to_allocation(allocation)
-            # Cost is decided in one place (services/billing.py): Internal /
-            # Unknown calls are always 0 even if the CDR row carries a
-            # `charge`; External / International calls use that charge when
-            # present, else duration * plan rate.
-            event.computed_cost = compute_event_cost(
-                call_classification,
-                duration_minutes,
-                plan=allocation.sim.plan if allocation else None,
-                provided_charge=row.get("charge"),
-            )
 
             db.session.add(event)
             db.session.flush()
             ingested += 1
 
-            summary = None
             if allocation:
                 attributed += 1
-                month = (row.get("date") or occured_at.strftime("%Y-%m-%d"))[:7]
-                summary = db.session.query(UsageSummary).filter_by(employee_id=allocation.employee_id, month=month).first()
-                if not summary:
-                    summary = UsageSummary(employee_id=allocation.employee_id, month=month, total_cost=0)
-                    db.session.add(summary)
-                summary.total_cost = round((summary.total_cost or 0) + event.computed_cost, 2)
-                db.session.flush()
-
-                limit_kshs = allocation.employee.user.role.call_limit_kshs if allocation.employee.user and allocation.employee.user.role else None
-                if score_usage_event(event, summary, limit_kshs):
-                    anomalies_flagged += 1
             else:
                 unattributed += 1
 
         db.session.commit()
         record_audit("cdr_ingested", "usage_event", actor_id=actor.user_id, actor_role=actor.role.role_name,
                      meta={"ingested": ingested, "attributed": attributed, "unattributed": unattributed, "source_file": source_file})
-        return ok(
-            data={"ingested": ingested, "attributed": attributed, "unattributed": unattributed, "anomalies_flagged": anomalies_flagged},
-            message="CDR batch ingested.", status=201,
-        )
+        return make_response(jsonify({
+            "data": {"ingested": ingested, "attributed": attributed, "unattributed": unattributed},
+            "message": "CDR batch ingested.",
+        }), 201)
 
 
 class Usage(Resource):
@@ -128,7 +110,10 @@ class Usage(Resource):
 
         total = query.count()
         rows = query.order_by(UsageEvent.occured_at.desc()).offset((page - 1) * limit).limit(limit).all()
-        return ok(data=[r.to_dict() for r in rows], meta=paginate_meta(page, limit, total))
+        return make_response(jsonify({
+            "data": [r.to_dict() for r in rows],
+            "meta": paginate_meta(page, limit, total),
+        }), 200)
 
 
 RESOURCES = [

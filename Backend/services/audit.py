@@ -1,6 +1,6 @@
 """AuditLog writer - one helper so every Resource records the trail the
 same way (actor resolved from the current JWT unless overridden).
-"""
+""" 
 from core.decorators import current_user
 from core.time import utcnow
 from models.models import AuditLog, db

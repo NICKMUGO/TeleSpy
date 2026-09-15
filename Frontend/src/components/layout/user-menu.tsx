@@ -1,6 +1,7 @@
 "use client";
 
-import { Keyboard, LogOut, Settings } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { GraduationCap, Keyboard, LogOut, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -13,43 +14,75 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { mockCurrentUser } from "@/lib/auth/mock-user";
+import { logout as apiLogout } from "@/lib/api/auth";
+import { useSession } from "@/lib/auth/session-store";
+
+function initialsFor(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return (
+    (parts[0]?.[0] ?? "") +
+    (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "")
+  );
+}
 
 interface UserMenuProps {
   onOpenDisplaySettings: () => void;
   onOpenShortcutsHelp: () => void;
+  onOpenTutorial: () => void;
 }
 
 export function UserMenu({
   onOpenDisplaySettings,
   onOpenShortcutsHelp,
+  onOpenTutorial,
 }: UserMenuProps) {
+  const router = useRouter();
+  const user = useSession((state) => state.user);
+  const clearSession = useSession((state) => state.clear);
+
+  const name = user?.full_name ?? user?.email ?? "Account";
+  const initials = initialsFor(name).toUpperCase() || "?";
+
+  async function handleLogout() {
+    try {
+      await apiLogout();
+    } catch {
+      // Sign the user out locally regardless — a failed /auth/logout call
+      // (network blip, already-expired token) shouldn't trap them signed in.
+    }
+    clearSession();
+    toast.success("Signed out.");
+    router.push("/login");
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           className="h-8 gap-2 px-1.5"
-          aria-label={`Account menu for ${mockCurrentUser.name}`}
+          aria-label={`Account menu for ${name}`}
         >
           <Avatar className="size-6">
-            <AvatarFallback className="text-xs">
-              {mockCurrentUser.initials}
-            </AvatarFallback>
+            <AvatarFallback className="text-xs">{initials}</AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium">{mockCurrentUser.name}</span>
+          <span className="text-sm font-medium">{name}</span>
           <span className="text-muted-foreground text-xs font-normal">
-            {mockCurrentUser.email}
+            {user?.email}
           </span>
           <span className="text-muted-foreground text-xs font-normal">
-            {mockCurrentUser.role}
+            {user?.role}
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onOpenTutorial}>
+          <GraduationCap aria-hidden="true" />
+          <span>Tutorial</span>
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onOpenDisplaySettings}>
           <Settings aria-hidden="true" />
           <span>Display settings</span>
@@ -61,12 +94,7 @@ export function UserMenu({
           <DropdownMenuShortcut>?</DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          onSelect={() =>
-            toast.info("Sign-out will be wired once authentication is live.")
-          }
-        >
+        <DropdownMenuItem variant="destructive" onSelect={handleLogout}>
           <LogOut aria-hidden="true" />
           <span>Log out</span>
         </DropdownMenuItem>

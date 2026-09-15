@@ -1,0 +1,658 @@
+// Authentication + account lifecycle: register, two-step (password + email
+// OTP) login, token refresh, logout, and the password reset / change /
+// bank-enforcement flow. Mirrors Backend/api/auth.py 1:1, including its
+// per-call-site descriptive error bodies (error_type/message/field/hint/
+// status/path/method/timestamp) — see Backend/core/responses.py's removal
+// of the old ok()/err() helpers for why every action builds its own body
+// inline instead of going through a shared response helper.
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using TeleSpy.Core;
+using TeleSpy.Models;
+using TeleSpy.Services;
+
+namespace TeleSpy.Api;
+
+public class RegisterRequest
+{
+    public string? Email { get; set; }
+    public string? Password { get; set; }
+    public string? FullName { get; set; }
+    public bool? AcceptTerms { get; set; }
+    public bool? AcceptDpaNotice { get; set; }
+}
+
+public class LoginRequest
+{
+    public string? Email { get; set; }
+    public string? Password { get; set; }
+}
+
+public class MfaTokenRequest
+{
+    public string? MfaToken { get; set; }
+}
+
+public class VerifyOtpRequest : MfaTokenRequest
+{
+    public string? Otp { get; set; }
+}
+
+public class ForgotPasswordRequest
+{
+    public string? Email { get; set; }
+}
+
+public class ResetPasswordRequest
+{
+    public string? Token { get; set; }
+    public string? NewPassword { get; set; }
+}
+
+public class ChangePasswordRequest
+{
+    public string? CurrentPassword { get; set; }
+    public string? NewPassword { get; set; }
+}
+
+[ApiController]
+public class AuthController(
+    TeleSpyDbContext db,
+    IJwtService jwtService,
+    ICacheService cache,
+    IMailService mail,
+    IAuditService audit,
+    IViewerContext viewerContext,
+    ICurrentUserAccessor currentUser,
+    IPasswordResetService passwordReset) : ControllerBase
+{
+    private string NowIso() => DateTime.UtcNow.ToString("o");
+
+    [HttpGet("/auth/legal-notice")]
+    public IActionResult LegalNotice() => Ok(new
+    {
+        data = new
+        {
+            terms_and_conditions = Legal.TermsAndConditionsText,
+            dpa_notice = Legal.DpaNoticeText(),
+            dpa_policy_version = Config.DpaKePolicyVersion,
+        },
+    });
+
+    [HttpPost("/auth/register")]
+    public async Task<IActionResult> Register()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<RegisterRequest>(Request);
+
+        string email;
+        try
+        {
+            email = Validators.RequireValidEmail(data.Email);
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = exc.Message,
+                field = "email",
+                hint = "Provide a valid email address, e.g. name@example.com.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        string password;
+        try
+        {
+            password = Validators.RequireStrongPassword(data.Password);
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = exc.Message,
+                field = "password",
+                hint = "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        var fullName = (data.FullName ?? "").Trim();
+        if (fullName.Length == 0)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = "Full name is required.",
+                field = "full_name",
+                hint = "Include your full name in the registration request.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        if (data.AcceptTerms != true)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "consent_required",
+                message = "You must accept the Terms and Conditions to register.",
+                field = "accept_terms",
+                hint = "Set accept_terms to true after the user has reviewed the Terms and Conditions.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+        if (data.AcceptDpaNotice != true)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "consent_required",
+                message = "You must acknowledge the Data Protection notice (Kenya DPA, 2019) to register.",
+                field = "accept_dpa_notice",
+                hint = "Set accept_dpa_notice to true after the user has reviewed the DPA notice.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        if (await db.Users.AnyAsync(u => u.Email == email))
+        {
+            return StatusCode(409, new
+            {
+                error_type = "email_taken",
+                message = "An account with that email already exists.",
+                field = "email",
+                hint = "Sign in instead, or use a different email address.",
+                status = 409,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        // Self-registration creates a bare Employee record (no
+        // department/staff_number yet — HR assigns those later) plus the
+        // User login, since every login must map 1:1 to an Employee.
+        var employee = new Employee { FullName = fullName };
+        db.Employees.Add(employee);
+        await db.SaveChangesAsync();
+
+        var role = Constants.SelfRegisterableRoles[0];
+        var user = new User
+        {
+            EmployeeId = employee.EmployeeId,
+            Email = email,
+            RoleId = Constants.RoleSlugs[role],
+            IsActive = true,
+            MustChangePassword = false,
+        };
+        user.SetPassword(password);
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
+        // Kenya Data Protection Act (2019) + Terms & Conditions consent
+        // record — captured explicitly, with the policy version in force at
+        // the time.
+        db.Consents.Add(new Consent
+        {
+            UserId = user.UserId,
+            AcceptedTerms = true,
+            AcceptedDpaNotice = true,
+            DpaPolicyVersion = Config.DpaKePolicyVersion,
+            CreatedAt = Clock.UtcNow(),
+        });
+        await db.SaveChangesAsync();
+
+        await audit.RecordAuditAsync("register", "user", user.UserId, actorId: user.UserId, actorRole: role);
+        return StatusCode(201, new { data = user.ToDict(), message = "Account created. You can now sign in." });
+    }
+
+    [HttpPost("/auth/login")]
+    public async Task<IActionResult> Login()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<LoginRequest>(Request);
+        var email = (data.Email ?? "").Trim().ToLowerInvariant();
+        var password = data.Password ?? "";
+
+        var user = await db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Email == email);
+
+        if (user is null)
+        {
+            return StatusCode(401, new
+            {
+                error_type = "invalid_credentials",
+                message = "Invalid email or password.",
+                field = "password",
+                hint = "Check the email and password and try again.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+        if (!user.IsActive)
+        {
+            return StatusCode(403, new
+            {
+                error_type = "account_deactivated",
+                message = "This account has been deactivated.",
+                hint = "Contact your administrator to reactivate this account.",
+                status = 403,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+        if (user.LockedUntil is not null && user.LockedUntil > Clock.UtcNow())
+        {
+            return StatusCode(423, new
+            {
+                error_type = "account_locked",
+                message = "Account temporarily locked due to repeated failed sign-ins. Try again later.",
+                hint = $"The account unlocks automatically at {user.LockedUntil.Value:o}.",
+                status = 423,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        if (!user.CheckPassword(password))
+        {
+            user.FailedLoginAttempts += 1;
+            if (user.FailedLoginAttempts >= Constants.MaxFailedLoginAttempts)
+            {
+                user.LockedUntil = Clock.UtcNow().AddMinutes(Constants.AccountLockoutMinutes);
+                user.FailedLoginAttempts = 0;
+            }
+            await db.SaveChangesAsync();
+            await audit.RecordAuditAsync("login_failed", "user", user.UserId, actorId: user.UserId, actorRole: user.Role?.RoleName);
+            return StatusCode(401, new
+            {
+                error_type = "invalid_credentials",
+                message = "Invalid email or password.",
+                field = "password",
+                hint = "Check the email and password and try again.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        user.FailedLoginAttempts = 0;
+        user.LockedUntil = null;
+        await db.SaveChangesAsync();
+
+        var otp = Security.GenerateOtp();
+        var expiresMinutes = Config.MfaOtpExpiresMinutes;
+        await cache.SetOtpAsync(user.UserId, Security.HashToken(otp), expiresMinutes * 60);
+        mail.SendMailSafe(user.Email, "Your TeleSpy verification code",
+            $"Your TeleSpy sign-in code is: {otp}\n\nIt expires in {expiresMinutes} minutes.");
+
+        var mfaToken = jwtService.CreateAccessToken(user.UserId, purpose: "mfa",
+            expiresIn: TimeSpan.FromMinutes(Config.JwtMfaTokenExpiresMinutes));
+
+        return Ok(new
+        {
+            data = new { mfa_token = mfaToken.Value, expires_in_minutes = expiresMinutes },
+            message = "Verification code sent to your email.",
+        });
+    }
+
+    private async Task<User> UserFromMfaTokenAsync(string mfaToken)
+    {
+        System.Security.Claims.ClaimsPrincipal decoded;
+        try
+        {
+            decoded = jwtService.DecodeAnyToken(mfaToken);
+        }
+        catch (Exception)
+        {
+            throw new ValidationFailed("MFA session expired or invalid. Please sign in again.");
+        }
+        if (decoded.FindFirstValue("purpose") != "mfa")
+        {
+            throw new ValidationFailed("Invalid MFA session.");
+        }
+        var userId = decoded.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub);
+        var user = userId is not null ? await db.Users.FindAsync(userId) : null;
+        if (user is null)
+        {
+            throw new ValidationFailed("Invalid MFA session.");
+        }
+        return user;
+    }
+
+    [HttpPost("/auth/resend-otp")]
+    public async Task<IActionResult> ResendOtp()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<MfaTokenRequest>(Request);
+        User user;
+        try
+        {
+            user = await UserFromMfaTokenAsync(data.MfaToken ?? "");
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(401, new
+            {
+                error_type = "invalid_mfa_token",
+                message = exc.Message,
+                field = "mfa_token",
+                hint = "Sign in again to obtain a fresh MFA session token.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        var otp = Security.GenerateOtp();
+        var expiresMinutes = Config.MfaOtpExpiresMinutes;
+        await cache.SetOtpAsync(user.UserId, Security.HashToken(otp), expiresMinutes * 60);
+        mail.SendMailSafe(user.Email, "Your TeleSpy verification code",
+            $"Your TeleSpy sign-in code is: {otp}\n\nIt expires in {expiresMinutes} minutes.");
+
+        return Ok(new { data = new { expires_in_minutes = expiresMinutes }, message = "A new verification code has been sent." });
+    }
+
+    [HttpPost("/auth/verify-otp")]
+    public async Task<IActionResult> VerifyOtp()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<VerifyOtpRequest>(Request);
+        User user;
+        try
+        {
+            user = await UserFromMfaTokenAsync(data.MfaToken ?? "");
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(401, new
+            {
+                error_type = "invalid_mfa_token",
+                message = exc.Message,
+                field = "mfa_token",
+                hint = "Sign in again to obtain a fresh MFA session token.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        var otp = data.Otp ?? "";
+        var storedHash = await cache.GetOtpHashAsync(user.UserId);
+        if (string.IsNullOrEmpty(storedHash) || Security.HashToken(otp) != storedHash)
+        {
+            return StatusCode(401, new
+            {
+                error_type = "invalid_otp",
+                message = "Incorrect or expired code.",
+                field = "otp",
+                hint = "Request a new code with /auth/resend-otp and enter it before it expires.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        await cache.ConsumeOtpAsync(user.UserId);
+
+        await db.Entry(user).Reference(u => u.Role).LoadAsync();
+        await db.Entry(user).Reference(u => u.Employee).LoadAsync();
+        var role = user.Role?.RoleName;
+        var departmentId = viewerContext.ViewerDepartmentId(user);
+        var access = jwtService.CreateAccessToken(user.UserId, role, user.RoleId, departmentId);
+        var refresh = jwtService.CreateRefreshToken(user.UserId, role, user.RoleId, departmentId);
+        await audit.RecordAuditAsync("login_success", "user", user.UserId, actorId: user.UserId, actorRole: role);
+
+        return Ok(new
+        {
+            data = new
+            {
+                access_token = access.Value,
+                refresh_token = refresh.Value,
+                user = user.ToDict(),
+                must_change_password = user.MustChangePassword,
+            },
+            message = "Signed in.",
+        });
+    }
+
+    [HttpPost("/auth/refresh")]
+    public IActionResult Refresh()
+    {
+        // Public path (skipped by CurrentUserMiddleware) — this action does
+        // its own token check, requiring a refresh-type token specifically,
+        // mirroring Flask's @jwt_required(refresh=True). A failure here
+        // returns the same {error, message} shape as the global JWT
+        // callbacks (Backend/core/extensions.py), since in Flask this 401
+        // would come from flask-jwt-extended's own decorator, not from code
+        // written in api/auth.py.
+        var header = Request.Headers.Authorization.ToString();
+        if (string.IsNullOrEmpty(header) || !header.StartsWith("Bearer ", StringComparison.Ordinal))
+        {
+            return StatusCode(401, new { error = "unauthenticated", message = "Authentication required." });
+        }
+
+        System.Security.Claims.ClaimsPrincipal principal;
+        try
+        {
+            principal = jwtService.ValidateToken(header["Bearer ".Length..], expectedType: "refresh");
+        }
+        catch (SecurityTokenExpiredException)
+        {
+            return StatusCode(401, new { error = "token_expired", message = "Your session has expired. Please sign in again." });
+        }
+        catch (Exception)
+        {
+            return StatusCode(401, new { error = "invalid_token", message = "Invalid authentication token." });
+        }
+
+        var userId = principal.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)!;
+        var role = principal.FindFirstValue("role");
+        var roleId = principal.FindFirstValue("role_id");
+        var departmentId = principal.FindFirstValue("department_id");
+        var access = jwtService.CreateAccessToken(userId, role, roleId, departmentId);
+
+        return Ok(new { data = new { access_token = access.Value } });
+    }
+
+    [HttpPost("/auth/forgot-password")]
+    public async Task<IActionResult> ForgotPassword()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<ForgotPasswordRequest>(Request);
+        var email = (data.Email ?? "").Trim().ToLowerInvariant();
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
+        if (user is not null)
+        {
+            await passwordReset.IssuePasswordResetAsync(user);
+        }
+        // Always the same response, whether or not the account exists, so
+        // this can't be used to enumerate registered emails.
+        return Ok(new { message = "If an account exists for that email, a password reset link has been sent." });
+    }
+
+    /// <summary>Password Bank: reject a password matching the current one or
+    /// any of the last PasswordHistoryLimit.</summary>
+    private async Task RotatePasswordAsync(User user, string newPassword)
+    {
+        var history = await db.PasswordHistories.Where(h => h.UserId == user.UserId)
+            .OrderByDescending(h => h.CreatedAt).Take(Constants.PasswordHistoryLimit).ToListAsync();
+        foreach (var record in history)
+        {
+            if (BCrypt.Net.BCrypt.Verify(newPassword, record.PasswordHashValue))
+            {
+                throw new ValidationFailed($"You can't reuse any of your last {Constants.PasswordHistoryLimit} passwords.");
+            }
+        }
+
+        user.SetPassword(newPassword);
+        user.MustChangePassword = false;
+        db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
+        await db.SaveChangesAsync();
+    }
+
+    [HttpPost("/auth/reset-password")]
+    public async Task<IActionResult> ResetPassword()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<ResetPasswordRequest>(Request);
+        var token = data.Token ?? "";
+
+        string newPassword;
+        try
+        {
+            newPassword = Validators.RequireStrongPassword(data.NewPassword);
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = exc.Message,
+                field = "new_password",
+                hint = "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        var tokenHash = Security.HashToken(token);
+        var record = await db.PasswordResetTokens.FirstOrDefaultAsync(t => t.TokenHash == tokenHash && !t.Consumed);
+
+        if (record is null || record.ExpiresAt < Clock.UtcNow())
+        {
+            return StatusCode(400, new
+            {
+                error_type = "invalid_reset_token",
+                message = "This reset link is invalid or has expired.",
+                field = "token",
+                hint = "Request a new password reset link via /auth/forgot-password.",
+                status = 400,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        var user = await db.Users.FindAsync(record.UserId);
+        if (user is null)
+        {
+            return StatusCode(400, new
+            {
+                error_type = "invalid_reset_token",
+                message = "This reset link is invalid or has expired.",
+                field = "token",
+                hint = "Request a new password reset link via /auth/forgot-password.",
+                status = 400,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        try
+        {
+            await RotatePasswordAsync(user, newPassword);
+        }
+        catch (ValidationFailed exc)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "password_reused",
+                message = exc.Message,
+                field = "new_password",
+                hint = "Choose a password you haven't used recently.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        record.Consumed = true;
+        await db.SaveChangesAsync();
+        await db.Entry(user).Reference(u => u.Role).LoadAsync();
+        await audit.RecordAuditAsync("password_reset", "user", user.UserId, actorId: user.UserId, actorRole: user.Role?.RoleName);
+        return Ok(new { message = "Password reset. You can now sign in with your new password." });
+    }
+
+    [HttpPost("/auth/change-password")]
+    public async Task<IActionResult> ChangePassword()
+    {
+        var user = await viewerContext.LoadedUserAsync();
+        var data = await RequestBody.ReadJsonSilentAsync<ChangePasswordRequest>(Request);
+        if (user is null || !user.CheckPassword(data.CurrentPassword ?? ""))
+        {
+            return StatusCode(401, new
+            {
+                error_type = "invalid_credentials",
+                message = "Current password is incorrect.",
+                field = "current_password",
+                hint = "Enter your current password correctly before choosing a new one.",
+                status = 401,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        try
+        {
+            var newPassword = Validators.RequireStrongPassword(data.NewPassword);
+            await RotatePasswordAsync(user, newPassword);
+        }
+        catch (ValidationFailed exc)
+        {
+            var isReused = exc.Message.Contains("reuse", StringComparison.Ordinal);
+            return StatusCode(422, new
+            {
+                error_type = isReused ? "password_reused" : "validation_error",
+                message = exc.Message,
+                field = "new_password",
+                hint = isReused
+                    ? "Choose a password you haven't used recently."
+                    : "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
+        await audit.RecordAuditAsync("password_changed", "user", user.UserId);
+        return Ok(new { message = "Password changed." });
+    }
+
+    [HttpPost("/auth/logout")]
+    public async Task<IActionResult> Logout()
+    {
+        var cu = currentUser.Current;
+        var ttlSeconds = Math.Max(1, (long)((cu.ExpiresAtUtc ?? Clock.UtcNow()) - DateTime.UtcNow).TotalSeconds);
+        if (cu.Jti is not null)
+        {
+            await cache.RevokeTokenAsync(cu.Jti, ttlSeconds);
+        }
+        return Ok(new { message = "Signed out." });
+    }
+}

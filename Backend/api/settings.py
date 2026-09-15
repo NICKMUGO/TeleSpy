@@ -1,11 +1,13 @@
 """Per-user self-service: profile (GET/PATCH /settings/me) and the
 employee's own usage view (GET /me/usage).
 """
-from flask import request
+from datetime import datetime, timezone
+
+from flask import jsonify, make_response, request
 from flask_jwt_extended import jwt_required
 from flask_restful import Resource
 
-from core.responses import err, ok, paginate_args, paginate_meta
+from core.responses import paginate_args, paginate_meta
 from models.models import UsageEvent, UsageProfile, db
 
 from api.common import loaded_user
@@ -16,11 +18,19 @@ class Me(Resource):
     def get(self):
         user = loaded_user()
         if not user:
-            return err("Not found.", 404, "not_found")
+            return make_response(jsonify({
+                "error_type": "not_found",
+                "message": "Not found.",
+                "hint": "The account for the current session no longer exists.",
+                "status": 404,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 404)
         out = user.to_dict()
         if user.employee:
             out.update(user.employee.to_dict(viewer=user))
-        return ok(data=out)
+        return make_response(jsonify({"data": out}), 200)
 
     @jwt_required()
     def patch(self):
@@ -32,7 +42,10 @@ class Me(Resource):
         out = user.to_dict()
         if user.employee:
             out.update(user.employee.to_dict(viewer=user))
-        return ok(data=out, message="Profile updated.")
+        return make_response(jsonify({
+            "data": out,
+            "message": "Profile updated.",
+        }), 200)
 
 
 class MyUsage(Resource):
@@ -45,7 +58,15 @@ class MyUsage(Resource):
     def get(self):
         viewer = loaded_user()
         if not viewer or not viewer.employee:
-            return err("No employee record for this account.", 404, "not_found")
+            return make_response(jsonify({
+                "error_type": "not_found",
+                "message": "No employee record for this account.",
+                "hint": "This account isn't linked to an Employee record, so it has no usage history.",
+                "status": 404,
+                "path": request.path,
+                "method": request.method,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }), 404)
         employee = viewer.employee
         page, limit = paginate_args()
 
@@ -58,16 +79,16 @@ class MyUsage(Resource):
         current_allocation = employee.get_active_allocation()
         profile = db.session.query(UsageProfile).filter_by(employee_id=employee.employee_id).first()
 
-        return ok(
-            data={
+        return make_response(jsonify({
+            "data": {
                 "usage": [r.to_dict() for r in rows],
                 "cost_summaries": [s.to_dict() for s in employee.usage_summaries],
                 "current_allocation": current_allocation.to_dict() if current_allocation else None,
                 "current_sim": current_allocation.sim.to_dict(viewer=viewer) if current_allocation else None,
                 "usage_profile_cluster": profile.cluster_label if profile else None,
             },
-            meta=paginate_meta(page, limit, total),
-        )
+            "meta": paginate_meta(page, limit, total),
+        }), 200)
 
 
 RESOURCES = [
