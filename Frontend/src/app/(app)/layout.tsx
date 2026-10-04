@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cookies } from "next/headers";
+import { AuthGuard } from "@/components/auth/auth-guard";
 import { AppShellChrome } from "@/components/layout/app-shell-chrome";
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -12,11 +13,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const sidebarOpen = cookieStore.get("sidebar_state")?.value !== "false";
 
   return (
-    <SidebarProvider defaultOpen={sidebarOpen}>
-      <AppSidebar />
-      <SidebarInset>
-        <AppShellChrome>{children}</AppShellChrome>
-      </SidebarInset>
-    </SidebarProvider>
+    <AuthGuard>
+      <SidebarProvider defaultOpen={sidebarOpen}>
+        <AppSidebar />
+        <SidebarInset>
+          <AppShellChrome>{children}</AppShellChrome>
+        </SidebarInset>
+      </SidebarProvider>
+    </AuthGuard>
   );
 }

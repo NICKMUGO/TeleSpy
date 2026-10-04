@@ -1,0 +1,20 @@
+[Unit]
+Description=TeleSpy Avaya CDR real-time listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/home/mugo/Projects/TeleSpy/ML/ingestion
+ExecStart=/usr/bin/python3 /home/mugo/Projects/TeleSpy/ML/ingestion/avaya_cdr_listener.py
+# Must stay running and reconnect on its own — this is what a cron job
+# fundamentally can't do (cron starts a new process on a schedule and
+# expects it to exit; this one is meant to never exit). If it crashes
+# (e.g. an unhandled error), systemd restarts it a few seconds later
+# rather than silently going dark until someone notices.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

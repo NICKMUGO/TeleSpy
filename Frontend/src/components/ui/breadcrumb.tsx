@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Slot } from "radix-ui";
- 
+
 import { cn } from "@/lib/utils"; // cleans up the tailwind className strings, removing duplicates and falsy values
 import { ChevronRightIcon, MoreHorizontalIcon } from "lucide-react"; // for icons in app
 

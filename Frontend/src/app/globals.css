@@ -46,6 +46,17 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* Brand wash — the pale red-tinted surface behind the sign-in marketing
+   * panel and other "brand moment" areas. Not a status color: never use it
+   * to mean error. */
+  --color-brand-wash: var(--brand-wash);
+  --color-brand-wash-foreground: var(--brand-wash-foreground);
+  --color-brand-wash-border: var(--brand-wash-border);
+  /* Anomaly severity — a fixed 3-step ramp so HIGH/MEDIUM/LOW read the
+   * same everywhere (table badges, drawer, dashboard). */
+  --color-severity-high: var(--severity-high);
+  --color-severity-medium: var(--severity-medium);
+  --color-severity-low: var(--severity-low);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-jetbrains-mono);
   --font-heading: var(--font-sans);
@@ -133,6 +144,17 @@
   --sidebar-accent-foreground: var(--color-kq-black);
   --sidebar-border: oklch(0.62 0 0);
   --sidebar-ring: oklch(0.5 0 0);
+  --brand-wash: oklch(0.975 0.012 25);
+  --brand-wash-foreground: var(--color-kq-black);
+  --brand-wash-border: oklch(0.9 0.035 25);
+  --severity-high: var(--color-kq-red);
+  --severity-medium: oklch(0.62 0.17 75);
+  --severity-low: oklch(0.55 0 0);
+  /* Hairline rules for large data surfaces (table rows, card edges). The
+   * --border token stays at its darker, AA-contrast value for interactive
+   * outlines; this one is for decorative separation only, where the
+   * heavier rule would make a dense table look like a spreadsheet grid. */
+  --border-subtle: oklch(0.91 0 0);
 }
 
 .dark {
@@ -161,11 +183,19 @@
   --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 16%);
   --ring: oklch(0.65 0 0);
-  --chart-1: oklch(0.68 0.16 250);
-  --chart-2: oklch(0.78 0.14 75);
-  --chart-3: oklch(0.65 0.17 300);
-  --chart-4: oklch(0.68 0.11 195);
-  --chart-5: oklch(0.75 0 0);
+  /* Re-stepped so the four categorical slots sit inside the dark-mode
+   * OKLCH lightness band (0.48-0.67) against the --card surface. The old
+   * values (L 0.68-0.78) sat above it: too light to hold their weight as
+   * marks, and chart-2 in particular read as near-white. Verified with the
+   * six-check palette validator (lightness, chroma, CVD separation for
+   * deutan/tritan, normal-vision separation, contrast). --chart-5 is the
+   * neutral "other" slot, deliberately achromatic, so it is not part of
+   * the categorical set those checks cover. */
+  --chart-1: oklch(0.64 0.16 250);
+  --chart-2: oklch(0.66 0.14 75);
+  --chart-3: oklch(0.6 0.17 300);
+  --chart-4: oklch(0.63 0.115 195);
+  --chart-5: oklch(0.72 0 0);
   --sidebar: oklch(0.14 0.005 260);
   --sidebar-foreground: oklch(0.96 0 0);
   --sidebar-primary: var(--color-kq-red-dark);
@@ -174,6 +204,13 @@
   --sidebar-accent-foreground: oklch(0.96 0 0);
   --sidebar-border: oklch(1 0 0 / 15%);
   --sidebar-ring: oklch(0.65 0 0);
+  --brand-wash: oklch(0.21 0.02 25);
+  --brand-wash-foreground: oklch(0.96 0 0);
+  --brand-wash-border: oklch(0.32 0.04 25);
+  --severity-high: var(--color-kq-red-dark);
+  --severity-medium: oklch(0.76 0.15 75);
+  --severity-low: oklch(0.7 0 0);
+  --border-subtle: oklch(1 0 0 / 10%);
 }
 
 :root {
@@ -182,6 +219,10 @@
 
 [data-density="compact"] {
   --density-scale: 0.7;
+}
+
+@theme inline {
+  --color-border-subtle: var(--border-subtle);
 }
 
 @layer base {

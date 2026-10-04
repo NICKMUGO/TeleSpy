@@ -1,3 +1,18 @@
 pandas>=2.2
 numpy>=1.26
 scikit-learn>=1.4
+
+# --- training/ (Isolation Forest, KMeans, Prophet) — the single shared
+# implementation both Backend and BackendDotNet's databases are populated
+# from; see training/anomaly_detection.py, training/usage_profiling.py,
+# training/forecasting.py (each independently schedulable) -----------
+prophet>=1.1
+psycopg2-binary>=2.9  # BackendDotNet is Postgres; Backend (Flask) stays SQLite
+
+# --- ingestion/ (production CDR fetch connectors) -----------------------
+paramiko>=3.4  # SFTP client — cucm_sftp_fetch.py, generic_sftp_fetch.py
+
+# --- Running the notebooks themselves -----------------------------------
+jupyter
+nbconvert
+ipykernel

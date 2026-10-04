@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
+import { AppProviders } from "@/components/providers/app-providers";
 import { PreferencesEffect } from "@/components/preferences-effect";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -54,11 +55,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <TooltipProvider delayDuration={300}>
-            <PreferencesEffect />
-            {children}
-            <Toaster richColors closeButton />
-          </TooltipProvider>
+          <AppProviders>
+            <TooltipProvider delayDuration={300}>
+              <PreferencesEffect />
+              {children}
+              <Toaster richColors closeButton />
+            </TooltipProvider>
+          </AppProviders>
         </ThemeProvider>
       </body>
     </html>

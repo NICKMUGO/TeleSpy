@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>TeleSpy</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ORM: EF Core, the standard SQLAlchemy-equivalent choice for .NET. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+
+    <!-- Password hashing: bcrypt, mirroring Flask-Bcrypt. -->
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+
+    <!-- JWT creation/validation, mirroring flask-jwt-extended. -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.2.1" />
+
+    <!-- Redis client, mirroring the `redis` package used by services/cache.py. -->
+    <PackageReference Include="StackExchange.Redis" Version="2.8.24" />
+
+    <!-- .env loading, mirroring python-dotenv used by core/config.py. -->
+    <PackageReference Include="DotNetEnv" Version="3.1.1" />
+
+    <!-- Fake data generation for Seed.cs, mirroring Python's Faker (Bogus is
+         its long-established C# counterpart — same API shape, same idea). -->
+    <PackageReference Include="Bogus" Version="35.6.1" />
+  </ItemGroup>
+
+</Project>
