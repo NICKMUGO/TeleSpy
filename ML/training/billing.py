@@ -285,22 +285,6 @@ def _load_international_rates(backend) -> dict[str, float]:
     return {code: float(rate) for code, rate in rows}
 
 
-def _is_peak_hour(orig_time, peak_start_hour: int, peak_end_hour: int) -> bool:
-    """orig_time is an "HH:MM:SS" string (the CDR dataset's own column) — a
-    missing/unparseable time defaults to peak, the pricier (safer to bill,
-    not to under-bill) assumption."""
-    # Missing/NaN time -> assume peak (safer to over- than under-bill).
-    if not orig_time or (isinstance(orig_time, float) and pd.isna(orig_time)):
-        return True
-    try:
-        # Split "HH:MM:SS" on ":" and take the first part as the hour.
-        hour = int(str(orig_time).split(":")[0])
-    except (ValueError, IndexError):
-        # Couldn't parse an hour out of it -> assume peak too.
-        return True
-    # Peak if the hour falls within [peak_start_hour, peak_end_hour).
-    return peak_start_hour <= hour < peak_end_hour
-
 def _international_destination_digits(destination) -> str | None:
     """Same trunk-digit/dial-terminator/IDD-marker stripping
     classify_number() applies, so a number classify_number() called
@@ -343,32 +327,61 @@ def _lookup_international_rate(destination, intl_rates: dict[str, float], defaul
     return default_rate
 
 
-def _rate_per_minute(call_classification: str, destination, orig_time, billing_settings: dict, intl_rates: dict[str, float]) -> float:
-    """International: per-country rate from international_call_rates
-    (fallback to the configured default). External (local Kenyan,
-    on-net and off-net alike): Safaricom's peak/off-peak tariff from
-    billing_settings, by the call's own time of day. No SIM-plan override
-    here — see module docstring."""
-    # International calls: look up the per-country rate.
-    if call_classification == CALL_CLASS_INTERNATIONAL:
-        return _lookup_international_rate(destination, intl_rates, billing_settings["default_international_rate_kes"])
-    # Otherwise (External/local): pick peak or off-peak rate based on the
-    # call's time of day.
-    is_peak = _is_peak_hour(orig_time, billing_settings["peak_start_hour"], billing_settings["peak_end_hour"])
-    return billing_settings["peak_rate_kes"] if is_peak else billing_settings["off_peak_rate_kes"]
+def _peak_offpeak_seconds(orig_time, duration_sec: float, peak_start_hour: int, peak_end_hour: int) -> tuple[float, float]:
+    """Splits a call's duration into (peak seconds, off-peak seconds) by
+    walking it hour by hour from its start time, so a call that crosses
+    peak_start_hour or peak_end_hour (e.g. 21:55 -> 22:10) has each part
+    charged at its own rate instead of the whole call at its start's rate.
+    Hour steps are enough since the window's bounds are whole hours; the
+    clock wraps at midnight. A missing/unparseable start time bills the
+    whole call as peak — the pricier assumption, safer than under-billing."""
+    if not orig_time or (isinstance(orig_time, float) and pd.isna(orig_time)):
+        return float(duration_sec), 0.0
+    try:
+        hours, minutes, seconds = (int(part) for part in str(orig_time).split(":"))
+    except ValueError:
+        return float(duration_sec), 0.0
+    # Seconds since midnight at the moment the call was answered.
+    clock = hours * 3600 + minutes * 60 + seconds
+    remaining = float(duration_sec)
+    peak = off_peak = 0.0
+    while remaining > 0:
+        # Seconds from `clock` to the next top of the hour, or what's left
+        # of the call if it ends first.
+        segment = min(remaining, 3600 - clock % 3600)
+        if peak_start_hour <= (clock // 3600) % 24 < peak_end_hour:
+            peak += segment
+        else:
+            off_peak += segment
+        clock += segment
+        remaining -= segment
+    return peak, off_peak
 
 
 def compute_call_cost(call_classification: str, duration_minutes: float, destination, orig_time,
                        billing_settings: dict, intl_rates: dict[str, float]) -> float:
-    """Cost for one raw CDR row, in KES (rounded to 2dp)."""
+    """Cost for one raw CDR row, in KES (rounded to 2dp).
+
+    International: duration * the per-country rate from
+    international_call_rates (fallback to the configured default) — flat,
+    no time-of-day banding. External (local Kenyan, on-net and off-net
+    alike): Safaricom's peak/off-peak tariff from billing_settings, with
+    the part of the call inside the peak window charged at the peak rate
+    and the rest at the off-peak rate. No SIM-plan override here — see
+    module docstring."""
     # Internal/Unknown calls are never charged.
     if call_classification not in CHARGEABLE_CALL_CLASSES:
         return 0.0
-    # Look up the applicable per-minute rate for this call.
-    rate = _rate_per_minute(call_classification, destination, orig_time, billing_settings, intl_rates)
-    # Cost = duration in minutes * rate, rounded to 2 decimal places (KES
-    # cents).
-    return round(float(duration_minutes) * rate, 2)
+    if call_classification == CALL_CLASS_INTERNATIONAL:
+        rate = _lookup_international_rate(destination, intl_rates, billing_settings["default_international_rate_kes"])
+        return round(float(duration_minutes) * rate, 2)
+    peak_sec, off_peak_sec = _peak_offpeak_seconds(
+        orig_time, float(duration_minutes) * 60,
+        billing_settings["peak_start_hour"], billing_settings["peak_end_hour"],
+    )
+    cost = (peak_sec / 60) * billing_settings["peak_rate_kes"] + (off_peak_sec / 60) * billing_settings["off_peak_rate_kes"]
+    # Rounded to 2 decimal places (KES cents).
+    return round(cost, 2)
 
 
 # --- Dataset -> usage_summaries -------------------------------------------

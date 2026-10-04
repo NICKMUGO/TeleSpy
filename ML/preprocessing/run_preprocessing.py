@@ -38,6 +38,11 @@ PROCESSED_DIR = DATA_DIR / "processed"
 # CSV, so they aren't re-read next run.
 ARCHIVE_DIR = DATA_DIR / "archive"
 
+# The PBX's local timezone. CUCM logs call times as UTC epoch seconds;
+# they're converted to this zone so date/orig_time (and billing's
+# peak/off-peak window) are in Kenyan wall-clock time.
+LOCAL_TIMEZONE = "Africa/Nairobi"
+
 # How many interquartile ranges beyond Q1/Q3 counts as a duration outlier —
 # see flag_outliers() below.
 OUTLIER_IQR_MULTIPLIER = 1.5
@@ -109,16 +114,30 @@ def derive_cucm_fields(raw: pd.DataFrame) -> pd.DataFrame:
     # Copy before mutating, so the caller's original DataFrame/column
     # references aren't affected by the assignments below.
     raw = raw.copy()
-    # CUCM's dateTimeOrigination is a Unix epoch timestamp (seconds since
-    # 1970) stored as text; convert it to numeric first (errors="coerce"
-    # turns anything unparseable into NaN instead of raising), then to a
-    # proper pandas datetime column.
-    origination = pd.to_datetime(pd.to_numeric(raw[cols["datetimeorigination"]], errors="coerce"), unit="s")
+    # CUCM's dateTime* columns are Unix epoch timestamps (seconds since
+    # 1970, UTC) stored as text; convert to numeric first (errors="coerce"
+    # turns anything unparseable into NaN instead of raising).
+    origination = pd.to_numeric(raw[cols["datetimeorigination"]], errors="coerce")
+    # The call's timestamp is when it was answered (dateTimeConnect), not
+    # when the handset went off-hook (dateTimeOrigination) — `duration` is
+    # itself measured from connect to disconnect, so peak/off-peak rating
+    # should key off the same moment. dateTimeConnect is 0 for a call that
+    # never connected (duration 0, dropped by billing anyway); fall back to
+    # origination there so the row still gets a real timestamp.
+    if "datetimeconnect" in cols:
+        connect = pd.to_numeric(raw[cols["datetimeconnect"]], errors="coerce")
+        call_epoch = connect.where(connect > 0, origination)
+    else:
+        call_epoch = origination
+    # Epoch seconds are UTC; convert to Nairobi local time (EAT, UTC+3) so
+    # the date/time columns — and the peak/off-peak window billing applies
+    # to them — reflect the wall-clock time the call was actually made.
+    call_time = pd.to_datetime(call_epoch, unit="s", utc=True).dt.tz_convert(LOCAL_TIMEZONE)
     # Split the single datetime back into separate date/time string columns
     # to match the rest of the pipeline's schema (RAW_COLUMNS expects
     # "date" and "orig_time" as two columns, not one timestamp).
-    raw["date"] = origination.dt.strftime("%Y-%m-%d")
-    raw["orig_time"] = origination.dt.strftime("%H:%M:%S")
+    raw["date"] = call_time.dt.strftime("%Y-%m-%d")
+    raw["orig_time"] = call_time.dt.strftime("%H:%M:%S")
     # CUCM's "callingPartyNumber" is this schema's "orig" (who placed the
     # call).
     raw["orig"] = raw[cols["callingpartynumber"]]
