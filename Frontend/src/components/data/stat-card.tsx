@@ -1,12 +1,20 @@
-import type { LucideIcon } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-interface StatCardProps {
+export interface StatCardProps {
   label: string;
   value: string;
-  icon: LucideIcon;
   tone?: "default" | "warning" | "destructive" | "success";
+  /** Secondary line under the number — context, not decoration. */
   hint?: string;
+  /** Period-over-period change. `direction` is the arrow; `sentiment`
+   * decides the colour, because for spend "up" is bad and for recovered
+   * cost "up" is good. */
+  delta?: {
+    label: string;
+    direction: "up" | "down";
+    sentiment?: "good" | "bad" | "neutral";
+  };
 }
 
 const TONE_CLASSES: Record<NonNullable<StatCardProps["tone"]>, string> = {
@@ -16,31 +24,48 @@ const TONE_CLASSES: Record<NonNullable<StatCardProps["tone"]>, string> = {
   success: "text-success",
 };
 
+const SENTIMENT_CLASSES = {
+  good: "text-success",
+  bad: "text-destructive",
+  neutral: "text-muted-foreground",
+};
+
 /** Clarity over decoration, one number the eye lands on first (Apple HIG's
  * "defer to content" read into a KES-figure dashboard tile) — no card
  * chrome competing with the number itself. */
 export function StatCard({
   label,
   value,
-  icon: Icon,
   tone = "default",
   hint,
+  delta,
 }: StatCardProps) {
+  const DeltaIcon = delta?.direction === "down" ? ArrowDownRight : ArrowUpRight;
+
   return (
-    <div className="border-border bg-card flex flex-col gap-2 rounded-lg border p-5">
-      <div className="text-muted-foreground flex items-center gap-2 text-sm">
-        <Icon aria-hidden="true" className="size-4" />
-        <span>{label}</span>
-      </div>
+    <div className="border-border-subtle bg-card flex flex-col gap-1.5 rounded-xl border px-4 py-3.5">
+      <span className="text-muted-foreground text-xs">{label}</span>
       <p
         className={cn(
-          "font-mono text-2xl font-semibold tabular-nums",
+          "font-tabular text-xl leading-tight font-semibold",
           TONE_CLASSES[tone],
         )}
       >
         {value}
       </p>
-      {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+      {delta ? (
+        <p
+          className={cn(
+            "flex items-center gap-1 text-xs",
+            SENTIMENT_CLASSES[delta.sentiment ?? "neutral"],
+          )}
+        >
+          <DeltaIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="font-tabular">{delta.label}</span>
+        </p>
+      ) : hint ? (
+        <p className="text-muted-foreground text-xs">{hint}</p>
+      ) : null}
     </div>
   );
 }

@@ -1,9 +1,15 @@
 // Redis-backed store for the JWT blocklist and MFA OTPs — mirrors
 // Backend/services/cache.py exactly (same key prefixes, same TTL semantics).
+using System.Text.Json;
 using StackExchange.Redis;
 using TeleSpy.Core;
 
 namespace TeleSpy.Services;
+
+/// <summary>The one active session a user currently has, for both matching
+/// (Sid) and describing it back to them if a second login collides with it
+/// (Device/SignedInAtUtc) — see AuthController.VerifyOtp.</summary>
+public record ActiveSessionInfo(string Sid, string? Device, DateTime SignedInAtUtc);
 
 public interface ICacheService
 {
@@ -12,12 +18,16 @@ public interface ICacheService
     Task SetOtpAsync(string userId, string otpHash, int ttlSeconds);
     Task<string?> GetOtpHashAsync(string userId);
     Task ConsumeOtpAsync(string userId);
+    Task SetActiveSessionAsync(string userId, string sessionId, string? device, long ttlSeconds);
+    Task<ActiveSessionInfo?> GetActiveSessionAsync(string userId);
+    Task ClearActiveSessionAsync(string userId);
 }
 
 public class CacheService : ICacheService
 {
     private const string JtiPrefix = "telespy:revoked_jti:";
     private const string OtpPrefix = "telespy:mfa_otp:";
+    private const string ActiveSessionPrefix = "telespy:active_session:";
 
     private readonly Lazy<ConnectionMultiplexer> _connection = new(() => ConnectionMultiplexer.Connect(ParseRedisUrl(Config.RedisUrl)));
 
@@ -66,4 +76,30 @@ public class CacheService : ICacheService
     public async Task<string?> GetOtpHashAsync(string userId) => await Db().StringGetAsync($"{OtpPrefix}{userId}");
 
     public Task ConsumeOtpAsync(string userId) => Db().KeyDeleteAsync($"{OtpPrefix}{userId}");
+
+    /// <summary>One active session per user, enforced here: overwriting this
+    /// key is what "signs out" every device/tab that was on the previous
+    /// session — the same idea as WhatsApp Web allowing only one live login
+    /// at a time. TTL matches the refresh token's lifetime, since that's the
+    /// longest-lived credential built on top of this session id.</summary>
+    public Task SetActiveSessionAsync(string userId, string sessionId, string? device, long ttlSeconds) =>
+        Db().StringSetAsync($"{ActiveSessionPrefix}{userId}",
+            JsonSerializer.Serialize(new ActiveSessionInfo(sessionId, device, DateTime.UtcNow)),
+            TimeSpan.FromSeconds(ttlSeconds));
+
+    public async Task<ActiveSessionInfo?> GetActiveSessionAsync(string userId)
+    {
+        string? raw = await Db().StringGetAsync($"{ActiveSessionPrefix}{userId}");
+        if (raw is null) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<ActiveSessionInfo>(raw);
+        }
+        catch (JsonException)
+        {
+            return null; // a value written before this field existed — treat as no active session
+        }
+    }
+
+    public Task ClearActiveSessionAsync(string userId) => Db().KeyDeleteAsync($"{ActiveSessionPrefix}{userId}");
 }

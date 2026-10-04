@@ -32,9 +32,15 @@ public static class Seed
 
     // Every seeded account uses one of these two passwords, so the demo has
     // known, working credentials out of the box (MustChangePassword=false).
-    public const string AdminEmail = "admin@telespy.local";
+    // The Admin and the DemoManagerDepartment manager use real mailboxes so
+    // their MFA OTP / password-reset mail actually arrives when SMTP is
+    // configured; every other seeded account stays on an unroutable
+    // @telespy.local (or Bogus) address.
+    public const string AdminEmail = "nickmugo2@gmail.com";
     public const string AdminPassword = "Admin@12345!";
     public const string DemoPassword = "Passw0rd@1";
+    public const string DemoManagerDepartment = "ENG";
+    public const string DemoManagerEmail = "nicknjuru13@gmail.com";
 
     private static readonly (string Name, string Code, double Budget)[] Departments =
     [
@@ -83,6 +89,7 @@ public static class Seed
         await using var db = DatabaseConfig.CreateStandaloneContext();
         await db.Database.MigrateAsync(); // harmless if already migrated — mirrors seed.py's db.create_all() fallback
         await RoleBootstrap.EnsureDefaultRolesAsync(db, NullLogger.Instance);
+        await CallRateBootstrap.EnsureDefaultCallRatesAsync(db, NullLogger.Instance);
 
         if (await db.Departments.AnyAsync())
         {
@@ -129,8 +136,10 @@ public static class Seed
             };
             db.Employees.Add(managerEmployee);
             await db.SaveChangesAsync();
-            var managerUser = await MakeUserAsync(
-                db, managerEmployee, $"{code.ToLowerInvariant()}.manager@telespy.local", Role.Manager, DemoPassword);
+            var managerEmail = code == DemoManagerDepartment
+                ? DemoManagerEmail
+                : $"{code.ToLowerInvariant()}.manager@telespy.local";
+            var managerUser = await MakeUserAsync(db, managerEmployee, managerEmail, Role.Manager, DemoPassword);
             managerEmployee.User = managerUser;
 
             var (managerSim, managerExtension) = MakeSim(faker, simIndex);
@@ -196,7 +205,8 @@ public static class Seed
 
         Console.WriteLine($"Seeded {Departments.Length} departments, {plans.Count} telco plans, " +
             $"{roster.Count} Manager/Employee accounts (+1 Admin), and {MonthsOfHistory} months of usage history.");
-        Console.WriteLine($"Admin login:  {AdminEmail} / {AdminPassword}");
+        Console.WriteLine($"Admin login:    {AdminEmail} / {AdminPassword}");
+        Console.WriteLine($"Manager login:  {DemoManagerEmail} / {DemoPassword}");
         Console.WriteLine($"All other seeded accounts share the password: {DemoPassword}");
         Console.WriteLine("(MFA OTP codes are logged to the console when MAIL_SUPPRESS_SEND=true.)");
     }

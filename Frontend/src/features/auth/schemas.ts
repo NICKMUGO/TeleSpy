@@ -18,3 +18,12 @@ export const otpSchema = z.object({
 });
 
 export type OtpValues = z.infer<typeof otpSchema>;
+
+export const forgotPasswordSchema = z.object({
+  email: z
+    .string()
+    .min(1, "Enter your work email.")
+    .email("Enter a valid email address."),
+});
+
+export type ForgotPasswordValues = z.infer<typeof forgotPasswordSchema>;

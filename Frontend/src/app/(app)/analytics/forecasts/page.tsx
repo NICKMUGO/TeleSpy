@@ -104,17 +104,14 @@ export default function ForecastsPage() {
               <StatCard
                 label="Next month forecast"
                 value={kes(forecast.data.data.forecast?.forecasted_cost)}
-                icon={TrendingUp}
               />
               <StatCard
                 label="Confidence range"
                 value={`${kes(forecast.data.data.forecast?.confidence_low)} – ${kes(forecast.data.data.forecast?.confidence_high)}`}
-                icon={TrendingUp}
               />
               <StatCard
                 label="Budget ceiling"
                 value={kes(forecast.data.data.budget_ceiling)}
-                icon={TrendingUp}
               />
             </div>
             <div className="border-border h-80 w-full rounded-lg border p-4">

@@ -37,6 +37,9 @@ public class MfaTokenRequest
 public class VerifyOtpRequest : MfaTokenRequest
 {
     public string? Otp { get; set; }
+    // Set after the person has already been told (via the 409 below) that
+    // this account is signed in elsewhere and chosen "sign in here anyway."
+    public bool? ForceNewSession { get; set; }
 }
 
 public class ForgotPasswordRequest
@@ -414,14 +417,46 @@ public class AuthController(
             });
         }
 
+        // One active session per account (see Services/Cache.cs). Unlike the
+        // earlier version of this feature, a colliding second login doesn't
+        // silently kick the first one out any more — it's told about the
+        // existing session and has to explicitly choose to end it, the way
+        // WhatsApp Web asks before linking a new device over an old one.
+        var existingSession = await cache.GetActiveSessionAsync(user.UserId);
+        if (existingSession is not null && data.ForceNewSession != true)
+        {
+            return StatusCode(409, new
+            {
+                error_type = "active_session_exists",
+                message = existingSession.Device is not null
+                    ? $"This account is already signed in on {existingSession.Device}."
+                    : "This account is already signed in elsewhere.",
+                hint = "Sign in here anyway and end that session, or cancel and continue on the other device instead.",
+                status = 409,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
         await cache.ConsumeOtpAsync(user.UserId);
 
         await db.Entry(user).Reference(u => u.Role).LoadAsync();
         await db.Entry(user).Reference(u => u.Employee).LoadAsync();
         var role = user.Role?.RoleName;
         var departmentId = viewerContext.ViewerDepartmentId(user);
-        var access = jwtService.CreateAccessToken(user.UserId, role, user.RoleId, departmentId);
-        var refresh = jwtService.CreateRefreshToken(user.UserId, role, user.RoleId, departmentId);
+
+        // Minting a fresh session id here and overwriting the user's stored
+        // one is what signs out whatever device/tab was previously signed
+        // in — this is the only place that happens, since it's the only
+        // place a *new* login actually completes (Refresh() just extends an
+        // existing session, it doesn't start one).
+        var sessionId = Guid.NewGuid().ToString("N");
+        var device = DescribeDevice(Request.Headers.UserAgent.ToString());
+        await cache.SetActiveSessionAsync(user.UserId, sessionId, device, (long)Config.JwtRefreshTokenExpires.TotalSeconds);
+
+        var access = jwtService.CreateAccessToken(user.UserId, role, user.RoleId, departmentId, sessionId: sessionId);
+        var refresh = jwtService.CreateRefreshToken(user.UserId, role, user.RoleId, departmentId, sessionId);
         await audit.RecordAuditAsync("login_success", "user", user.UserId, actorId: user.UserId, actorRole: role);
 
         return Ok(new
@@ -438,7 +473,7 @@ public class AuthController(
     }
 
     [HttpPost("/auth/refresh")]
-    public IActionResult Refresh()
+    public async Task<IActionResult> Refresh()
     {
         // Public path (skipped by CurrentUserMiddleware) — this action does
         // its own token check, requiring a refresh-type token specifically,
@@ -471,7 +506,26 @@ public class AuthController(
         var role = principal.FindFirstValue("role");
         var roleId = principal.FindFirstValue("role_id");
         var departmentId = principal.FindFirstValue("department_id");
-        var access = jwtService.CreateAccessToken(userId, role, roleId, departmentId);
+        var sessionId = principal.FindFirstValue("sid");
+
+        // This refresh token belonged to a session that's since been
+        // superseded by a login elsewhere — refuse to extend it. Same
+        // check CurrentUserMiddleware does for access tokens; needed here
+        // too since /auth/refresh is a public path that skips that
+        // middleware and does its own token handling.
+        var activeSession = await cache.GetActiveSessionAsync(userId);
+        if (sessionId != activeSession?.Sid)
+        {
+            return StatusCode(401, new
+            {
+                error = "session_superseded",
+                error_type = "session_superseded",
+                message = "You've been signed out because this account was signed in from another location.",
+                status = 401,
+            });
+        }
+
+        var access = jwtService.CreateAccessToken(userId, role, roleId, departmentId, sessionId: sessionId);
 
         return Ok(new { data = new { access_token = access.Value } });
     }
@@ -653,6 +707,44 @@ public class AuthController(
         {
             await cache.RevokeTokenAsync(cu.Jti, ttlSeconds);
         }
+        if (cu.Id is not null)
+        {
+            await cache.ClearActiveSessionAsync(cu.Id);
+        }
         return Ok(new { message = "Signed out." });
+    }
+
+    /// <summary>Cheap browser/OS label for the "signed in on X" message in
+    /// VerifyOtp's 409 — not a full User-Agent parser (no dependency added
+    /// for it), just enough for a person to recognise their other device
+    /// ("Chrome on Windows" vs "Safari on iPhone"). Falls back to null
+    /// (generic "elsewhere" wording) for anything it doesn't recognise.</summary>
+    private static string? DescribeDevice(string? userAgent)
+    {
+        if (string.IsNullOrWhiteSpace(userAgent)) return null;
+
+        string? os = userAgent switch
+        {
+            _ when userAgent.Contains("iPhone") => "iPhone",
+            _ when userAgent.Contains("iPad") => "iPad",
+            _ when userAgent.Contains("Android") => "Android",
+            _ when userAgent.Contains("Windows") => "Windows",
+            _ when userAgent.Contains("Macintosh") || userAgent.Contains("Mac OS X") => "Mac",
+            _ when userAgent.Contains("Linux") => "Linux",
+            _ => null,
+        };
+        string? browser = userAgent switch
+        {
+            _ when userAgent.Contains("Edg/") => "Edge",
+            _ when userAgent.Contains("OPR/") || userAgent.Contains("Opera") => "Opera",
+            _ when userAgent.Contains("Chrome/") => "Chrome",
+            _ when userAgent.Contains("CriOS/") => "Chrome",
+            _ when userAgent.Contains("Firefox/") => "Firefox",
+            _ when userAgent.Contains("Safari/") => "Safari",
+            _ => null,
+        };
+
+        if (browser is not null && os is not null) return $"{browser} on {os}";
+        return browser ?? os;
     }
 }

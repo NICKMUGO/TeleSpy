@@ -59,7 +59,9 @@ app.MapControllers();
 
 using (var scope = app.Services.CreateScope())
 {
-    await RoleBootstrap.EnsureDefaultRolesAsync(scope.ServiceProvider.GetRequiredService<TeleSpyDbContext>(), app.Logger);
+    var scopedDb = scope.ServiceProvider.GetRequiredService<TeleSpyDbContext>();
+    await RoleBootstrap.EnsureDefaultRolesAsync(scopedDb, app.Logger);
+    await CallRateBootstrap.EnsureDefaultCallRatesAsync(scopedDb, app.Logger);
 }
 
 app.Run();

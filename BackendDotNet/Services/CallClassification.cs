@@ -50,19 +50,23 @@ public static partial class CallClassification
         return Constants.CallClassUnknown;
     }
 
-    /// <summary>International wins over External wins over Internal: if
-    /// either leg is an international number the whole call is
-    /// International; else if either leg dials out through the 9-prefix (or
-    /// is a normalised Kenyan number) it's External; else Internal only when
-    /// both legs are 3-digit extensions.</summary>
+    /// <summary>Classify a call from its two legs. <paramref name="orig"/> is
+    /// always the internal PBX extension that placed the call — a call is
+    /// only ever this company's business if one of its own 3-digit
+    /// extensions dialled out. If <paramref name="orig"/> isn't a bare
+    /// 3-digit extension, this record isn't a call our own staff placed (an
+    /// inbound call, a malformed CDR row, or someone else's traffic on the
+    /// same trunk) — it's Unknown, full stop, without even looking at
+    /// <paramref name="dest"/> (never mistakenly billed as
+    /// External/International just because the destination leg happens to
+    /// look like an outside number). Once <paramref name="orig"/> is
+    /// confirmed to be one of ours, the call takes on whatever
+    /// <paramref name="dest"/> classifies as (Internal, External,
+    /// International, or Unknown).</summary>
     public static string ClassifyCall(string? orig, string? dest)
     {
-        var origClass = ClassifyNumber(orig);
-        var destClass = ClassifyNumber(dest);
-        if (origClass == Constants.CallClassInternational || destClass == Constants.CallClassInternational) return Constants.CallClassInternational;
-        if (origClass == Constants.CallClassExternal || destClass == Constants.CallClassExternal) return Constants.CallClassExternal;
-        if (origClass == Constants.CallClassInternal && destClass == Constants.CallClassInternal) return Constants.CallClassInternal;
-        return Constants.CallClassUnknown;
+        if (ClassifyNumber(orig) != Constants.CallClassInternal) return Constants.CallClassUnknown;
+        return ClassifyNumber(dest);
     }
 
     /// <summary>Internal calls to/from a carved-out extension (256, 400)

@@ -69,18 +69,34 @@ public class CurrentUserMiddleware(RequestDelegate next)
             return;
         }
 
+        var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        var sessionId = principal.FindFirstValue("sid");
+        // Single-active-session enforcement: a later login anywhere else
+        // overwrites this user's one active session id (see
+        // Services/Cache.cs), so a token minted for an earlier session stops
+        // validating here — one bad password attempt or a signed-out device
+        // does not, since neither of those touches the active session id.
+        var activeSession = userId is not null ? await cache.GetActiveSessionAsync(userId) : null;
+        if (sessionId != activeSession?.Sid)
+        {
+            await WriteError(context, "session_superseded",
+                "You've been signed out because this account was signed in from another location.");
+            return;
+        }
+
         var expClaim = principal.FindFirstValue(JwtRegisteredClaimNames.Exp);
         var expiresAtUtc = expClaim is not null
             ? DateTimeOffset.FromUnixTimeSeconds(long.Parse(expClaim)).UtcDateTime
             : (DateTime?)null;
 
         currentUserAccessor.Current = new CurrentUserInfo(
-            Id: principal.FindFirstValue(JwtRegisteredClaimNames.Sub),
+            Id: userId,
             Role: principal.FindFirstValue("role"),
             RoleId: principal.FindFirstValue("role_id"),
             DepartmentId: principal.FindFirstValue("department_id"),
             Jti: jti,
-            ExpiresAtUtc: expiresAtUtc);
+            ExpiresAtUtc: expiresAtUtc,
+            SessionId: sessionId);
 
         await next(context);
     }
@@ -89,6 +105,10 @@ public class CurrentUserMiddleware(RequestDelegate next)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         context.Response.ContentType = "application/json";
-        await context.Response.WriteAsJsonAsync(new { error, message });
+        // error_type/status too, not just the legacy error/message pair —
+        // ApiErrorBody (Frontend/src/lib/api/types.ts) reads error_type and
+        // status to decide whether to attempt a token refresh; without them
+        // every 401 from this middleware silently fails to trigger that.
+        await context.Response.WriteAsJsonAsync(new { error, error_type = error, message, status = 401 });
     }
 }

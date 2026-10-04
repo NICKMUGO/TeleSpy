@@ -6,7 +6,7 @@
 namespace TeleSpy.Core;
 
 public record CurrentUserInfo(string? Id, string? Role, string? RoleId, string? DepartmentId,
-    string? Jti = null, DateTime? ExpiresAtUtc = null)
+    string? Jti = null, DateTime? ExpiresAtUtc = null, string? SessionId = null)
 {
     public static readonly CurrentUserInfo Empty = new(null, null, null, null);
 }

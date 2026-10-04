@@ -17,19 +17,65 @@ constants.py/Constants.cs) are permanently excluded from anomaly detection:
 call-ingestion already sets usage_events.excluded_from_anomaly_detection
 once, at ingest time — this scorer simply respects that flag rather than
 re-deriving it.
+
+Model selection: IsolationForest is unsupervised (no ground-truth "this
+event really was anomalous" label exists anywhere in the schema), so
+there's nothing to compute accuracy/precision/recall against — doing so
+would mean scoring the model against its own output, which is circular
+and would just report near-perfect numbers that mean nothing. Instead,
+evaluate() below grid-searches (max_samples, max_features, contamination)
+using repeated K-Fold CV (plain, not stratified — stratification needs a
+class label, which doesn't exist here) and reports the metrics that are
+actually meaningful for an unsupervised detector: mean decision_function
+separation and predicted anomaly rate, each on the training fold vs a
+held-out fold, so a train/held-out gap still surfaces over/underfitting
+the same way a train/test error gap would for a supervised model.
+scikit-learn's IsolationForest has no native early_stopping parameter;
+_fit_with_early_stopping below reproduces the idea with warm_start=True,
+growing the forest in small increments and stopping once the held-out
+score stops improving for EARLY_STOPPING_PATIENCE steps in a row.
 """
+# json: used to serialize the per-flag "contributing_features" debug blob.
 import json
 
+# numpy: array math (the feature matrix, score averaging, etc).
 import numpy as np
+# pandas: DataFrame handling of the SQL query result + timestamp parsing.
 import pandas as pd
+# IsolationForest: the anomaly-detection model itself.
 from sklearn.ensemble import IsolationForest
+# ParameterGrid: expands PARAM_GRID into every combination to try;
+# RepeatedKFold: the cross-validation splitter used during grid search.
+from sklearn.model_selection import ParameterGrid, RepeatedKFold
 
+# Shared DB wrapper type/helpers, plus the two classification label
+# constants used as one-hot features below.
 from common import Backend, CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL, new_id, now_str, open_backend_connections
 
-CONTAMINATION = 0.05  # expected fraction of eligible events that are anomalous
+CONTAMINATION = 0.05  # default/fallback expected fraction of eligible events that are anomalous
 MIN_EVENTS = 20  # below this, Isolation Forest has too little data to be meaningful
-RANDOM_STATE = 20260912
+RANDOM_STATE = 20260912  # fixed seed so grid search / model fits are reproducible run to run
 
+# --- Hyperparameter search space ------------------------------------------
+# Every combination of these three params is tried during grid_search().
+PARAM_GRID = {
+    "max_samples": [0.75, 1.0],
+    "max_features": [0.75, 1.0],
+    "contamination": [0.05, 0.08],
+}
+CV_SPLITS = 5  # k in k-fold
+CV_REPEATS = 2  # how many times the k-fold split is repeated with different shuffles
+MIN_CV_FOLD_SIZE = 30  # skip CV/grid search below this many eligible events
+
+# --- Early stopping (via warm_start; IsolationForest has no built-in early
+# stopping) ------------------------------------------------------------
+EARLY_STOPPING_STEP = 20  # trees added per increment
+EARLY_STOPPING_MAX_ESTIMATORS = 300  # hard ceiling on forest size
+EARLY_STOPPING_PATIENCE = 3  # consecutive non-improving increments before stopping
+EARLY_STOPPING_TOLERANCE = 1e-3  # minimum improvement to count as "still improving"
+
+# SQL pulling every usage_event eligible for anomaly scoring: successfully
+# attributed to an employee, and not carved out via the excluded flag.
 _EVENTS_SQL = """
     SELECT event_id, duration_minutes, computed_cost, occured_at, call_classification
     FROM usage_events
@@ -39,7 +85,12 @@ _EVENTS_SQL = """
 
 
 def _event_features(row: pd.Series) -> list[float]:
+    # Parse the occured_at string into a real datetime; invalid/missing
+    # values become NaT ("errors='coerce'") instead of raising.
     occured_at = pd.to_datetime(row["occured_at"], errors="coerce")
+    # Build this event's 5-number feature vector: duration, cost, hour of
+    # day, and two one-hot flags for International/External classification
+    # (Internal/Unknown implicitly means both flags are 0).
     return [
         float(row["duration_minutes"] or 0.0),
         float(row["computed_cost"] or 0.0),
@@ -49,30 +100,206 @@ def _event_features(row: pd.Series) -> list[float]:
     ]
 
 
+def _fit_with_early_stopping(train: np.ndarray, val: np.ndarray, params: dict, random_state: int):
+    """Grow an IsolationForest EARLY_STOPPING_STEP trees at a time (warm_start),
+    tracking mean decision_function on the held-out `val` split, and stop once
+    it hasn't improved by more than EARLY_STOPPING_TOLERANCE for
+    EARLY_STOPPING_PATIENCE increments in a row. Returns
+    (best_n_estimators, best_val_score, fitted_model_at_best_n_estimators)."""
+    # Start an IsolationForest with 0 trees; warm_start=True means calling
+    # .fit() again later ADDS trees rather than refitting from scratch.
+    model = IsolationForest(n_estimators=0, warm_start=True, random_state=random_state, **params)
+    # Track the best held-out score seen so far, and the tree-count/model
+    # state that produced it.
+    best_score = -np.inf
+    best_n = EARLY_STOPPING_STEP
+    best_state = None
+    # How many consecutive increments in a row failed to improve on best_score.
+    no_improve = 0
+    # Current tree count, grown by EARLY_STOPPING_STEP each loop iteration.
+    n = EARLY_STOPPING_STEP
+    while n <= EARLY_STOPPING_MAX_ESTIMATORS:
+        # Grow the forest to `n` trees (warm_start makes this additive).
+        model.n_estimators = n
+        model.fit(train)
+        # Score this forest on the held-out validation split; higher =
+        # better inlier/outlier separation.
+        val_score = float(np.mean(model.decision_function(val)))
+        if val_score > best_score + EARLY_STOPPING_TOLERANCE:
+            # Meaningful improvement — remember it, and reset the patience
+            # counter.
+            best_score, best_n, no_improve = val_score, n, 0
+            # Re-fit a standalone (non-warm-start) model at this exact size
+            # so `best_state` is a clean, independent model to return.
+            best_state = IsolationForest(n_estimators=n, random_state=random_state, **params).fit(train)
+        else:
+            # No improvement this round.
+            no_improve += 1
+            # Enough consecutive non-improving rounds -> stop growing early.
+            if no_improve >= EARLY_STOPPING_PATIENCE:
+                break
+        # Grow by another EARLY_STOPPING_STEP trees next iteration.
+        n += EARLY_STOPPING_STEP
+    return best_n, best_score, best_state
+
+
+def _cv_evaluate(features: np.ndarray, params: dict) -> dict | None:
+    """Repeated K-Fold CV for one hyperparameter combination. For each fold,
+    early-stop-fits on the training split and scores both that training
+    split and the held-out split, so the train-vs-held-out gap in mean
+    decision_function (and in predicted anomaly rate) is this model's
+    equivalent of a training-error/testing-error gap."""
+    # Build the repeated K-Fold splitter: CV_SPLITS folds, repeated
+    # CV_REPEATS times with different shuffles.
+    rkf = RepeatedKFold(n_splits=CV_SPLITS, n_repeats=CV_REPEATS, random_state=RANDOM_STATE)
+    # Accumulators for each fold's metrics, averaged together at the end.
+    train_scores, val_scores, train_rates, val_rates, n_estimators_used = [], [], [], [], []
+    # rkf.split() yields (train_indices, val_indices) for each of the
+    # CV_SPLITS * CV_REPEATS folds.
+    for train_idx, val_idx in rkf.split(features):
+        # Slice the feature matrix into this fold's train/validation rows.
+        train, val = features[train_idx], features[val_idx]
+        # Fit (with early stopping) on the training split, scoring against
+        # the validation split as we grow the forest.
+        best_n, _, model = _fit_with_early_stopping(train, val, params, RANDOM_STATE)
+        # Early stopping never found an improving model — skip this fold.
+        if model is None:
+            continue
+        # Mean decision_function on the training split (how well the model
+        # separates inliers/outliers on data it was fit on).
+        train_scores.append(float(np.mean(model.decision_function(train))))
+        # Same, but on the held-out validation split.
+        val_scores.append(float(np.mean(model.decision_function(val))))
+        # Fraction of training rows predicted as anomalies (predict()
+        # returns -1 for anomaly, 1 for normal).
+        train_rates.append(float(np.mean(model.predict(train) == -1)))
+        # Same, on the validation split.
+        val_rates.append(float(np.mean(model.predict(val) == -1)))
+        # Remember how many trees this fold's best model ended up with.
+        n_estimators_used.append(best_n)
+    # No fold produced a usable model — nothing to report.
+    if not val_scores:
+        return None
+    # Average every metric across folds and package them into one result
+    # dict for this hyperparameter combination.
+    return {
+        "params": params,
+        "train_score_mean": float(np.mean(train_scores)),
+        "val_score_mean": float(np.mean(val_scores)),
+        "val_score_std": float(np.std(val_scores)),
+        "score_gap": float(np.mean(train_scores) - np.mean(val_scores)),
+        "train_anomaly_rate_mean": float(np.mean(train_rates)),
+        "val_anomaly_rate_mean": float(np.mean(val_rates)),
+        "anomaly_rate_gap": float(np.mean(train_rates) - np.mean(val_rates)),
+        "n_estimators": int(round(float(np.mean(n_estimators_used)))),
+    }
+
+
+def grid_search(features: np.ndarray) -> list[dict]:
+    """Grid-searches PARAM_GRID via repeated K-Fold CV, ranked by held-out
+    decision_function score (higher = more confident inlier/outlier
+    separation on unseen data) with ties broken toward the smaller
+    train/held-out gap (less overfitting)."""
+    # Evaluate every hyperparameter combination in PARAM_GRID, dropping any
+    # that returned None (too little data for that combination's folds).
+    results = [r for r in (_cv_evaluate(features, p) for p in ParameterGrid(PARAM_GRID)) if r is not None]
+    # Sort best-first: primarily by validation score (descending, via
+    # reverse=True), with ties broken by the smallest train/val gap
+    # (negated so "smaller gap" sorts as "larger" under reverse=True).
+    results.sort(key=lambda r: (r["val_score_mean"], -abs(r["score_gap"])), reverse=True)
+    return results
+
+
+def _diagnose(result: dict) -> str:
+    # Negative held-out score -> the model can barely separate inliers from
+    # outliers even on data it wasn't fit on.
+    if result["val_score_mean"] < 0:
+        return "underfitting (poor inlier/outlier separation even on held-out data)"
+    # Large train/held-out gap in either score or anomaly rate -> the model
+    # looks good on training data but doesn't generalise.
+    if result["score_gap"] > 0.05 or abs(result["anomaly_rate_gap"]) > 0.03:
+        return "overfitting (training separation/anomaly-rate doesn't hold up on held-out data)"
+    # Otherwise, training and held-out metrics track each other closely.
+    return "good fit (training and held-out metrics are close)"
+
+
+def evaluate(features: np.ndarray) -> dict | None:
+    """Full grid-search + repeated-K-Fold-CV evaluation report. Returns None
+    (with a printed note) when there's too little data for CV to be
+    meaningful."""
+    # Too few events for cross-validation folds to be meaningful — skip
+    # grid search entirely and let the caller fall back to defaults.
+    if len(features) < MIN_CV_FOLD_SIZE:
+        print(f"  [skip CV] only {len(features)} eligible events (< {MIN_CV_FOLD_SIZE}); "
+              f"using default params with no grid search.")
+        return None
+    # Run the full grid search (every param combo x every CV fold).
+    results = grid_search(features)
+    if not results:
+        return None
+    # Best-ranked result is first (grid_search already sorted best-first).
+    best = results[0]
+    print(f"  Grid search: {len(results)} config(s) x {CV_REPEATS}x{CV_SPLITS}-fold repeated CV")
+    # Print every combination's metrics, one line each.
+    for r in results:
+        print(f"    {r['params']} -> val_score={r['val_score_mean']:.4f} (+/-{r['val_score_std']:.4f}) "
+              f"train_score={r['train_score_mean']:.4f} gap={r['score_gap']:.4f} "
+              f"anomaly_rate train={r['train_anomaly_rate_mean']:.3f} val={r['val_anomaly_rate_mean']:.3f} "
+              f"n_estimators(early-stopped)={r['n_estimators']}")
+    # Print the winning combination plus a plain-English fit diagnosis.
+    print(f"  Best: {best['params']} n_estimators={best['n_estimators']} -> {_diagnose(best)}")
+    return best
+
+
 def run(backend: Backend) -> int:
     """Returns the number of new anomaly_flags rows created."""
+    # Run _EVENTS_SQL against this backend, returning a DataFrame.
     events = backend.read_sql(_EVENTS_SQL)
+    # Not enough eligible events for the model to be meaningful — bail out.
     if len(events) < MIN_EVENTS:
         return 0
 
+    # Set of event_ids that already have an anomaly_flags row, so we never
+    # double-flag the same event on a re-run.
     already_flagged = {
         row[0] for row in backend.execute("SELECT event_id FROM anomaly_flags").fetchall()
     }
+    # Build the full feature matrix, one row per event.
     features = np.array([_event_features(row) for _, row in events.iterrows()])
 
-    model = IsolationForest(n_estimators=200, contamination=CONTAMINATION, random_state=RANDOM_STATE)
+    # Try to find the best hyperparameters via grid search + CV.
+    best = evaluate(features)
+    if best is not None:
+        # Use the winning combination's params/tree count.
+        params = best["params"]
+        n_estimators = best["n_estimators"]
+    else:
+        # Too little data for CV — fall back to fixed defaults.
+        params = {"max_samples": 1.0, "max_features": 1.0, "contamination": CONTAMINATION}
+        n_estimators = 200
+
+    # Fit the final model on ALL eligible events (not just a CV fold) using
+    # the chosen hyperparameters.
+    model = IsolationForest(n_estimators=n_estimators, random_state=RANDOM_STATE, **params)
     model.fit(features)
     raw_scores = model.decision_function(features)  # higher = more normal
     predictions = model.predict(features)  # -1 = anomaly, 1 = normal
 
     created = 0
+    # Walk every event alongside its model score/prediction in lockstep.
     for (_, event), raw_score, prediction in zip(events.iterrows(), raw_scores, predictions):
+        # Skip anything the model didn't flag as an anomaly, and anything
+        # already flagged in a previous run.
         if prediction != -1 or event["event_id"] in already_flagged:
             continue
         # decision_function is roughly bounded in [-0.5, 0.5]; fold into a
         # 0-1 "how anomalous" score for storage/display consistency with
         # the rule-based scorer both backends already run at ingest time.
+        # (0.5 - raw_score flips "higher = more normal" into "higher = more
+        # anomalous", then clamp to [0, 1].)
         anomaly_score = round(min(1.0, max(0.0, 0.5 - float(raw_score))), 4)
+        # Small JSON blob recording why this event was flagged, stored
+        # alongside the flag for later inspection/debugging.
         contributing_features = json.dumps({
             "reason": "isolation_forest",
             "duration_minutes": event["duration_minutes"],
@@ -80,21 +307,27 @@ def run(backend: Backend) -> int:
             "call_classification": event["call_classification"],
             "model_score": round(float(raw_score), 4),
         })
+        # Insert the new anomaly_flags row.
         backend.execute(
             """INSERT INTO anomaly_flags (flag_id, event_id, anomaly_score, contributing_features, created_at)
                VALUES (?, ?, ?, ?, ?)""",
             (new_id(), event["event_id"], anomaly_score, contributing_features, now_str()),
         )
         created += 1
+    # Persist all newly inserted flags.
     backend.commit()
     return created
 
 
 def main() -> None:
+    # Run anomaly detection against every currently-reachable backend,
+    # printing a one-line summary each.
     for backend in open_backend_connections():
+        print(f"[{backend.name}] Isolation Forest:")
         created = run(backend)
         print(f"[{backend.name}] Isolation Forest: {created} new anomaly flag(s) created.")
 
 
+# Only run main() when this file is executed directly, not when imported.
 if __name__ == "__main__":
     main()

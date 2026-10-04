@@ -22,6 +22,8 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<Consent> Consents => Set<Consent>();
     public DbSet<TutorialProgress> TutorialProgresses => Set<TutorialProgress>();
     public DbSet<TelcoPlan> TelcoPlans => Set<TelcoPlan>();
+    public DbSet<BillingSettings> BillingSettings => Set<BillingSettings>();
+    public DbSet<InternationalCallRate> InternationalCallRates => Set<InternationalCallRate>();
     public DbSet<SimCard> SimCards => Set<SimCard>();
     public DbSet<SimAllocation> SimAllocations => Set<SimAllocation>();
     public DbSet<UsageEvent> UsageEvents => Set<UsageEvent>();
@@ -194,6 +196,31 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.LifecycleState).HasColumnName("lifecycle_state").HasMaxLength(20);
             e.Property(x => x.RatePerMinuteKes).HasColumnName("rate_per_minute_kes");
             e.HasMany(x => x.Sims).WithOne(x => x.Plan).HasForeignKey(x => x.PlanId);
+        });
+
+        modelBuilder.Entity<BillingSettings>(e =>
+        {
+            e.ToTable("billing_settings");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id").HasMaxLength(20);
+            e.Property(x => x.PeakRateKes).HasColumnName("peak_rate_kes").IsRequired();
+            e.Property(x => x.OffPeakRateKes).HasColumnName("off_peak_rate_kes").IsRequired();
+            e.Property(x => x.PeakStartHour).HasColumnName("peak_start_hour").IsRequired();
+            e.Property(x => x.PeakEndHour).HasColumnName("peak_end_hour").IsRequired();
+            e.Property(x => x.DefaultInternationalRateKes).HasColumnName("default_international_rate_kes").IsRequired();
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<InternationalCallRate>(e =>
+        {
+            e.ToTable("international_call_rates");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id").HasMaxLength(36);
+            e.Property(x => x.CountryCode).HasColumnName("country_code").HasMaxLength(6).IsRequired();
+            e.HasIndex(x => x.CountryCode).IsUnique();
+            e.Property(x => x.CountryName).HasColumnName("country_name").HasMaxLength(80);
+            e.Property(x => x.RateKesPerMinute).HasColumnName("rate_kes_per_minute").IsRequired();
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 
         modelBuilder.Entity<SimCard>(e =>

@@ -5,6 +5,7 @@ import {
   analyticsApi,
   auditApi,
   budgetsApi,
+  callRatesApi,
   cdrApi,
   departmentsApi,
   employeesApi,
@@ -38,6 +39,8 @@ export const queryKeys = {
   roles: ["roles"] as const,
   audit: ["audit"] as const,
   tutorial: ["tutorial", "progress"] as const,
+  localCallRate: ["call-rates", "local"] as const,
+  internationalCallRates: ["call-rates", "international"] as const,
 };
 
 export function useEmployees() {
@@ -210,6 +213,46 @@ export function useUpdateRole() {
     }) => rolesApi.update(id, body),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.roles }),
+  });
+}
+
+export function useLocalCallRate() {
+  return useQuery({
+    queryKey: queryKeys.localCallRate,
+    queryFn: callRatesApi.getLocal,
+  });
+}
+
+export function useUpdateLocalCallRate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: callRatesApi.updateLocal,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.localCallRate }),
+  });
+}
+
+export function useInternationalCallRates() {
+  return useQuery({
+    queryKey: queryKeys.internationalCallRates,
+    queryFn: callRatesApi.listInternational,
+  });
+}
+
+export function useUpdateInternationalCallRate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      countryCode,
+      body,
+    }: {
+      countryCode: string;
+      body: Parameters<typeof callRatesApi.updateInternational>[1];
+    }) => callRatesApi.updateInternational(countryCode, body),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.internationalCallRates,
+      }),
   });
 }
 

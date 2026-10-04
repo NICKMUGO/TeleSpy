@@ -17,7 +17,16 @@ export async function login(email: string, password: string) {
   });
 }
 
-export async function verifyOtp(mfaToken: string, otp: string) {
+// forceNewSession is only ever true on a resubmit: the first attempt came
+// back 409 "active_session_exists" (this account is signed in elsewhere),
+// the person was shown that and chose "sign in here anyway" — see
+// AuthController.VerifyOtp, which otherwise refuses to mint a session over
+// an existing one rather than silently ending it.
+export async function verifyOtp(
+  mfaToken: string,
+  otp: string,
+  forceNewSession = false,
+) {
   return apiRequest<
     ApiEnvelope<{
       access_token: string;
@@ -27,7 +36,7 @@ export async function verifyOtp(mfaToken: string, otp: string) {
     }>
   >("/auth/verify-otp", {
     method: "POST",
-    body: { mfa_token: mfaToken, otp },
+    body: { mfa_token: mfaToken, otp, force_new_session: forceNewSession },
     unauthenticated: true,
   });
 }
@@ -45,4 +54,15 @@ export async function resendOtp(mfaToken: string) {
 
 export async function logout() {
   return apiRequest<ApiEnvelope<null>>("/auth/logout", { method: "POST" });
+}
+
+// Always 200 with the same message whether or not the address exists —
+// the backend deliberately doesn't confirm account existence here, so the
+// UI must not branch on the response either.
+export async function forgotPassword(email: string) {
+  return apiRequest<ApiEnvelope<null>>("/auth/forgot-password", {
+    method: "POST",
+    body: { email },
+    unauthenticated: true,
+  });
 }

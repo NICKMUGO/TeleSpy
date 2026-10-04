@@ -20,18 +20,28 @@ Classification mirrors Backend/services/call_classification.py exactly
 (bare 3-digit extension) > Unknown. Only External/International calls are
 chargeable; Internal and Unknown are always 0, even though this dataset
 carries no telco-provided `charge` column and no per-SIM plan rate to
-apply — cost here is purely classification + duration * the flat/zone
-rate table below.
+apply — cost here is purely classification + duration * rate, where the
+rate itself comes from the database (`billing_settings` for local
+peak/off-peak, `international_call_rates` per country code — see the
+"Call rating" section below), not a hardcoded constant, so an Admin's
+PATCH /call-rates/local or /call-rates/international/<country_code> edit
+takes effect the next time this script runs.
 
 Run standalone:
     python billing.py
 """
+# re: used throughout for the phone-number classification regexes.
 import re
 
+# pandas: used to load/transform the CDR dataset as a DataFrame.
 import pandas as pd
 
+# Backend: connection wrapper type; new_id/now_str: shared id/timestamp
+# helpers; open_backend_connections: yields the live BackendDotNet
+# connection; REPO_ROOT: absolute path of the repository root.
 from common import Backend, new_id, now_str, open_backend_connections, REPO_ROOT
 
+# Full path to the parsed CDR CSV this whole module reads from.
 CDR_DATASET_PATH = REPO_ROOT / "ML" / "data" / "processed" / "cdr_preprocessed.csv"
 
 # --- Call classification -------------------------------------------------
@@ -57,450 +67,379 @@ CDR_DATASET_PATH = REPO_ROOT / "ML" / "data" / "processed" / "cdr_preprocessed.c
 # before routing, and "#" is the standard way a caller signals "done
 # dialling" immediately instead — a well-documented CUCM behavior, stripped
 # here before classification.
+# Regex: a leading "0" followed by exactly 9 more digits (10 digits total)
+# — plain Kenyan local number format.
 KENYAN_LOCAL_NUMBER_REGEX = r"^0\d{9}$"
+# Regex: exactly 3 digits, nothing else — a bare PBX extension.
 INTERNAL_EXTENSION_REGEX = r"^\d{3}$"
 
+# The four possible classification outcomes, as plain strings.
 CALL_CLASS_INTERNAL = "Internal"
 CALL_CLASS_EXTERNAL = "External"
 CALL_CLASS_INTERNATIONAL = "International"
 CALL_CLASS_UNKNOWN = "Unknown"
 
+# Pre-compiled regex objects (compiling once at import time is cheaper than
+# re-compiling on every call to classify_number()).
 _KENYAN_LOCAL_RE = re.compile(KENYAN_LOCAL_NUMBER_REGEX)
 _INTERNAL_RE = re.compile(INTERNAL_EXTENSION_REGEX)
 _IDD_MARKERS = ("000", "00", "+")  # longest first, so "000" isn't left as a stray "0" after "00" matches
 
 
 def _strip_dial_terminator(number: str) -> str:
+    # If the number ends in "#", drop that last character; otherwise
+    # return it unchanged.
     return number[:-1] if number.endswith("#") else number
 
 
 def _strip_idd_marker(digits: str) -> str:
     """Remove a leading IDD marker (+/00/000) if present; otherwise return
     digits unchanged (the "no marker, direct country code" case)."""
+    # Check each marker, longest first; if `digits` starts with it, return
+    # everything after that marker.
     for marker in _IDD_MARKERS:
         if digits.startswith(marker):
             return digits[len(marker):]
+    # None of the markers matched — return the input unchanged.
     return digits
 
 
-def _country_code_zone(digits: str) -> str | None:
-    """Longest-prefix match against INTERNATIONAL_COUNTRY_CODE_ZONES (below).
-    Forward reference: that dict is defined further down this module, but
-    Python resolves globals at call time, not definition time, so this is
-    fine — it's never invoked before the module finishes loading."""
-    for length in range(INTERNATIONAL_COUNTRY_CODE_MAX_LEN, 0, -1):
-        zone = INTERNATIONAL_COUNTRY_CODE_ZONES.get(digits[:length])
-        if zone is not None:
-            return zone
-    return None
+# Recognised E.164 country/territory (dial) codes — the same list seeded
+# into international_call_rates (see international_call_rates.json next to
+# this file), kept here as a plain static set too since classify_number()/
+# classify_call() must stay pure, backend-independent functions (called
+# per CDR row, with no DB access) — only used to decide whether a number
+# past the IDD marker is a real destination (-> International) or not
+# (-> Unknown). Actual per-country pricing comes from the DB table (see
+# _lookup_international_rate below), not from this set.
+RECOGNIZED_COUNTRY_CODES = frozenset({
+    "1", "7", "20", "27", "30", "31", "32", "33", "34", "36", "39", "40", "41", "43", "44",
+    "45", "46", "47", "48", "49", "51", "52", "54", "55", "56", "57", "58", "60", "61", "62",
+    "63", "64", "65", "66", "81", "82", "84", "86", "90", "91", "92", "93", "94", "95", "98",
+    "211", "212", "213", "216", "218", "220", "221", "222", "223", "224", "225", "226", "227",
+    "228", "229", "230", "231", "232", "233", "234", "235", "236", "237", "238", "239", "240",
+    "241", "242", "243", "244", "245", "246", "247", "248", "249", "250", "251", "252", "253",
+    "255", "256", "257", "258", "260", "261", "262", "263", "264", "265", "266", "267", "268",
+    "269", "290", "291", "297", "298", "299", "350", "351", "352", "353", "354", "355", "356",
+    "358", "359", "370", "371", "372", "373", "374", "375", "376", "377", "378", "380", "381",
+    "382", "386", "387", "389", "420", "421", "423", "500", "501", "502", "503", "504", "505",
+    "507", "508", "509", "590", "591", "592", "593", "594", "595", "596", "597", "598", "599",
+    "670", "672", "673", "674", "675", "676", "677", "678", "679", "680", "681", "682", "683",
+    "685", "686", "687", "688", "689", "690", "691", "692", "850", "852", "853", "855", "856",
+    "870", "871", "872", "873", "874", "880", "881", "882", "886", "960", "961", "962", "963",
+    "964", "965", "966", "967", "968", "970", "971", "972", "973", "974", "975", "976", "977",
+    "992", "993", "994", "995", "996", "998", "1242", "1246", "1264", "1268", "1284", "1340",
+    "1345", "1441", "1473", "1649", "1658", "1664", "1670", "1671", "1684", "1758", "1767",
+    "1784", "1787", "1808", "1809", "1829", "1849", "1868", "1869", "1876", "1907", "1939",
+    "34928",
+})
+# Longest recognised country code is 5 digits (e.g. "34928") — caps how far
+# the prefix-matching loop below needs to search.
+RECOGNIZED_COUNTRY_CODE_MAX_LEN = 5
+
+
+def _is_recognized_country_code(digits: str) -> bool:
+    # Try progressively shorter prefixes of `digits` (5 chars, then 4, ...
+    # down to 1), so the longest matching country code wins.
+    for length in range(min(RECOGNIZED_COUNTRY_CODE_MAX_LEN, len(digits)), 0, -1):
+        # digits[:length] is that prefix; check it against the known set.
+        if digits[:length] in RECOGNIZED_COUNTRY_CODES:
+            return True
+    # No prefix length matched a known country code.
+    return False
 
 
 def classify_number(number) -> str:
+    # Empty/None input, or pandas' float NaN (how a missing CSV cell shows
+    # up), can't be classified.
     if not number or (isinstance(number, float) and pd.isna(number)):
         return CALL_CLASS_UNKNOWN
+    # Coerce to string, strip whitespace/spaces, then drop a trailing "#".
     number = _strip_dial_terminator(str(number).strip().replace(" ", ""))
+    # Nothing left after cleaning -> unclassifiable.
     if not number:
         return CALL_CLASS_UNKNOWN
 
+    # Exactly 3 digits -> a bare PBX extension, dialled internally.
     if _INTERNAL_RE.match(number):
         return CALL_CLASS_INTERNAL
 
+    # Anything else must start with the "9" trunk-access digit and have at
+    # least one digit after it, or it can't be classified further.
     if not number.startswith("9") or len(number) < 2:
         return CALL_CLASS_UNKNOWN
     rest = number[1:]  # drop the trunk-access digit
 
+    # After the "9", a plain 10-digit Kenyan local number -> External.
     if _KENYAN_LOCAL_RE.match(rest):
         return CALL_CLASS_EXTERNAL
 
+    # Otherwise, strip off an IDD marker (+/00/000) if present, leaving
+    # just the (supposed) country code + subscriber number.
     digits = _strip_idd_marker(rest)
     if digits.startswith("254"):
         # Kenya's own country code, dialled in full international form —
         # normalise to local form and bill as a local Kenyan call.
+        # Rebuild it as a local "0..." number by dropping "254" and
+        # prefixing "0" instead.
         local_form = "0" + digits[3:]
+        # Only treat it as External if that reconstruction is actually a
+        # valid 10-digit local number; otherwise it's malformed -> Unknown.
         return CALL_CLASS_EXTERNAL if _KENYAN_LOCAL_RE.match(local_form) else CALL_CLASS_UNKNOWN
-    return CALL_CLASS_INTERNATIONAL if _country_code_zone(digits) is not None else CALL_CLASS_UNKNOWN
+    # Not Kenya's code — International if the remaining digits start with
+    # a recognised country code, Unknown otherwise.
+    return CALL_CLASS_INTERNATIONAL if _is_recognized_country_code(digits) else CALL_CLASS_UNKNOWN
 
 
 def classify_call(orig, dest) -> str:
-    """International wins over External wins over Internal — identical
-    precedence to Backend's classify_call()."""
-    orig_class = classify_number(orig)
-    dest_class = classify_number(dest)
-    if CALL_CLASS_INTERNATIONAL in (orig_class, dest_class):
-        return CALL_CLASS_INTERNATIONAL
-    if CALL_CLASS_EXTERNAL in (orig_class, dest_class):
-        return CALL_CLASS_EXTERNAL
-    if orig_class == CALL_CLASS_INTERNAL and dest_class == CALL_CLASS_INTERNAL:
-        return CALL_CLASS_INTERNAL
-    return CALL_CLASS_UNKNOWN
+    """Identical rule to Backend's classify_call(): `orig` is always the
+    internal PBX extension that placed the call — a call is only ever this
+    company's business if one of its own 3-digit extensions dialled out. If
+    `orig` isn't a bare 3-digit extension, this record isn't a call our own
+    staff placed (an inbound call, a malformed CDR row, or someone else's
+    traffic on the same trunk) — it's Unknown, full stop, without even
+    looking at `dest` (never mistakenly billed as External/International
+    just because the destination leg happens to look like an outside
+    number). Once `orig` is confirmed to be one of ours, the call takes on
+    whatever `dest` classifies as (Internal, External, International, or
+    Unknown)."""
+    # orig must itself classify as Internal (a bare 3-digit extension) or
+    # the whole call is Unknown regardless of dest.
+    if classify_number(orig) != CALL_CLASS_INTERNAL:
+        return CALL_CLASS_UNKNOWN
+    # orig checks out — the call's classification is whatever dest
+    # classifies as.
+    return classify_number(dest)
 
 
-# --- Call rating (moved here from Backend/constants.py + services/billing.py
-# and BackendDotNet/Constants.cs + Services/Billing.cs — this is now the
-# only place these rates live) --------------------------------------------
+# --- Call rating -----------------------------------------------------------
+# Rates used to live as hardcoded constants right here (moved from
+# Backend/constants.py + services/billing.py and BackendDotNet/Constants.cs
+# + Services/Billing.cs). They now live in the database instead — the
+# `billing_settings` (local/Kenyan peak/off-peak, Safaricom's published
+# tariff) and `international_call_rates` (per-country-code KES/minute,
+# sourced from ML/training/International_Calling_Rates.pdf) tables,
+# editable by an Admin via PATCH /call-rates/local and
+# PATCH /call-rates/international/<country_code>. This module reads them
+# fresh from the `backend` it's given (see
+# _load_billing_settings/_load_international_rates below) rather than
+# importing a Python module, since it runs against BackendDotNet's
+# database (Postgres, or SQLite for local dev) via the same raw-SQL
+# Backend abstraction common.py uses everywhere else.
+#
+# The constants below are the bootstrap-time defaults only (mirrors
+# BackendDotNet's CallRateBootstrap) — used here purely as a last-resort
+# fallback if the backend's tables are somehow still empty (e.g. queried
+# before its own bootstrap has ever run).
+# The only two classes that are ever charged — Internal and Unknown always
+# cost 0.
 CHARGEABLE_CALL_CLASSES = frozenset({CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL})
 
-# Internal calls always bill at 0. This is the flat fallback rate for
-# chargeable (External/International) calls — no per-SIM plan override and
-# no telco-provided `charge` column exist in this dataset, unlike the live
-# CdrIngest path that used to blend in both.
-EXTERNAL_CALL_RATE_KES_PER_MINUTE = 5.0
-
-# --- International call rating ----------------------------------------
-# Destinations are grouped into a handful of zones, mirroring how Kenyan
-# carriers (e.g. Safaricom) band their international tariff rather than
-# pricing every country individually. _international_zone() takes the
-# country (dial) code and matches it longest-first against
-# INTERNATIONAL_COUNTRY_CODE_ZONES; an unlisted code falls back to
-# EXTERNAL_CALL_RATE_KES_PER_MINUTE. Kenya (254) is intentionally absent: a
-# +254 call is normalised to a local Kenyan call upstream and never
-# reaches this table.
-INTL_ZONE_EAST_AFRICA = "east_africa"        # EAC / neighbouring states
-INTL_ZONE_SPECIAL = "special"                # carrier "special rate" set
-INTL_ZONE_AFRICA = "africa"                  # rest of the African continent
-INTL_ZONE_REST_OF_WORLD = "rest_of_world"
-INTL_ZONE_PREMIUM = "premium"                # high-tariff / small-island dests
-INTL_ZONE_SATELLITE = "satellite"            # premium space / maritime ranges
-
-INTERNATIONAL_ZONE_RATE_KES_PER_MINUTE = {
-    INTL_ZONE_EAST_AFRICA: 20.0,
-    INTL_ZONE_SPECIAL: 25.0,
-    INTL_ZONE_REST_OF_WORLD: 40.0,
-    INTL_ZONE_AFRICA: 45.0,
-    INTL_ZONE_PREMIUM: 100.0,
-    INTL_ZONE_SATELLITE: 300.0,
-}
-
-# Country (dial) code -> zone. Keys are the digits immediately after the
-# international prefix, with no separator; billing matches the longest key
-# that prefixes the dialled number (4 digits, then 3, then 2, then 1).
-# Every assigned ITU-T E.164 country/territory code is listed, so an
-# ordinary destination never silently falls back to the Kenyan external
-# rate; only unassigned or newly-issued codes still do.
-#
-# The 4-digit keys are NANP members: "+1" on its own is the USA/Canada
-# special rate, but the Caribbean and Pacific NANP territories are billed
-# as their own (far more expensive) destinations, so they are listed
-# explicitly and win on longest-match.
-INTERNATIONAL_COUNTRY_CODE_ZONES = {
-    # --- East Africa / EAC neighbours ----------------------------------
-    "256": INTL_ZONE_EAST_AFRICA,   # Uganda
-    "255": INTL_ZONE_EAST_AFRICA,   # Tanzania
-    "250": INTL_ZONE_EAST_AFRICA,   # Rwanda
-    "257": INTL_ZONE_EAST_AFRICA,   # Burundi
-    "211": INTL_ZONE_EAST_AFRICA,   # South Sudan
-    "251": INTL_ZONE_EAST_AFRICA,   # Ethiopia
-    "252": INTL_ZONE_EAST_AFRICA,   # Somalia
-    "253": INTL_ZONE_EAST_AFRICA,   # Djibouti
-    "249": INTL_ZONE_EAST_AFRICA,   # Sudan
-
-    # --- Carrier "special rate" destinations ---------------------------
-    "1": INTL_ZONE_SPECIAL,         # USA / Canada (mainland NANP)
-    "44": INTL_ZONE_SPECIAL,        # United Kingdom
-    "91": INTL_ZONE_SPECIAL,        # India
-    "86": INTL_ZONE_SPECIAL,        # China
-
-    # --- Rest of Africa -------------------------------------------------
-    "20": INTL_ZONE_AFRICA,         # Egypt
-    "27": INTL_ZONE_AFRICA,         # South Africa
-    "212": INTL_ZONE_AFRICA,        # Morocco / Western Sahara
-    "213": INTL_ZONE_AFRICA,        # Algeria
-    "216": INTL_ZONE_AFRICA,        # Tunisia
-    "218": INTL_ZONE_AFRICA,        # Libya
-    "220": INTL_ZONE_AFRICA,        # Gambia
-    "221": INTL_ZONE_AFRICA,        # Senegal
-    "222": INTL_ZONE_AFRICA,        # Mauritania
-    "223": INTL_ZONE_AFRICA,        # Mali
-    "224": INTL_ZONE_AFRICA,        # Guinea
-    "225": INTL_ZONE_AFRICA,        # Cote d'Ivoire
-    "226": INTL_ZONE_AFRICA,        # Burkina Faso
-    "227": INTL_ZONE_AFRICA,        # Niger
-    "228": INTL_ZONE_AFRICA,        # Togo
-    "229": INTL_ZONE_AFRICA,        # Benin
-    "230": INTL_ZONE_AFRICA,        # Mauritius
-    "231": INTL_ZONE_AFRICA,        # Liberia
-    "232": INTL_ZONE_AFRICA,        # Sierra Leone
-    "233": INTL_ZONE_AFRICA,        # Ghana
-    "234": INTL_ZONE_AFRICA,        # Nigeria
-    "235": INTL_ZONE_AFRICA,        # Chad
-    "236": INTL_ZONE_AFRICA,        # Central African Republic
-    "237": INTL_ZONE_AFRICA,        # Cameroon
-    "238": INTL_ZONE_AFRICA,        # Cape Verde
-    "239": INTL_ZONE_AFRICA,        # Sao Tome and Principe
-    "240": INTL_ZONE_AFRICA,        # Equatorial Guinea
-    "241": INTL_ZONE_AFRICA,        # Gabon
-    "242": INTL_ZONE_AFRICA,        # Congo (Brazzaville)
-    "243": INTL_ZONE_AFRICA,        # DR Congo (Kinshasa)
-    "244": INTL_ZONE_AFRICA,        # Angola
-    "245": INTL_ZONE_AFRICA,        # Guinea-Bissau
-    "248": INTL_ZONE_AFRICA,        # Seychelles
-    "258": INTL_ZONE_AFRICA,        # Mozambique
-    "260": INTL_ZONE_AFRICA,        # Zambia
-    "261": INTL_ZONE_AFRICA,        # Madagascar
-    "262": INTL_ZONE_AFRICA,        # Reunion / Mayotte
-    "263": INTL_ZONE_AFRICA,        # Zimbabwe
-    "264": INTL_ZONE_AFRICA,        # Namibia
-    "265": INTL_ZONE_AFRICA,        # Malawi
-    "266": INTL_ZONE_AFRICA,        # Lesotho
-    "267": INTL_ZONE_AFRICA,        # Botswana
-    "268": INTL_ZONE_AFRICA,        # Eswatini
-    "269": INTL_ZONE_AFRICA,        # Comoros
-    "291": INTL_ZONE_AFRICA,        # Eritrea
-    # Remote African / Indian Ocean territories, billed premium
-    "246": INTL_ZONE_PREMIUM,       # Diego Garcia (BIOT)
-    "247": INTL_ZONE_PREMIUM,       # Ascension Island
-    "290": INTL_ZONE_PREMIUM,       # Saint Helena / Tristan da Cunha
-
-    # --- Europe ---------------------------------------------------------
-    "30": INTL_ZONE_REST_OF_WORLD,  # Greece
-    "31": INTL_ZONE_REST_OF_WORLD,  # Netherlands
-    "32": INTL_ZONE_REST_OF_WORLD,  # Belgium
-    "33": INTL_ZONE_REST_OF_WORLD,  # France
-    "34": INTL_ZONE_REST_OF_WORLD,  # Spain
-    "36": INTL_ZONE_REST_OF_WORLD,  # Hungary
-    "39": INTL_ZONE_REST_OF_WORLD,  # Italy
-    "40": INTL_ZONE_REST_OF_WORLD,  # Romania
-    "41": INTL_ZONE_REST_OF_WORLD,  # Switzerland
-    "43": INTL_ZONE_REST_OF_WORLD,  # Austria
-    "45": INTL_ZONE_REST_OF_WORLD,  # Denmark
-    "46": INTL_ZONE_REST_OF_WORLD,  # Sweden
-    "47": INTL_ZONE_REST_OF_WORLD,  # Norway / Svalbard
-    "48": INTL_ZONE_REST_OF_WORLD,  # Poland
-    "49": INTL_ZONE_REST_OF_WORLD,  # Germany
-    "350": INTL_ZONE_REST_OF_WORLD,  # Gibraltar
-    "351": INTL_ZONE_REST_OF_WORLD,  # Portugal
-    "352": INTL_ZONE_REST_OF_WORLD,  # Luxembourg
-    "353": INTL_ZONE_REST_OF_WORLD,  # Ireland
-    "354": INTL_ZONE_REST_OF_WORLD,  # Iceland
-    "355": INTL_ZONE_REST_OF_WORLD,  # Albania
-    "356": INTL_ZONE_REST_OF_WORLD,  # Malta
-    "357": INTL_ZONE_REST_OF_WORLD,  # Cyprus
-    "358": INTL_ZONE_REST_OF_WORLD,  # Finland / Aland Islands
-    "359": INTL_ZONE_REST_OF_WORLD,  # Bulgaria
-    "370": INTL_ZONE_REST_OF_WORLD,  # Lithuania
-    "371": INTL_ZONE_REST_OF_WORLD,  # Latvia
-    "372": INTL_ZONE_REST_OF_WORLD,  # Estonia
-    "373": INTL_ZONE_REST_OF_WORLD,  # Moldova
-    "374": INTL_ZONE_REST_OF_WORLD,  # Armenia
-    "375": INTL_ZONE_REST_OF_WORLD,  # Belarus
-    "376": INTL_ZONE_REST_OF_WORLD,  # Andorra
-    "377": INTL_ZONE_REST_OF_WORLD,  # Monaco
-    "378": INTL_ZONE_REST_OF_WORLD,  # San Marino
-    "379": INTL_ZONE_REST_OF_WORLD,  # Vatican City
-    "380": INTL_ZONE_REST_OF_WORLD,  # Ukraine
-    "381": INTL_ZONE_REST_OF_WORLD,  # Serbia
-    "382": INTL_ZONE_REST_OF_WORLD,  # Montenegro
-    "383": INTL_ZONE_REST_OF_WORLD,  # Kosovo
-    "385": INTL_ZONE_REST_OF_WORLD,  # Croatia
-    "386": INTL_ZONE_REST_OF_WORLD,  # Slovenia
-    "387": INTL_ZONE_REST_OF_WORLD,  # Bosnia and Herzegovina
-    "389": INTL_ZONE_REST_OF_WORLD,  # North Macedonia
-    "420": INTL_ZONE_REST_OF_WORLD,  # Czechia
-    "421": INTL_ZONE_REST_OF_WORLD,  # Slovakia
-    "423": INTL_ZONE_REST_OF_WORLD,  # Liechtenstein
-    "298": INTL_ZONE_REST_OF_WORLD,  # Faroe Islands
-    "299": INTL_ZONE_REST_OF_WORLD,  # Greenland
-    "500": INTL_ZONE_PREMIUM,        # Falkland Islands
-    "7": INTL_ZONE_REST_OF_WORLD,   # Russia / Kazakhstan
-    "90": INTL_ZONE_REST_OF_WORLD,  # Turkey
-
-    # --- Americas -------------------------------------------------------
-    "51": INTL_ZONE_REST_OF_WORLD,  # Peru
-    "52": INTL_ZONE_REST_OF_WORLD,  # Mexico
-    "53": INTL_ZONE_PREMIUM,        # Cuba
-    "54": INTL_ZONE_REST_OF_WORLD,  # Argentina
-    "55": INTL_ZONE_REST_OF_WORLD,  # Brazil
-    "56": INTL_ZONE_REST_OF_WORLD,  # Chile
-    "57": INTL_ZONE_REST_OF_WORLD,  # Colombia
-    "58": INTL_ZONE_REST_OF_WORLD,  # Venezuela
-    "501": INTL_ZONE_REST_OF_WORLD,  # Belize
-    "502": INTL_ZONE_REST_OF_WORLD,  # Guatemala
-    "503": INTL_ZONE_REST_OF_WORLD,  # El Salvador
-    "504": INTL_ZONE_REST_OF_WORLD,  # Honduras
-    "505": INTL_ZONE_REST_OF_WORLD,  # Nicaragua
-    "506": INTL_ZONE_REST_OF_WORLD,  # Costa Rica
-    "507": INTL_ZONE_REST_OF_WORLD,  # Panama
-    "508": INTL_ZONE_PREMIUM,        # Saint Pierre and Miquelon
-    "509": INTL_ZONE_REST_OF_WORLD,  # Haiti
-    "590": INTL_ZONE_PREMIUM,        # Guadeloupe / St Barthelemy / St Martin
-    "591": INTL_ZONE_REST_OF_WORLD,  # Bolivia
-    "592": INTL_ZONE_REST_OF_WORLD,  # Guyana
-    "593": INTL_ZONE_REST_OF_WORLD,  # Ecuador
-    "594": INTL_ZONE_PREMIUM,        # French Guiana
-    "595": INTL_ZONE_REST_OF_WORLD,  # Paraguay
-    "596": INTL_ZONE_PREMIUM,        # Martinique
-    "597": INTL_ZONE_REST_OF_WORLD,  # Suriname
-    "598": INTL_ZONE_REST_OF_WORLD,  # Uruguay
-    "599": INTL_ZONE_PREMIUM,        # Curacao / Caribbean Netherlands
-    "297": INTL_ZONE_PREMIUM,        # Aruba
-    # NANP members outside the USA/Canada special rate
-    "1242": INTL_ZONE_PREMIUM,      # Bahamas
-    "1246": INTL_ZONE_PREMIUM,      # Barbados
-    "1264": INTL_ZONE_PREMIUM,      # Anguilla
-    "1268": INTL_ZONE_PREMIUM,      # Antigua and Barbuda
-    "1284": INTL_ZONE_PREMIUM,      # British Virgin Islands
-    "1340": INTL_ZONE_PREMIUM,      # US Virgin Islands
-    "1345": INTL_ZONE_PREMIUM,      # Cayman Islands
-    "1441": INTL_ZONE_PREMIUM,      # Bermuda
-    "1473": INTL_ZONE_PREMIUM,      # Grenada
-    "1649": INTL_ZONE_PREMIUM,      # Turks and Caicos Islands
-    "1658": INTL_ZONE_PREMIUM,      # Jamaica (overlay)
-    "1664": INTL_ZONE_PREMIUM,      # Montserrat
-    "1670": INTL_ZONE_PREMIUM,      # Northern Mariana Islands
-    "1671": INTL_ZONE_PREMIUM,      # Guam
-    "1684": INTL_ZONE_PREMIUM,      # American Samoa
-    "1721": INTL_ZONE_PREMIUM,      # Sint Maarten
-    "1758": INTL_ZONE_PREMIUM,      # Saint Lucia
-    "1767": INTL_ZONE_PREMIUM,      # Dominica
-    "1784": INTL_ZONE_PREMIUM,      # Saint Vincent and the Grenadines
-    "1809": INTL_ZONE_PREMIUM,      # Dominican Republic
-    "1829": INTL_ZONE_PREMIUM,      # Dominican Republic (overlay)
-    "1849": INTL_ZONE_PREMIUM,      # Dominican Republic (overlay)
-    "1868": INTL_ZONE_PREMIUM,      # Trinidad and Tobago
-    "1869": INTL_ZONE_PREMIUM,      # Saint Kitts and Nevis
-    "1876": INTL_ZONE_PREMIUM,      # Jamaica
-    "1787": INTL_ZONE_SPECIAL,      # Puerto Rico (billed as USA)
-    "1939": INTL_ZONE_SPECIAL,      # Puerto Rico overlay (billed as USA)
-
-    # --- Asia / Middle East ----------------------------------------------
-    "60": INTL_ZONE_REST_OF_WORLD,  # Malaysia
-    "62": INTL_ZONE_REST_OF_WORLD,  # Indonesia
-    "63": INTL_ZONE_REST_OF_WORLD,  # Philippines
-    "65": INTL_ZONE_REST_OF_WORLD,  # Singapore
-    "66": INTL_ZONE_REST_OF_WORLD,  # Thailand
-    "81": INTL_ZONE_REST_OF_WORLD,  # Japan
-    "82": INTL_ZONE_REST_OF_WORLD,  # South Korea
-    "84": INTL_ZONE_REST_OF_WORLD,  # Vietnam
-    "92": INTL_ZONE_REST_OF_WORLD,  # Pakistan
-    "93": INTL_ZONE_REST_OF_WORLD,  # Afghanistan
-    "94": INTL_ZONE_REST_OF_WORLD,  # Sri Lanka
-    "95": INTL_ZONE_REST_OF_WORLD,  # Myanmar
-    "98": INTL_ZONE_REST_OF_WORLD,  # Iran
-    "670": INTL_ZONE_REST_OF_WORLD,  # Timor-Leste
-    "673": INTL_ZONE_REST_OF_WORLD,  # Brunei
-    "850": INTL_ZONE_PREMIUM,        # North Korea
-    "852": INTL_ZONE_REST_OF_WORLD,  # Hong Kong
-    "853": INTL_ZONE_REST_OF_WORLD,  # Macau
-    "855": INTL_ZONE_REST_OF_WORLD,  # Cambodia
-    "856": INTL_ZONE_REST_OF_WORLD,  # Laos
-    "880": INTL_ZONE_REST_OF_WORLD,  # Bangladesh
-    "886": INTL_ZONE_REST_OF_WORLD,  # Taiwan
-    "960": INTL_ZONE_REST_OF_WORLD,  # Maldives
-    "961": INTL_ZONE_REST_OF_WORLD,  # Lebanon
-    "962": INTL_ZONE_REST_OF_WORLD,  # Jordan
-    "963": INTL_ZONE_REST_OF_WORLD,  # Syria
-    "964": INTL_ZONE_REST_OF_WORLD,  # Iraq
-    "965": INTL_ZONE_REST_OF_WORLD,  # Kuwait
-    "966": INTL_ZONE_REST_OF_WORLD,  # Saudi Arabia
-    "967": INTL_ZONE_REST_OF_WORLD,  # Yemen
-    "968": INTL_ZONE_REST_OF_WORLD,  # Oman
-    "970": INTL_ZONE_REST_OF_WORLD,  # Palestine
-    "971": INTL_ZONE_REST_OF_WORLD,  # United Arab Emirates
-    "972": INTL_ZONE_REST_OF_WORLD,  # Israel
-    "973": INTL_ZONE_REST_OF_WORLD,  # Bahrain
-    "974": INTL_ZONE_REST_OF_WORLD,  # Qatar
-    "975": INTL_ZONE_REST_OF_WORLD,  # Bhutan
-    "976": INTL_ZONE_REST_OF_WORLD,  # Mongolia
-    "977": INTL_ZONE_REST_OF_WORLD,  # Nepal
-    "992": INTL_ZONE_REST_OF_WORLD,  # Tajikistan
-    "993": INTL_ZONE_REST_OF_WORLD,  # Turkmenistan
-    "994": INTL_ZONE_REST_OF_WORLD,  # Azerbaijan
-    "995": INTL_ZONE_REST_OF_WORLD,  # Georgia
-    "996": INTL_ZONE_REST_OF_WORLD,  # Kyrgyzstan
-    "998": INTL_ZONE_REST_OF_WORLD,  # Uzbekistan
-
-    # --- Oceania ----------------------------------------------------------
-    "61": INTL_ZONE_REST_OF_WORLD,  # Australia / Cocos / Christmas Island
-    "64": INTL_ZONE_REST_OF_WORLD,  # New Zealand
-    "675": INTL_ZONE_REST_OF_WORLD,  # Papua New Guinea
-    "679": INTL_ZONE_REST_OF_WORLD,  # Fiji
-    "672": INTL_ZONE_PREMIUM,        # Norfolk Island / Australian Antarctic
-    "674": INTL_ZONE_PREMIUM,        # Nauru
-    "676": INTL_ZONE_PREMIUM,        # Tonga
-    "677": INTL_ZONE_PREMIUM,        # Solomon Islands
-    "678": INTL_ZONE_PREMIUM,        # Vanuatu
-    "680": INTL_ZONE_PREMIUM,        # Palau
-    "681": INTL_ZONE_PREMIUM,        # Wallis and Futuna
-    "682": INTL_ZONE_PREMIUM,        # Cook Islands
-    "683": INTL_ZONE_PREMIUM,        # Niue
-    "685": INTL_ZONE_PREMIUM,        # Samoa
-    "686": INTL_ZONE_PREMIUM,        # Kiribati
-    "687": INTL_ZONE_PREMIUM,        # New Caledonia
-    "688": INTL_ZONE_PREMIUM,        # Tuvalu
-    "689": INTL_ZONE_PREMIUM,        # French Polynesia
-    "690": INTL_ZONE_PREMIUM,        # Tokelau
-    "691": INTL_ZONE_PREMIUM,        # Micronesia
-    "692": INTL_ZONE_PREMIUM,        # Marshall Islands
-
-    # --- Premium satellite / non-geographic ranges -------------------------
-    # International freephone ("800") and shared-cost ("808") are
-    # deliberately absent: they are not chargeable destinations.
-    "870": INTL_ZONE_SATELLITE,     # Inmarsat
-    "875": INTL_ZONE_SATELLITE,     # Maritime mobile service
-    "876": INTL_ZONE_SATELLITE,     # Maritime mobile service
-    "877": INTL_ZONE_SATELLITE,     # Maritime mobile service
-    "878": INTL_ZONE_SATELLITE,     # Universal Personal Telecommunications
-    "879": INTL_ZONE_SATELLITE,     # Reserved national mobile/maritime
-    "881": INTL_ZONE_SATELLITE,     # Global Mobile Satellite System
-    "882": INTL_ZONE_SATELLITE,     # International Networks
-    "883": INTL_ZONE_SATELLITE,     # International Networks
-    "888": INTL_ZONE_SATELLITE,     # Telecoms for disaster relief
-    "979": INTL_ZONE_SATELLITE,     # International premium rate service
-}
+# Safaricom's published local (on-net + off-net) tariff: KSh 4.87/minute
+# 08:00-22:00, KSh 2.50/minute 22:00-08:00.
+DEFAULT_PEAK_RATE_KES_PER_MINUTE = 4.87
+DEFAULT_OFF_PEAK_RATE_KES_PER_MINUTE = 2.50
+DEFAULT_PEAK_START_HOUR = 8
+DEFAULT_PEAK_END_HOUR = 22
+# Fallback for an International destination whose country code isn't (yet)
+# in international_call_rates — e.g. an admin hasn't priced it yet.
+DEFAULT_INTERNATIONAL_RATE_KES_PER_MINUTE = 40.0
 
 
-# Longest country-code key (in digits) to try when prefix-matching above.
-# 4 because of the NANP territory keys ("1876" Jamaica, "1242" Bahamas,
-# ...), which must beat the bare "1" USA/Canada entry.
-INTERNATIONAL_COUNTRY_CODE_MAX_LEN = 4
+def _load_billing_settings(backend) -> dict:
+    # Fetch the single billing_settings row (id = "default") from the DB.
+    row = backend.execute(
+        "SELECT peak_rate_kes, off_peak_rate_kes, peak_start_hour, peak_end_hour, "
+        "default_international_rate_kes FROM billing_settings WHERE id = ?",
+        ("default",),
+    ).fetchone()
+    # No row yet (bootstrap hasn't run) -> fall back to the hardcoded
+    # Safaricom defaults above.
+    if row is None:
+        print(f"[{backend.name}] Billing: no billing_settings row found — using built-in Safaricom defaults.")
+        return {
+            "peak_rate_kes": DEFAULT_PEAK_RATE_KES_PER_MINUTE,
+            "off_peak_rate_kes": DEFAULT_OFF_PEAK_RATE_KES_PER_MINUTE,
+            "peak_start_hour": DEFAULT_PEAK_START_HOUR,
+            "peak_end_hour": DEFAULT_PEAK_END_HOUR,
+            "default_international_rate_kes": DEFAULT_INTERNATIONAL_RATE_KES_PER_MINUTE,
+        }
+    # Unpack the row's five columns into named variables.
+    peak_rate, off_peak_rate, peak_start_hour, peak_end_hour, default_intl_rate = row
+    # Return them as a plain dict, coerced to the right Python types (the
+    # DB driver may hand back Decimal/str depending on backend).
+    return {
+        "peak_rate_kes": float(peak_rate),
+        "off_peak_rate_kes": float(off_peak_rate),
+        "peak_start_hour": int(peak_start_hour),
+        "peak_end_hour": int(peak_end_hour),
+        "default_international_rate_kes": float(default_intl_rate),
+    }
 
-def _international_zone(destination) -> str | None:
-    """The tariff zone for a dialled international destination — same
-    trunk-digit/dial-terminator/IDD-marker stripping classify_number()
-    applies, so a number classify_number() called International always
-    resolves to a zone here too (rather than silently falling back to the
-    flat external rate because this rate-lookup never learned to strip the
-    leading "9")."""
+
+def _load_international_rates(backend) -> dict[str, float]:
+    # Fetch every (country_code, rate) row from international_call_rates.
+    rows = backend.execute("SELECT country_code, rate_kes_per_minute FROM international_call_rates").fetchall()
+    # Turn the list of (code, rate) tuples into a {code: rate} dict for
+    # O(1) lookups later.
+    return {code: float(rate) for code, rate in rows}
+
+
+def _is_peak_hour(orig_time, peak_start_hour: int, peak_end_hour: int) -> bool:
+    """orig_time is an "HH:MM:SS" string (the CDR dataset's own column) — a
+    missing/unparseable time defaults to peak, the pricier (safer to bill,
+    not to under-bill) assumption."""
+    # Missing/NaN time -> assume peak (safer to over- than under-bill).
+    if not orig_time or (isinstance(orig_time, float) and pd.isna(orig_time)):
+        return True
+    try:
+        # Split "HH:MM:SS" on ":" and take the first part as the hour.
+        hour = int(str(orig_time).split(":")[0])
+    except (ValueError, IndexError):
+        # Couldn't parse an hour out of it -> assume peak too.
+        return True
+    # Peak if the hour falls within [peak_start_hour, peak_end_hour).
+    return peak_start_hour <= hour < peak_end_hour
+
+def _international_destination_digits(destination) -> str | None:
+    """Same trunk-digit/dial-terminator/IDD-marker stripping
+    classify_number() applies, so a number classify_number() called
+    International always resolves to a lookupable digit string here too
+    (rather than silently falling back to the default rate because this
+    rate-lookup never learned to strip the leading "9")."""
+    # No destination to work with.
     if not destination or (isinstance(destination, float) and pd.isna(destination)):
         return None
+    # Clean whitespace and drop a trailing "#", same as classify_number().
     digits = _strip_dial_terminator(str(destination).strip().replace(" ", ""))
+    # Drop the "9" trunk-access digit if present.
     if digits.startswith("9"):
         digits = digits[1:]
-    digits = _strip_idd_marker(digits)
-    return _country_code_zone(digits)
+    # Strip any remaining IDD marker (+/00/000), leaving just the country
+    # code + subscriber number.
+    return _strip_idd_marker(digits)
 
 
-def _rate_per_minute(call_classification: str, destination) -> float:
-    """Flat rate for External; zone rate (falling back to the flat rate)
-    for International. No SIM-plan override here — see module docstring."""
+def _lookup_international_rate(destination, intl_rates: dict[str, float], default_rate: float) -> float:
+    """Longest-prefix match of the dialled country code against
+    international_call_rates (admin-editable — see PATCH
+    /call-rates/international/<country_code>); falls back to
+    billing_settings.default_international_rate_kes for any code not yet
+    priced."""
+    # Normalise the destination down to bare digits.
+    digits = _international_destination_digits(destination)
+    # No usable digits, or no rates loaded at all -> use the default rate.
+    if not digits or not intl_rates:
+        return default_rate
+    # Longest country code currently priced in the DB.
+    max_len = max(len(code) for code in intl_rates)
+    # Try progressively shorter prefixes of `digits`, longest first, so the
+    # most specific matching country code wins.
+    for length in range(min(max_len, len(digits)), 0, -1):
+        rate = intl_rates.get(digits[:length])
+        if rate is not None:
+            return rate
+    # No prefix matched a priced country code -> default rate.
+    return default_rate
+
+
+def _rate_per_minute(call_classification: str, destination, orig_time, billing_settings: dict, intl_rates: dict[str, float]) -> float:
+    """International: per-country rate from international_call_rates
+    (fallback to the configured default). External (local Kenyan,
+    on-net and off-net alike): Safaricom's peak/off-peak tariff from
+    billing_settings, by the call's own time of day. No SIM-plan override
+    here — see module docstring."""
+    # International calls: look up the per-country rate.
     if call_classification == CALL_CLASS_INTERNATIONAL:
-        zone = _international_zone(destination)
-        if zone is None:
-            return EXTERNAL_CALL_RATE_KES_PER_MINUTE
-        return INTERNATIONAL_ZONE_RATE_KES_PER_MINUTE[zone]
-    return EXTERNAL_CALL_RATE_KES_PER_MINUTE
+        return _lookup_international_rate(destination, intl_rates, billing_settings["default_international_rate_kes"])
+    # Otherwise (External/local): pick peak or off-peak rate based on the
+    # call's time of day.
+    is_peak = _is_peak_hour(orig_time, billing_settings["peak_start_hour"], billing_settings["peak_end_hour"])
+    return billing_settings["peak_rate_kes"] if is_peak else billing_settings["off_peak_rate_kes"]
 
 
-def compute_call_cost(call_classification: str, duration_minutes: float, destination) -> float:
+def compute_call_cost(call_classification: str, duration_minutes: float, destination, orig_time,
+                       billing_settings: dict, intl_rates: dict[str, float]) -> float:
     """Cost for one raw CDR row, in KES (rounded to 2dp)."""
+    # Internal/Unknown calls are never charged.
     if call_classification not in CHARGEABLE_CALL_CLASSES:
         return 0.0
-    rate = _rate_per_minute(call_classification, destination)
+    # Look up the applicable per-minute rate for this call.
+    rate = _rate_per_minute(call_classification, destination, orig_time, billing_settings, intl_rates)
+    # Cost = duration in minutes * rate, rounded to 2 decimal places (KES
+    # cents).
     return round(float(duration_minutes) * rate, 2)
 
 
 # --- Dataset -> usage_summaries -------------------------------------------
 
-def _load_dataset() -> pd.DataFrame:
-    df = pd.read_csv(CDR_DATASET_PATH, dtype={"orig": str, "dest": str, "date": str})
+def _filter_for_classification(df: pd.DataFrame) -> pd.DataFrame:
+    """Two rows never reach classify_call(), dropped in-memory here (the
+    CDR dataset CSV on disk — the parsed extract — is never rewritten, so
+    this is reproducible on every run rather than a one-off cleanup):
+
+    - Zero-duration: the call never connected, so there's nothing to
+      classify — not "Unknown", just out of scope.
+    - Unparseable destination: `orig` IS one of our own 3-digit PBX
+      extensions (so this would otherwise be billed to it), but `dest`
+      matches no recognised number pattern at all — a malformed CDR row,
+      not a real destination classify_call() could ever resolve.
+
+    Logged separately plus their overlap, since a disconnected call with a
+    garbled dest field trips both rules at once."""
+    # Boolean Series, True where the call's duration is exactly 0 seconds.
+    zero_duration = df["duration_sec"].astype(float) == 0
+    # Boolean Series, True where `orig` is a bare 3-digit PBX extension
+    # (NaN treated as empty string first, since NaN.str.match would error).
+    orig_is_extension = df["orig"].fillna("").str.match(INTERNAL_EXTENSION_REGEX)
+    # True where orig is one of ours AND dest doesn't parse into any known
+    # class — apply classify_number() to every value in the `dest` column.
+    unparseable_dest = orig_is_extension & (df["dest"].map(classify_number) == CALL_CLASS_UNKNOWN)
+    # Rows that trip both rules at once (for reporting only).
+    overlap = zero_duration & unparseable_dest
+    # Union of both rules — every row that gets dropped, counted once each.
+    drop = zero_duration | unparseable_dest
+
+    # Log the dataset size and each rule's impact before returning the
+    # filtered frame.
+    print(f"[CDR pipeline] {len(df)} parsed record(s) loaded from {CDR_DATASET_PATH.name}")
+    print(f"[CDR pipeline] dropped {zero_duration.sum()} zero-duration row(s) (call never connected)")
+    print(f"[CDR pipeline] dropped {unparseable_dest.sum()} row(s) with an unparseable destination "
+          f"(PBX-extension origin, unrecognisable dest)")
+    print(f"[CDR pipeline] {overlap.sum()} row(s) matched both rules (counted once in the drop total)")
+    print(f"[CDR pipeline] {drop.sum()} row(s) dropped in total, {len(df) - drop.sum()} row(s) reach classification")
+
+    # Keep only the rows NOT flagged for dropping (~drop negates the
+    # boolean mask); .copy() avoids a "SettingWithCopyWarning" on later
+    # column assignments in _load_dataset().
+    return df.loc[~drop].copy()
+
+
+def _load_dataset(billing_settings: dict, intl_rates: dict[str, float]) -> pd.DataFrame:
+    # Read the CSV into a DataFrame; force these four columns to stay
+    # strings (not auto-inferred as numbers) since leading zeros / exact
+    # digit sequences matter for classification.
+    df = pd.read_csv(CDR_DATASET_PATH, dtype={"orig": str, "dest": str, "date": str, "orig_time": str})
+    # Drop zero-duration / unparseable-destination rows before anything
+    # else touches them.
+    df = _filter_for_classification(df)
+    # New column: duration converted from seconds to minutes (rates are
+    # per-minute).
     df["duration_minutes"] = df["duration_sec"].astype(float) / 60.0
+    # New column: classify every remaining row's (orig, dest) pair.
     df["call_classification"] = [
         classify_call(orig, dest) for orig, dest in zip(df["orig"], df["dest"])
     ]
+    # New column: compute the KES cost of every row from its
+    # classification, duration, destination, and time of day.
     df["computed_cost"] = [
-        compute_call_cost(cls, dur, dest)
-        for cls, dur, dest in zip(df["call_classification"], df["duration_minutes"], df["dest"])
+        compute_call_cost(cls, dur, dest, orig_time, billing_settings, intl_rates)
+        for cls, dur, dest, orig_time in zip(
+            df["call_classification"], df["duration_minutes"], df["dest"], df["orig_time"],
+        )
     ]
+    # New column: "YYYY-MM" extracted from the first 7 characters of the
+    # "YYYY-MM-DD" date string — used to group costs by month below.
     df["month"] = df["date"].str.slice(0, 7)
     return df
 
@@ -520,54 +459,79 @@ def run(backend: Backend) -> int:
     "9..." digits appear to have landed in `orig` rather than `dest` for
     some records) — those are real telco spend, but with no employee to
     attribute it to, so they're excluded here rather than guessed at."""
-    dataset = _load_dataset()
+    # Load the current DB-backed rates for this backend.
+    billing_settings = _load_billing_settings(backend)
+    intl_rates = _load_international_rates(backend)
+    # Build the full classified/costed dataset.
+    dataset = _load_dataset(billing_settings, intl_rates)
+    # Subset: only rows that actually cost something (External/International).
     chargeable = dataset[dataset["computed_cost"] > 0]
+    # Boolean mask: chargeable rows whose `orig` is NOT a valid 3-digit
+    # extension (so there's no employee to bill them to).
     not_pbx_origin = ~chargeable["orig"].str.match(INTERNAL_EXTENSION_REGEX)
+    # If any such rows exist, log their count and total value so this
+    # "real spend, nobody billed" gap is visible rather than silent.
     if not_pbx_origin.any():
         unattributable = round(chargeable.loc[not_pbx_origin, "computed_cost"].sum(), 2)
         print(f"[{backend.name}] Billing: {not_pbx_origin.sum()} chargeable row(s) "
               f"({unattributable} KES) have no 3-digit PBX origin — excluded, not billed to anyone.")
 
+    # Sum computed_cost, grouped by (originating extension, month) — one
+    # total per employee per month.
     by_origin = dataset.groupby(["orig", "month"])["computed_cost"].sum()
 
+    # Fetch every employee that currently has an extension_code assigned.
     employees = backend.execute(
         "SELECT employee_id, extension_code FROM employees WHERE extension_code IS NOT NULL"
     ).fetchall()
+    # Build an extension_code -> employee_id lookup dict.
     employee_by_extension = {extension_code: employee_id for employee_id, extension_code in employees}
 
     written = 0
+    # Iterate every (extension, month) group and its summed cost.
     for (extension_code, month), total_cost in by_origin.items():
         if not _INTERNAL_RE.match(extension_code):
             continue  # not a 3-digit PBX extension — never billed to an employee
+        # Look up which employee (if any) currently owns this extension.
         employee_id = employee_by_extension.get(extension_code)
         if employee_id is None:
             continue
+        # Round the summed cost to 2 decimal places.
         total_cost = round(float(total_cost), 2)
+        # Check whether a usage_summaries row already exists for this
+        # employee+month.
         existing = backend.execute(
             "SELECT summary_id FROM usage_summaries WHERE employee_id = ? AND month = ?",
             (employee_id, month),
         ).fetchone()
         if existing:
+            # Update the existing row's total_cost/extension_code/updated_at.
             backend.execute(
                 "UPDATE usage_summaries SET total_cost = ?, extension_code = ?, updated_at = ? WHERE summary_id = ?",
                 (total_cost, extension_code, now_str(), existing[0]),
             )
         else:
+            # No row yet — insert a brand new one with a fresh UUID.
             backend.execute(
                 """INSERT INTO usage_summaries (summary_id, employee_id, month, total_cost, extension_code, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (new_id(), employee_id, month, total_cost, extension_code, now_str()),
             )
         written += 1
+    # Persist all the inserts/updates made in this loop.
     backend.commit()
     return written
 
 
 def main() -> None:
+    # Run the billing recompute against every currently-reachable backend
+    # (today, just BackendDotNet), printing a one-line summary each.
     for backend in open_backend_connections():
         written = run(backend)
         print(f"[{backend.name}] Billing: {written} usage_summary row(s) written from the CDR dataset.")
 
 
+# Only run main() when this file is executed directly (`python billing.py`),
+# not when it's imported as a module (e.g. by run_ml.ipynb).
 if __name__ == "__main__":
     main()

@@ -1,7 +1,8 @@
+import { toast } from "sonner";
 import { useSession } from "@/lib/auth/session-store";
 import type { ApiErrorBody } from "@/lib/api/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5299";
 
 export class ApiError extends Error {
   status: number;
@@ -120,6 +121,15 @@ export async function apiRequest<T>(
       if (newAccessToken) {
         useSession.getState().setAccessToken(newAccessToken);
         return rawRequest<T>(path, options, newAccessToken);
+      }
+      // One session per account, server-enforced (BackendDotNet's
+      // CurrentUserMiddleware/AuthController): signing in anywhere else
+      // invalidates this one. Refreshing can't recover from that (the
+      // refresh token belongs to the same superseded session), so it's
+      // worth telling the person why they're being dropped, not just
+      // silently bouncing them to /login like a normal expiry.
+      if (error.errorType === "session_superseded") {
+        toast.error("Signed out — this account was signed in from another location.");
       }
       useSession.getState().clear();
     }

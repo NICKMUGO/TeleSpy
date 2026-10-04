@@ -110,6 +110,23 @@ export interface DepartmentForecast {
   forecast: ForecastResult | null;
 }
 
+export interface LocalCallRateSettings {
+  peak_rate_kes: number;
+  off_peak_rate_kes: number;
+  peak_start_hour: number; // 0-23, inclusive
+  peak_end_hour: number; // 0-23, exclusive
+  default_international_rate_kes: number;
+  updated_at: string;
+}
+
+export interface InternationalCallRate {
+  id: string;
+  country_code: string;
+  country_name: string | null;
+  rate_kes_per_minute: number;
+  updated_at: string;
+}
+
 export interface RoleRecord {
   id: string;
   role_name: string;

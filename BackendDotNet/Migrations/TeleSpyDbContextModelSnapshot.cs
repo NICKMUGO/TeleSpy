@@ -116,6 +116,42 @@ namespace TeleSpy.Migrations
                     b.ToTable("audit_logs", (string)null);
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.BillingSettings", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("id");
+
+                    b.Property<double>("DefaultInternationalRateKes")
+                        .HasColumnType("double precision")
+                        .HasColumnName("default_international_rate_kes");
+
+                    b.Property<double>("OffPeakRateKes")
+                        .HasColumnType("double precision")
+                        .HasColumnName("off_peak_rate_kes");
+
+                    b.Property<int>("PeakEndHour")
+                        .HasColumnType("integer")
+                        .HasColumnName("peak_end_hour");
+
+                    b.Property<double>("PeakRateKes")
+                        .HasColumnType("double precision")
+                        .HasColumnName("peak_rate_kes");
+
+                    b.Property<int>("PeakStartHour")
+                        .HasColumnType("integer")
+                        .HasColumnName("peak_start_hour");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("billing_settings", (string)null);
+                });
+
             modelBuilder.Entity("TeleSpy.Models.Consent", b =>
                 {
                     b.Property<string>("Id")
@@ -276,6 +312,40 @@ namespace TeleSpy.Migrations
                     b.HasIndex("DepartmentId");
 
                     b.ToTable("forecast_results", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.InternationalCallRate", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("id");
+
+                    b.Property<string>("CountryCode")
+                        .IsRequired()
+                        .HasMaxLength(6)
+                        .HasColumnType("character varying(6)")
+                        .HasColumnName("country_code");
+
+                    b.Property<string>("CountryName")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("country_name");
+
+                    b.Property<double>("RateKesPerMinute")
+                        .HasColumnType("double precision")
+                        .HasColumnName("rate_kes_per_minute");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CountryCode")
+                        .IsUnique();
+
+                    b.ToTable("international_call_rates", (string)null);
                 });
 
             modelBuilder.Entity("TeleSpy.Models.PasswordHistory", b =>

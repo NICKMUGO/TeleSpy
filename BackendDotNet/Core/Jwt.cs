@@ -17,9 +17,9 @@ public record IssuedToken(string Value, string Jti, DateTime ExpiresAtUtc);
 public interface IJwtService
 {
     IssuedToken CreateAccessToken(string userId, string? role = null, string? roleId = null,
-        string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null);
+        string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null, string? sessionId = null);
 
-    IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId);
+    IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId);
 
     /// <summary>Validates signature + expiry + `type` claim. Throws
     /// SecurityTokenExpiredException / SecurityTokenException on failure —
@@ -42,7 +42,7 @@ public class JwtService : IJwtService
         new(Encoding.UTF8.GetBytes(Config.JwtSecretKey));
 
     private static IssuedToken Create(string userId, string type, TimeSpan expiresIn,
-        string? role, string? roleId, string? departmentId, string? purpose)
+        string? role, string? roleId, string? departmentId, string? purpose, string? sessionId)
     {
         var jti = Guid.NewGuid().ToString("N");
         var now = DateTime.UtcNow;
@@ -56,6 +56,13 @@ public class JwtService : IJwtService
         if (roleId is not null) claims.Add(new Claim("role_id", roleId));
         if (departmentId is not null) claims.Add(new Claim("department_id", departmentId));
         if (purpose is not null) claims.Add(new Claim("purpose", purpose));
+        // Single-active-session enforcement (see Services/Cache.cs's
+        // SetActiveSessionAsync): a fresh login overwrites the user's one
+        // Redis-held session id, so every token minted for a previous
+        // session — this claim is how CurrentUserMiddleware/Refresh() spot
+        // one — stops validating, without needing to enumerate or revoke
+        // each token individually.
+        if (sessionId is not null) claims.Add(new Claim("sid", sessionId));
 
         var expires = now.Add(expiresIn);
         var token = new JwtSecurityToken(
@@ -68,11 +75,11 @@ public class JwtService : IJwtService
     }
 
     public IssuedToken CreateAccessToken(string userId, string? role = null, string? roleId = null,
-        string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null) =>
-        Create(userId, TypeAccess, expiresIn ?? Config.JwtAccessTokenExpires, role, roleId, departmentId, purpose);
+        string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null, string? sessionId = null) =>
+        Create(userId, TypeAccess, expiresIn ?? Config.JwtAccessTokenExpires, role, roleId, departmentId, purpose, sessionId);
 
-    public IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId) =>
-        Create(userId, TypeRefresh, Config.JwtRefreshTokenExpires, role, roleId, departmentId, purpose: null);
+    public IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId) =>
+        Create(userId, TypeRefresh, Config.JwtRefreshTokenExpires, role, roleId, departmentId, purpose: null, sessionId);
 
     private static TokenValidationParameters BaseValidationParameters() => new()
     {

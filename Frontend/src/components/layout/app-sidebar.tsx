@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { BrandMark } from "@/components/brand/brand-lockup";
 import {
   Sidebar,
   SidebarContent,
@@ -36,12 +37,7 @@ export function AppSidebar() {
             href="/dashboard"
             className="focus-visible:ring-sidebar-ring flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-semibold tracking-tight outline-none focus-visible:ring-2"
           >
-            <span
-              aria-hidden="true"
-              className="bg-sidebar-primary text-sidebar-primary-foreground flex size-6 shrink-0 items-center justify-center rounded-sm text-xs font-bold"
-            >
-              T
-            </span>
+            <BrandMark className="size-6 rounded-sm" />
             <span className="truncate group-data-[collapsible=icon]:hidden">
               TeleSpy
             </span>

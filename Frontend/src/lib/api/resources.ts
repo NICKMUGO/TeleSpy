@@ -10,6 +10,8 @@ import type {
   Department,
   DepartmentForecast,
   Employee,
+  InternationalCallRate,
+  LocalCallRateSettings,
   OverLimitEntry,
   RoleRecord,
   SimCard,
@@ -128,6 +130,37 @@ export const telcoPlansApi = {
         }[]
       >
     >("/telco-plans"),
+};
+
+// --- Call rates (Admin only) --------------------------------------------------------
+export const callRatesApi = {
+  getLocal: () =>
+    apiRequest<ApiEnvelope<LocalCallRateSettings>>("/call-rates/local"),
+  updateLocal: (
+    body: Partial<{
+      peak_rate_kes: number;
+      off_peak_rate_kes: number;
+      peak_start_hour: number;
+      peak_end_hour: number;
+      default_international_rate_kes: number;
+    }>,
+  ) =>
+    apiRequest<ApiEnvelope<LocalCallRateSettings>>("/call-rates/local", {
+      method: "PATCH",
+      body,
+    }),
+  listInternational: () =>
+    apiRequest<ApiEnvelope<InternationalCallRate[]>>(
+      "/call-rates/international",
+    ),
+  updateInternational: (
+    countryCode: string,
+    body: Partial<{ rate_kes_per_minute: number; country_name: string }>,
+  ) =>
+    apiRequest<ApiEnvelope<InternationalCallRate>>(
+      `/call-rates/international/${countryCode}`,
+      { method: "PATCH", body },
+    ),
 };
 
 // --- Usage --------------------------------------------------------

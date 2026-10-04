@@ -309,6 +309,61 @@ public class TelcoPlan
     }
 }
 
+/// <summary>Not in the original ERD/class diagrams — added so call rates
+/// (previously hardcoded in ML/training/billing.py) are Admin-editable at
+/// runtime via PATCH /call-rates/local, per Safaricom's published local
+/// tariff. Singleton row, fixed Id like Role.RoleId — there is exactly one
+/// active billing configuration, not a set of records. Bootstrapped with
+/// defaults by CallRateBootstrap (Core/Startup.cs), the same pattern
+/// RoleBootstrap uses for the roles table. billing.py reads this table
+/// fresh on every run — see that module's "Call rating" section.</summary>
+public class BillingSettings
+{
+    public string Id { get; set; } = "";
+    // Safaricom's published local (on-net + off-net) tariff: KSh 4.87/minute
+    // in peak hours, KSh 2.50/minute off-peak.
+    public double PeakRateKes { get; set; }
+    public double OffPeakRateKes { get; set; }
+    public int PeakStartHour { get; set; } // 0-23, inclusive
+    public int PeakEndHour { get; set; } // 0-23, exclusive
+    // Fallback rate for an International destination whose country code
+    // isn't (yet) priced in InternationalCallRates.
+    public double DefaultInternationalRateKes { get; set; }
+    public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["peak_rate_kes"] = PeakRateKes,
+        ["off_peak_rate_kes"] = OffPeakRateKes,
+        ["peak_start_hour"] = PeakStartHour,
+        ["peak_end_hour"] = PeakEndHour,
+        ["default_international_rate_kes"] = DefaultInternationalRateKes,
+        ["updated_at"] = UpdatedAt.ToString("o"),
+    };
+}
+
+/// <summary>Per-country KES/minute, sourced from
+/// ML/training/International_Calling_Rates.pdf (Safaricom international
+/// rates). Admin-editable via PATCH /call-rates/international/&lt;country_code&gt;.
+/// Longest-prefix matched against a dialled number by billing.py.</summary>
+public class InternationalCallRate
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string CountryCode { get; set; } = ""; // E.164 dial code digits, no "+", e.g. "254", "1876"
+    public string? CountryName { get; set; }
+    public double RateKesPerMinute { get; set; }
+    public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = Id,
+        ["country_code"] = CountryCode,
+        ["country_name"] = CountryName,
+        ["rate_kes_per_minute"] = RateKesPerMinute,
+        ["updated_at"] = UpdatedAt.ToString("o"),
+    };
+}
+
 /// <summary>ICCID/MSISDN/extension are encrypted at rest, with blind-index
 /// fingerprints for uniqueness checks and lookups (see Security.cs).</summary>
 public class SimCard
