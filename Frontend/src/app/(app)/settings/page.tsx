@@ -1,9 +1,17 @@
-import { Bell, Receipt } from "lucide-react";
+"use client";
+
+import { Bell, ShieldAlert } from "lucide-react";
 import { DisplaySettingsForm } from "@/components/layout/display-settings-form";
 import { PageHeader } from "@/components/layout/page-header";
 import { StubNotice } from "@/components/layout/stub-notice";
+import { LocalRateCard } from "@/features/billing/local-rate-card";
+import { InternationalRatesTable } from "@/features/billing/international-rates-table";
+import { useSession } from "@/lib/auth/session-store";
 
 export default function SettingsPage() {
+  const user = useSession((state) => state.user);
+  const isAdmin = user?.role === "Admin";
+
   return (
     <>
       <PageHeader
@@ -25,11 +33,22 @@ export default function SettingsPage() {
         </section>
 
         <section>
-          <h2 className="mb-4 text-lg font-semibold">Tariff plans</h2>
-          <StubNotice icon={Receipt}>
-            Tariff plan configuration is built once the data layer and mock API
-            are wired up.
-          </StubNotice>
+          <h2 className="mb-4 text-lg font-semibold">Call rates</h2>
+          {isAdmin ? (
+            <div className="flex flex-col gap-6">
+              <LocalRateCard />
+              <div>
+                <h3 className="mb-3 text-sm font-medium">
+                  International call rates
+                </h3>
+                <InternationalRatesTable />
+              </div>
+            </div>
+          ) : (
+            <StubNotice icon={ShieldAlert}>
+              Only an Admin can view or change call rates.
+            </StubNotice>
+          )}
         </section>
       </div>
     </>

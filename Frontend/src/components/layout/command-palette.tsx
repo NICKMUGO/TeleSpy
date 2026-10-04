@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
+  GraduationCap,
   Keyboard,
   Laptop,
   Moon,
@@ -22,13 +23,14 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { ALL_NAV_ITEMS, isNavItemVisible } from "@/components/layout/nav-items";
-import { mockCurrentUser } from "@/lib/auth/mock-user";
+import { useSession } from "@/lib/auth/session-store";
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onOpenDisplaySettings: () => void;
   onOpenShortcutsHelp: () => void;
+  onOpenTutorial: () => void;
 }
 
 export function CommandPalette({
@@ -36,18 +38,18 @@ export function CommandPalette({
   onOpenChange,
   onOpenDisplaySettings,
   onOpenShortcutsHelp,
+  onOpenTutorial,
 }: CommandPaletteProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
+  const role = useSession((state) => state.user?.role) ?? "Employee";
 
   function runAndClose(action: () => void) {
     action();
     onOpenChange(false);
   }
 
-  const navItems = ALL_NAV_ITEMS.filter((item) =>
-    isNavItemVisible(item, mockCurrentUser.role),
-  );
+  const navItems = ALL_NAV_ITEMS.filter((item) => isNavItemVisible(item, role));
 
   const themeOptions: {
     label: string;
@@ -133,6 +135,13 @@ export function CommandPalette({
           >
             <Keyboard aria-hidden="true" />
             <span>Keyboard shortcuts</span>
+          </CommandItem>
+          <CommandItem
+            value="Open guided tour"
+            onSelect={() => runAndClose(onOpenTutorial)}
+          >
+            <GraduationCap aria-hidden="true" />
+            <span>Open guided tour</span>
           </CommandItem>
         </CommandGroup>
       </CommandList>

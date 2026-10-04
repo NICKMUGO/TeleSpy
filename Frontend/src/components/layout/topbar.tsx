@@ -12,12 +12,14 @@ interface TopbarProps {
   onOpenCommandPalette: () => void;
   onOpenDisplaySettings: () => void;
   onOpenShortcutsHelp: () => void;
+  onOpenTutorial: () => void;
 }
 
 export function Topbar({
   onOpenCommandPalette,
   onOpenDisplaySettings,
   onOpenShortcutsHelp,
+  onOpenTutorial,
 }: TopbarProps) {
   return (
     <header className="border-border flex h-14 shrink-0 items-center gap-3 border-b px-4">
@@ -52,6 +54,7 @@ export function Topbar({
         <UserMenu
           onOpenDisplaySettings={onOpenDisplaySettings}
           onOpenShortcutsHelp={onOpenShortcutsHelp}
+          onOpenTutorial={onOpenTutorial}
         />
       </div>
     </header>

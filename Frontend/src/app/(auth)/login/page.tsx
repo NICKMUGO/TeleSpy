@@ -1,11 +1,6 @@
 import type { Metadata } from "next";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import Link from "next/link";
+import { BrandLockup } from "@/components/brand/brand-lockup";
 import { LoginForm } from "@/features/auth/login-form";
 
 export const metadata: Metadata = {
@@ -14,27 +9,37 @@ export const metadata: Metadata = {
 
 export default function LoginPage() {
   return (
-    <Card className="w-full max-w-sm">
-      <CardHeader>
-        <div className="mb-2 flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-sm text-sm font-bold"
-          >
-            T
-          </span>
-          <span className="text-sm font-semibold tracking-tight">TeleSpy</span>
-        </div>
-        <CardTitle asChild className="text-xl">
-          <h1>Sign in</h1>
-        </CardTitle>
-        <CardDescription>
-          Use your Kenya Airways work account to continue.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <LoginForm />
-      </CardContent>
-    </Card>
+    <div className="w-full max-w-sm">
+      {/* The brand rail is lg-only, so the lockup has to reappear here on
+       * the narrow layout — otherwise the phone screen is an unbranded
+       * pair of text fields. */}
+      <BrandLockup eyebrow className="mb-8 lg:hidden" />
+
+      <h1 className="font-heading text-3xl font-semibold tracking-tight">
+        Sign in
+      </h1>
+      <p className="text-muted-foreground mt-2 text-sm">
+        Use your Kenya Airways work account to continue.
+      </p>
+
+      <LoginForm className="mt-7" />
+
+      <p className="text-muted-foreground mt-10 flex items-center justify-center gap-3 text-xs">
+        <Link href="/privacy" className="hover:text-foreground hover:underline">
+          Privacy
+        </Link>
+        <span aria-hidden="true">·</span>
+        <Link href="/terms" className="hover:text-foreground hover:underline">
+          Terms
+        </Link>
+        <span aria-hidden="true">·</span>
+        <a
+          href="mailto:servicedesk@kenya-airways.com"
+          className="hover:text-foreground hover:underline"
+        >
+          Support
+        </a>
+      </p>
+    </div>
   );
 }

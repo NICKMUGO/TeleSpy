@@ -1,0 +1,1182 @@
+[
+  {
+    "country_code": "1",
+    "country_name": "USA/Canada",
+    "rate_kes_per_minute": 5.0
+  },
+  {
+    "country_code": "7",
+    "country_name": "Russia/Kazakhstan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "20",
+    "country_name": "Egypt",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "27",
+    "country_name": "South Africa",
+    "rate_kes_per_minute": 35.0
+  },
+  {
+    "country_code": "30",
+    "country_name": "Greece",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "31",
+    "country_name": "Netherlands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "32",
+    "country_name": "Belgium",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "33",
+    "country_name": "France",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "34",
+    "country_name": "Spain",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "36",
+    "country_name": "Hungary",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "39",
+    "country_name": "Italy",
+    "rate_kes_per_minute": 140.0
+  },
+  {
+    "country_code": "40",
+    "country_name": "Romania",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "41",
+    "country_name": "Switzerland",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "43",
+    "country_name": "Austria",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "44",
+    "country_name": "United Kingdom",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "45",
+    "country_name": "Denmark",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "46",
+    "country_name": "Sweden",
+    "rate_kes_per_minute": 55.0
+  },
+  {
+    "country_code": "47",
+    "country_name": "Norway/Svalbard",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "48",
+    "country_name": "Poland",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "49",
+    "country_name": "Germany",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "51",
+    "country_name": "Peru",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "52",
+    "country_name": "Mexico",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "54",
+    "country_name": "Argentina",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "55",
+    "country_name": "Brazil",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "56",
+    "country_name": "Chile",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "57",
+    "country_name": "Colombia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "58",
+    "country_name": "Venezuela",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "60",
+    "country_name": "Malaysia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "61",
+    "country_name": "Australia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "62",
+    "country_name": "Indonesia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "63",
+    "country_name": "Philippines",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "64",
+    "country_name": "New Zealand",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "65",
+    "country_name": "Singapore",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "66",
+    "country_name": "Thailand",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "81",
+    "country_name": "Japan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "82",
+    "country_name": "South Korea",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "84",
+    "country_name": "Vietnam",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "86",
+    "country_name": "China",
+    "rate_kes_per_minute": 10.0
+  },
+  {
+    "country_code": "90",
+    "country_name": "Turkey",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "91",
+    "country_name": "India",
+    "rate_kes_per_minute": 10.0
+  },
+  {
+    "country_code": "92",
+    "country_name": "Pakistan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "93",
+    "country_name": "Afghanistan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "94",
+    "country_name": "Sri Lanka",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "95",
+    "country_name": "Myanmar",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "98",
+    "country_name": "Iran",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "211",
+    "country_name": "South Sudan",
+    "rate_kes_per_minute": 15.0
+  },
+  {
+    "country_code": "212",
+    "country_name": "Morocco/Western Sahara",
+    "rate_kes_per_minute": 130.0
+  },
+  {
+    "country_code": "213",
+    "country_name": "Algeria",
+    "rate_kes_per_minute": 150.0
+  },
+  {
+    "country_code": "216",
+    "country_name": "Tunisia",
+    "rate_kes_per_minute": 170.0
+  },
+  {
+    "country_code": "218",
+    "country_name": "Libya",
+    "rate_kes_per_minute": 110.0
+  },
+  {
+    "country_code": "220",
+    "country_name": "Gambia",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "221",
+    "country_name": "Senegal",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "222",
+    "country_name": "Mauritania",
+    "rate_kes_per_minute": 150.0
+  },
+  {
+    "country_code": "223",
+    "country_name": "Mali",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "224",
+    "country_name": "Guinea",
+    "rate_kes_per_minute": 120.0
+  },
+  {
+    "country_code": "225",
+    "country_name": "Cote d'Ivoire",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "226",
+    "country_name": "Burkina Faso",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "227",
+    "country_name": "Niger",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "228",
+    "country_name": "Togo",
+    "rate_kes_per_minute": 65.0
+  },
+  {
+    "country_code": "229",
+    "country_name": "Benin",
+    "rate_kes_per_minute": 65.0
+  },
+  {
+    "country_code": "230",
+    "country_name": "Mauritius",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "231",
+    "country_name": "Liberia",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "232",
+    "country_name": "Sierra Leone",
+    "rate_kes_per_minute": 100.0
+  },
+  {
+    "country_code": "233",
+    "country_name": "Ghana",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "234",
+    "country_name": "Nigeria",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "235",
+    "country_name": "Chad",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "236",
+    "country_name": "Central African Republic",
+    "rate_kes_per_minute": 130.0
+  },
+  {
+    "country_code": "237",
+    "country_name": "Cameroon",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "238",
+    "country_name": "Cape Verde",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "239",
+    "country_name": "Sao Tome and Principe",
+    "rate_kes_per_minute": 100.0
+  },
+  {
+    "country_code": "240",
+    "country_name": "Equatorial Guinea",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "241",
+    "country_name": "Gabon",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "242",
+    "country_name": "Congo (Brazzaville)",
+    "rate_kes_per_minute": 125.0
+  },
+  {
+    "country_code": "243",
+    "country_name": "DR Congo (Kinshasa)",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "244",
+    "country_name": "Angola",
+    "rate_kes_per_minute": 35.0
+  },
+  {
+    "country_code": "245",
+    "country_name": "Guinea-Bissau",
+    "rate_kes_per_minute": 120.0
+  },
+  {
+    "country_code": "246",
+    "country_name": "Diego Garcia (BIOT)",
+    "rate_kes_per_minute": 200.0
+  },
+  {
+    "country_code": "247",
+    "country_name": "Ascension Island",
+    "rate_kes_per_minute": 200.0
+  },
+  {
+    "country_code": "248",
+    "country_name": "Seychelles",
+    "rate_kes_per_minute": 135.0
+  },
+  {
+    "country_code": "249",
+    "country_name": "Sudan",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "250",
+    "country_name": "Rwanda",
+    "rate_kes_per_minute": 15.0
+  },
+  {
+    "country_code": "251",
+    "country_name": "Ethiopia",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "252",
+    "country_name": "Somalia",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "253",
+    "country_name": "Djibouti",
+    "rate_kes_per_minute": 65.0
+  },
+  {
+    "country_code": "255",
+    "country_name": "Tanzania",
+    "rate_kes_per_minute": 15.0
+  },
+  {
+    "country_code": "256",
+    "country_name": "Uganda",
+    "rate_kes_per_minute": 15.0
+  },
+  {
+    "country_code": "257",
+    "country_name": "Burundi",
+    "rate_kes_per_minute": 110.0
+  },
+  {
+    "country_code": "258",
+    "country_name": "Mozambique",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "260",
+    "country_name": "Zambia",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "261",
+    "country_name": "Madagascar",
+    "rate_kes_per_minute": 130.0
+  },
+  {
+    "country_code": "262",
+    "country_name": "Reunion/Mayotte",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "263",
+    "country_name": "Zimbabwe",
+    "rate_kes_per_minute": 105.0
+  },
+  {
+    "country_code": "264",
+    "country_name": "Namibia",
+    "rate_kes_per_minute": 30.0
+  },
+  {
+    "country_code": "265",
+    "country_name": "Malawi",
+    "rate_kes_per_minute": 95.0
+  },
+  {
+    "country_code": "266",
+    "country_name": "Lesotho",
+    "rate_kes_per_minute": 100.0
+  },
+  {
+    "country_code": "267",
+    "country_name": "Botswana",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "268",
+    "country_name": "Eswatini",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "269",
+    "country_name": "Comoros",
+    "rate_kes_per_minute": 120.0
+  },
+  {
+    "country_code": "290",
+    "country_name": "Saint Helena / Tristan da Cunha",
+    "rate_kes_per_minute": 690.0
+  },
+  {
+    "country_code": "291",
+    "country_name": "Eritrea",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "297",
+    "country_name": "Aruba",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "298",
+    "country_name": "Faroe Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "299",
+    "country_name": "Greenland",
+    "rate_kes_per_minute": 125.0
+  },
+  {
+    "country_code": "350",
+    "country_name": "Gibraltar",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "351",
+    "country_name": "Portugal",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "352",
+    "country_name": "Luxembourg",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "353",
+    "country_name": "Ireland",
+    "rate_kes_per_minute": 170.0
+  },
+  {
+    "country_code": "354",
+    "country_name": "Iceland",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "355",
+    "country_name": "Albania",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "356",
+    "country_name": "Malta",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "358",
+    "country_name": "Finland/Aland Islands",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "359",
+    "country_name": "Bulgaria",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "370",
+    "country_name": "Lithuania",
+    "rate_kes_per_minute": 85.0
+  },
+  {
+    "country_code": "371",
+    "country_name": "Latvia",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "372",
+    "country_name": "Estonia",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "373",
+    "country_name": "Moldova",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "374",
+    "country_name": "Armenia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "375",
+    "country_name": "Belarus",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "376",
+    "country_name": "Andorra",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "377",
+    "country_name": "Monaco",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "378",
+    "country_name": "San Marino",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "380",
+    "country_name": "Ukraine",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "381",
+    "country_name": "Serbia",
+    "rate_kes_per_minute": 90.0
+  },
+  {
+    "country_code": "382",
+    "country_name": "Montenegro",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "386",
+    "country_name": "Slovenia",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "387",
+    "country_name": "Bosnia and Herzegovina",
+    "rate_kes_per_minute": 85.0
+  },
+  {
+    "country_code": "389",
+    "country_name": "North Macedonia",
+    "rate_kes_per_minute": 95.0
+  },
+  {
+    "country_code": "420",
+    "country_name": "Czechia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "421",
+    "country_name": "Slovakia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "423",
+    "country_name": "Liechtenstein",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "500",
+    "country_name": "Falkland Islands",
+    "rate_kes_per_minute": 300.0
+  },
+  {
+    "country_code": "501",
+    "country_name": "Belize",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "502",
+    "country_name": "Guatemala",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "503",
+    "country_name": "El Salvador",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "504",
+    "country_name": "Honduras",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "505",
+    "country_name": "Nicaragua",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "507",
+    "country_name": "Panama",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "508",
+    "country_name": "Saint Pierre and Miquelon",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "509",
+    "country_name": "Haiti",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "590",
+    "country_name": "Guadeloupe/St Barthelemy/St Martin",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "591",
+    "country_name": "Bolivia",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "592",
+    "country_name": "Guyana",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "593",
+    "country_name": "Ecuador",
+    "rate_kes_per_minute": 45.0
+  },
+  {
+    "country_code": "594",
+    "country_name": "French Guiana",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "595",
+    "country_name": "Paraguay",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "596",
+    "country_name": "Martinique",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "597",
+    "country_name": "Suriname",
+    "rate_kes_per_minute": 65.0
+  },
+  {
+    "country_code": "598",
+    "country_name": "Uruguay",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "599",
+    "country_name": "Curacao/Caribbean Netherlands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "670",
+    "country_name": "Timor-Leste",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "672",
+    "country_name": "Norfolk Island / Australian Antarctic",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "673",
+    "country_name": "Brunei",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "674",
+    "country_name": "Nauru",
+    "rate_kes_per_minute": 200.0
+  },
+  {
+    "country_code": "675",
+    "country_name": "Papua New Guinea",
+    "rate_kes_per_minute": 250.0
+  },
+  {
+    "country_code": "676",
+    "country_name": "Tonga",
+    "rate_kes_per_minute": 205.0
+  },
+  {
+    "country_code": "677",
+    "country_name": "Solomon Islands",
+    "rate_kes_per_minute": 200.0
+  },
+  {
+    "country_code": "678",
+    "country_name": "Vanuatu",
+    "rate_kes_per_minute": 130.0
+  },
+  {
+    "country_code": "679",
+    "country_name": "Fiji",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "680",
+    "country_name": "Palau",
+    "rate_kes_per_minute": 200.0
+  },
+  {
+    "country_code": "681",
+    "country_name": "Wallis and Futuna",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "682",
+    "country_name": "Cook Islands",
+    "rate_kes_per_minute": 220.0
+  },
+  {
+    "country_code": "683",
+    "country_name": "Niue",
+    "rate_kes_per_minute": 70.0
+  },
+  {
+    "country_code": "685",
+    "country_name": "Samoa",
+    "rate_kes_per_minute": 130.0
+  },
+  {
+    "country_code": "686",
+    "country_name": "Kiribati",
+    "rate_kes_per_minute": 370.0
+  },
+  {
+    "country_code": "687",
+    "country_name": "New Caledonia",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "688",
+    "country_name": "Tuvalu",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "689",
+    "country_name": "French Polynesia",
+    "rate_kes_per_minute": 80.0
+  },
+  {
+    "country_code": "690",
+    "country_name": "Tokelau",
+    "rate_kes_per_minute": 350.0
+  },
+  {
+    "country_code": "691",
+    "country_name": "Micronesia",
+    "rate_kes_per_minute": 105.0
+  },
+  {
+    "country_code": "692",
+    "country_name": "Marshall Islands",
+    "rate_kes_per_minute": 50.0
+  },
+  {
+    "country_code": "850",
+    "country_name": "North Korea",
+    "rate_kes_per_minute": 145.0
+  },
+  {
+    "country_code": "852",
+    "country_name": "Hong Kong",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "853",
+    "country_name": "Macau",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "855",
+    "country_name": "Cambodia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "856",
+    "country_name": "Laos",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "870",
+    "country_name": "Inmarsat",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "871",
+    "country_name": "Inmarsat (Atlantic-East)",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "872",
+    "country_name": "Inmarsat (Pacific)",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "873",
+    "country_name": "Inmarsat (Indian)",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "874",
+    "country_name": "Inmarsat (Atlantic-West)",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "880",
+    "country_name": "Bangladesh",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "881",
+    "country_name": "Global Mobile Satellite System",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "882",
+    "country_name": "International Networks",
+    "rate_kes_per_minute": 1120.0
+  },
+  {
+    "country_code": "886",
+    "country_name": "Taiwan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "960",
+    "country_name": "Maldives",
+    "rate_kes_per_minute": 170.0
+  },
+  {
+    "country_code": "961",
+    "country_name": "Lebanon",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "962",
+    "country_name": "Jordan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "963",
+    "country_name": "Syria",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "964",
+    "country_name": "Iraq",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "965",
+    "country_name": "Kuwait",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "966",
+    "country_name": "Saudi Arabia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "967",
+    "country_name": "Yemen",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "968",
+    "country_name": "Oman",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "970",
+    "country_name": "Palestine",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "971",
+    "country_name": "United Arab Emirates",
+    "rate_kes_per_minute": 35.0
+  },
+  {
+    "country_code": "972",
+    "country_name": "Israel",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "973",
+    "country_name": "Bahrain",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "974",
+    "country_name": "Qatar",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "975",
+    "country_name": "Bhutan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "976",
+    "country_name": "Mongolia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "977",
+    "country_name": "Nepal",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "992",
+    "country_name": "Tajikistan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "993",
+    "country_name": "Turkmenistan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "994",
+    "country_name": "Azerbaijan",
+    "rate_kes_per_minute": 75.0
+  },
+  {
+    "country_code": "995",
+    "country_name": "Georgia",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "996",
+    "country_name": "Kyrgyzstan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "998",
+    "country_name": "Uzbekistan",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1242",
+    "country_name": "Bahamas",
+    "rate_kes_per_minute": 55.0
+  },
+  {
+    "country_code": "1246",
+    "country_name": "Barbados",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1264",
+    "country_name": "Anguilla",
+    "rate_kes_per_minute": 60.0
+  },
+  {
+    "country_code": "1268",
+    "country_name": "Antigua and Barbuda",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1284",
+    "country_name": "British Virgin Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1340",
+    "country_name": "US Virgin Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1345",
+    "country_name": "Cayman Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1441",
+    "country_name": "Bermuda",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1473",
+    "country_name": "Grenada",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1649",
+    "country_name": "Turks and Caicos Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1658",
+    "country_name": "Jamaica (overlay)",
+    "rate_kes_per_minute": 55.0
+  },
+  {
+    "country_code": "1664",
+    "country_name": "Montserrat",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1670",
+    "country_name": "Northern Mariana Islands",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1671",
+    "country_name": "Guam",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1684",
+    "country_name": "American Samoa",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1758",
+    "country_name": "Saint Lucia",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1767",
+    "country_name": "Dominica",
+    "rate_kes_per_minute": 55.0
+  },
+  {
+    "country_code": "1784",
+    "country_name": "Saint Vincent and the Grenadines",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1787",
+    "country_name": "Puerto Rico",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1808",
+    "country_name": null,
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1809",
+    "country_name": "Dominican Republic",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1829",
+    "country_name": "Dominican Republic (overlay)",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1849",
+    "country_name": "Dominican Republic (overlay)",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1868",
+    "country_name": "Trinidad and Tobago",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1869",
+    "country_name": "Saint Kitts and Nevis",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1876",
+    "country_name": "Jamaica",
+    "rate_kes_per_minute": 55.0
+  },
+  {
+    "country_code": "1907",
+    "country_name": "Alaska (USA)",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "1939",
+    "country_name": "Puerto Rico (overlay)",
+    "rate_kes_per_minute": 40.0
+  },
+  {
+    "country_code": "34928",
+    "country_name": null,
+    "rate_kes_per_minute": 40.0
+  }
+]
