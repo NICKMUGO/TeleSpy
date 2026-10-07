@@ -127,9 +127,67 @@ namespace TeleSpy.Migrations
                         .HasColumnType("double precision")
                         .HasColumnName("default_international_rate_kes");
 
+                    b.Property<double>("DiscountInternationalPct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(0.0)
+                        .HasColumnName("discount_international_pct");
+
+                    b.Property<double>("DiscountOffNetOffPeakPct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(54.0)
+                        .HasColumnName("discount_off_net_off_peak_pct");
+
+                    b.Property<double>("DiscountOffNetPeakPct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(54.0)
+                        .HasColumnName("discount_off_net_peak_pct");
+
+                    b.Property<double>("DiscountOnNetOffPeakPct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(0.0)
+                        .HasColumnName("discount_on_net_off_peak_pct");
+
+                    b.Property<double>("DiscountOnNetPeakPct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(54.0)
+                        .HasColumnName("discount_on_net_peak_pct");
+
+                    b.Property<double>("ExciseRatePct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(15.0)
+                        .HasColumnName("excise_rate_pct");
+
+                    b.Property<double>("FixedMonthlyChargeKes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(26086.959999999999)
+                        .HasColumnName("fixed_monthly_charge_kes");
+
+                    b.Property<string>("HomeNetworkName")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasDefaultValue("Safaricom")
+                        .HasColumnName("home_network_name");
+
                     b.Property<double>("OffPeakRateKes")
                         .HasColumnType("double precision")
                         .HasColumnName("off_peak_rate_kes");
+
+                    b.Property<string>("OnNetPrefixes")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasDefaultValue("700-729, 740-743, 745-746, 748, 757-759, 768-769, 790-799, 110-119")
+                        .HasColumnName("on_net_prefixes");
 
                     b.Property<int>("PeakEndHour")
                         .HasColumnType("integer")
@@ -146,6 +204,12 @@ namespace TeleSpy.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<double>("VatRatePct")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(16.0)
+                        .HasColumnName("vat_rate_pct");
 
                     b.HasKey("Id");
 
@@ -346,6 +410,31 @@ namespace TeleSpy.Migrations
                         .IsUnique();
 
                     b.ToTable("international_call_rates", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.MonthlyInvoice", b =>
+                {
+                    b.Property<string>("Month")
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("month");
+
+                    b.Property<double>("InvoiceTotalKes")
+                        .HasColumnType("double precision")
+                        .HasColumnName("invoice_total_kes");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("note");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Month");
+
+                    b.ToTable("monthly_invoices", (string)null);
                 });
 
             modelBuilder.Entity("TeleSpy.Models.PasswordHistory", b =>
@@ -670,8 +759,8 @@ namespace TeleSpy.Migrations
 
                     b.Property<string>("Destination")
                         .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
                         .HasColumnName("destination");
 
                     b.Property<double>("DurationMinutes")
@@ -761,6 +850,12 @@ namespace TeleSpy.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("character varying(3)")
                         .HasColumnName("extension_code");
+
+                    b.Property<double>("ListCost")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(0.0)
+                        .HasColumnName("list_cost");
 
                     b.Property<string>("Month")
                         .IsRequired()

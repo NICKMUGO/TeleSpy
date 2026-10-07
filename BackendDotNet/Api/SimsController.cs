@@ -41,7 +41,7 @@ public class SimsController(
     {
         var viewer = await viewerContext.LoadedUserAsync();
         var (page, limit) = Pagination.PaginateArgs(Request);
-        var query = db.SimCards.Include(s => s.Allocations).OrderByDescending(s => s.CreatedAt);
+        var query = db.SimCards.Include(s => s.Allocations).OrderByDescending(s => s.CreatedAt).ThenBy(s => s.SimId);
         var total = await query.CountAsync();
         var rows = await query.Skip((page - 1) * limit).Take(limit).ToListAsync();
         return Ok(new

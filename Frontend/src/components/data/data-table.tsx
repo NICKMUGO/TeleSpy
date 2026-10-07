@@ -33,10 +33,15 @@ interface DataTableProps<TData extends object> {
   error?: unknown;
   onRetry?: () => void;
   searchPlaceholder?: string;
+  /** False hides the search box — for a list the server pages through,
+   * where filtering only the rows on screen would mislead. */
+  searchable?: boolean;
   emptyIcon: LucideIcon;
   emptyTitle: string;
   emptyDescription?: string;
   toolbarEnd?: ReactNode;
+  /** Rendered under the table, e.g. page controls. */
+  footer?: ReactNode;
   getRowId?: (row: TData) => string;
 }
 
@@ -52,10 +57,12 @@ export function DataTable<TData extends object>({
   error,
   onRetry,
   searchPlaceholder = "Search…",
+  searchable = true,
   emptyIcon,
   emptyTitle,
   emptyDescription,
   toolbarEnd,
+  footer,
   getRowId,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<{ id: string; desc: boolean }[]>([]);
@@ -104,22 +111,26 @@ export function DataTable<TData extends object>({
 
   return (
     <div className="flex flex-col gap-3 p-6">
-      <div className="flex flex-wrap items-center gap-2">
-        <InputGroup className="max-w-xs">
-          <InputGroupAddon>
-            <Search aria-hidden="true" className="size-4" />
-          </InputGroupAddon>
-          <InputGroupInput
-            placeholder={searchPlaceholder}
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            aria-label={searchPlaceholder}
-          />
-        </InputGroup>
-        {toolbarEnd ? (
-          <div className="ml-auto flex items-center gap-2">{toolbarEnd}</div>
-        ) : null}
-      </div>
+      {searchable || toolbarEnd ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {searchable ? (
+            <InputGroup className="max-w-xs">
+              <InputGroupAddon>
+                <Search aria-hidden="true" className="size-4" />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder={searchPlaceholder}
+                value={globalFilter}
+                onChange={(e) => setGlobalFilter(e.target.value)}
+                aria-label={searchPlaceholder}
+              />
+            </InputGroup>
+          ) : null}
+          {toolbarEnd ? (
+            <div className="ml-auto flex items-center gap-2">{toolbarEnd}</div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="border-border overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
@@ -193,6 +204,8 @@ export function DataTable<TData extends object>({
           No rows match &ldquo;{globalFilter}&rdquo;.
         </p>
       ) : null}
+
+      {footer}
     </div>
   );
 }

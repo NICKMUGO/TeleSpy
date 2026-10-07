@@ -86,7 +86,9 @@ export function LoginForm({ className }: { className?: string }) {
       user: response.data.user,
     });
     toast.success(
-      forceNewSession ? "Signed in. The other device was signed out." : "Signed in.",
+      forceNewSession
+        ? "Signed in. The other device was signed out."
+        : "Signed in.",
     );
     if (response.data.must_change_password) {
       router.push("/settings");
@@ -102,7 +104,10 @@ export function LoginForm({ className }: { className?: string }) {
     try {
       await completeLogin(values.otp, false);
     } catch (error) {
-      if (error instanceof ApiError && error.errorType === "active_session_exists") {
+      if (
+        error instanceof ApiError &&
+        error.errorType === "active_session_exists"
+      ) {
         setSessionConflict({ message: error.message, hint: error.hint });
         return;
       }

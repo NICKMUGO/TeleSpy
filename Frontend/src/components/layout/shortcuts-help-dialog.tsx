@@ -15,7 +15,7 @@ interface ShortcutsHelpDialogProps {
 }
 
 const SHORTCUTS: { keys: string[]; description: string }[] = [
-  { keys: ["Ctrl", "K"], description: "Open the command palette" },
+  { keys: ["Ctrl", "K"], description: "Search people, extensions and pages" },
   { keys: ["Ctrl", "B"], description: "Toggle the sidebar" },
   { keys: ["Ctrl", ","], description: "Open display settings" },
   { keys: ["?"], description: "Open this shortcuts list" },

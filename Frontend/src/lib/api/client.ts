@@ -51,7 +51,7 @@ async function refreshAccessToken(): Promise<string | null> {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
   /** Skip attaching Authorization — only /auth/login and /auth/verify-otp. */
@@ -129,7 +129,9 @@ export async function apiRequest<T>(
       // worth telling the person why they're being dropped, not just
       // silently bouncing them to /login like a normal expiry.
       if (error.errorType === "session_superseded") {
-        toast.error("Signed out — this account was signed in from another location.");
+        toast.error(
+          "Signed out — this account was signed in from another location.",
+        );
       }
       useSession.getState().clear();
     }

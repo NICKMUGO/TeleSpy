@@ -1,5 +1,6 @@
-// Call rates (Admin only): the local (Kenyan) peak/off-peak tariff and the
-// per-country international rate table — both editable at runtime so a
+// Call rates (Admin only): the local (Kenyan) peak/off-peak tariff, the
+// contract discount per call type, the line's fixed monthly charge and its
+// taxes, and the per-country international rate table — both editable at runtime so a
 // Safaricom pricing change doesn't require a code deploy. Mirrors
 // Backend/api/call_rates.py 1:1. Actual billing still happens in
 // ML/training/billing.py, which reads these same tables.
@@ -42,6 +43,15 @@ public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : Con
         return (el.GetDouble(), null);
     }
 
+    /// <summary>Same contract as ReadPositiveNumber, for a percentage: any
+    /// number from 0 to 100 inclusive.</summary>
+    private static (double? Value, string? InvalidField) ReadPercentage(Dictionary<string, JsonElement> data, string field)
+    {
+        if (!data.TryGetValue(field, out var el)) return (null, null);
+        if (el.ValueKind != JsonValueKind.Number || el.GetDouble() is < 0 or > 100) return (null, field);
+        return (el.GetDouble(), null);
+    }
+
     [HttpGet("/call-rates/local")]
     [RoleIdRequired("admin")]
     public async Task<IActionResult> GetLocal()
@@ -77,6 +87,65 @@ public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : Con
                 "Pass a positive KES/minute figure.");
         }
 
+        // Discounts and tax rates: percentages, 0-100.
+        var percentages = new Dictionary<string, double?>();
+        foreach (var field in new[]
+                 {
+                     "discount_on_net_peak_pct", "discount_on_net_off_peak_pct", "discount_off_net_peak_pct",
+                     "discount_off_net_off_peak_pct", "discount_international_pct", "excise_rate_pct", "vat_rate_pct",
+                 })
+        {
+            var (value, invalid) = ReadPercentage(data, field);
+            if (invalid is not null)
+            {
+                return Error("validation_error", $"{invalid} must be a percentage between 0 and 100.", 422, invalid,
+                    "Pass a number from 0 to 100, e.g. 54 for a 54% discount.");
+            }
+            percentages[field] = value;
+        }
+        // The fixed monthly charge may be 0 (no rental), but not negative.
+        double? fixedMonthlyCharge = null;
+        if (data.TryGetValue("fixed_monthly_charge_kes", out var fixedEl))
+        {
+            if (fixedEl.ValueKind != JsonValueKind.Number || fixedEl.GetDouble() < 0)
+            {
+                return Error("validation_error", "fixed_monthly_charge_kes must be zero or a positive number.", 422,
+                    "fixed_monthly_charge_kes", "Pass the monthly rental before tax, in KES.");
+            }
+            fixedMonthlyCharge = fixedEl.GetDouble();
+        }
+
+        // The home network: a display name, and its number prefixes as a
+        // comma-separated list of 3-digit prefixes or ranges of them.
+        string? homeNetworkName = null;
+        if (data.TryGetValue("home_network_name", out var networkEl))
+        {
+            homeNetworkName = networkEl.ValueKind == JsonValueKind.String ? networkEl.GetString()?.Trim() : null;
+            if (string.IsNullOrEmpty(homeNetworkName) || homeNetworkName.Length > 60)
+            {
+                return Error("validation_error", "home_network_name must be 1 to 60 characters.", 422,
+                    "home_network_name", "The telco the organisation's line is with, e.g. Safaricom.");
+            }
+        }
+        string? onNetPrefixes = null;
+        if (data.TryGetValue("on_net_prefixes", out var prefixesEl))
+        {
+            var raw = prefixesEl.ValueKind == JsonValueKind.String ? prefixesEl.GetString() ?? "" : "";
+            var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var wellFormed = parts.Length > 0 && parts.All(part =>
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(part, @"^(\d{3})(?:\s*-\s*(\d{3}))?$");
+                return match.Success && (!match.Groups[2].Success ||
+                    int.Parse(match.Groups[1].Value) <= int.Parse(match.Groups[2].Value));
+            });
+            onNetPrefixes = string.Join(", ", parts);
+            if (!wellFormed || onNetPrefixes.Length > 500)
+            {
+                return Error("validation_error", "on_net_prefixes must be a comma-separated list of 3-digit prefixes or ranges.", 422,
+                    "on_net_prefixes", "e.g. 700-729, 740-743, 748 — the first three digits of a number after its leading 0.");
+            }
+        }
+
         var peakStartHour = settings.PeakStartHour;
         var peakEndHour = settings.PeakEndHour;
         if (data.TryGetValue("peak_start_hour", out var startEl))
@@ -106,6 +175,16 @@ public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : Con
         if (peakRate is not null) settings.PeakRateKes = peakRate.Value;
         if (offPeakRate is not null) settings.OffPeakRateKes = offPeakRate.Value;
         if (defaultIntlRate is not null) settings.DefaultInternationalRateKes = defaultIntlRate.Value;
+        settings.DiscountOnNetPeakPct = percentages["discount_on_net_peak_pct"] ?? settings.DiscountOnNetPeakPct;
+        settings.DiscountOnNetOffPeakPct = percentages["discount_on_net_off_peak_pct"] ?? settings.DiscountOnNetOffPeakPct;
+        settings.DiscountOffNetPeakPct = percentages["discount_off_net_peak_pct"] ?? settings.DiscountOffNetPeakPct;
+        settings.DiscountOffNetOffPeakPct = percentages["discount_off_net_off_peak_pct"] ?? settings.DiscountOffNetOffPeakPct;
+        settings.DiscountInternationalPct = percentages["discount_international_pct"] ?? settings.DiscountInternationalPct;
+        settings.ExciseRatePct = percentages["excise_rate_pct"] ?? settings.ExciseRatePct;
+        settings.VatRatePct = percentages["vat_rate_pct"] ?? settings.VatRatePct;
+        if (fixedMonthlyCharge is not null) settings.FixedMonthlyChargeKes = fixedMonthlyCharge.Value;
+        if (homeNetworkName is not null) settings.HomeNetworkName = homeNetworkName;
+        if (onNetPrefixes is not null) settings.OnNetPrefixes = onNetPrefixes;
         settings.PeakStartHour = peakStartHour;
         settings.PeakEndHour = peakEndHour;
         settings.UpdatedAt = Clock.UtcNow();

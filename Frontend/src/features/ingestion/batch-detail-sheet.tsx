@@ -41,7 +41,10 @@ export function BatchDetailSheet({
   const sourceFile = String(entry.meta.source_file ?? "manual upload");
 
   const stages = [
-    { label: "Batch received", detail: `${ingested.toLocaleString("en-KE")} rows` },
+    {
+      label: "Batch received",
+      detail: `${ingested.toLocaleString("en-KE")} rows`,
+    },
     { label: "Classified", detail: "Internal / External / International" },
     {
       label: "Attributed to SIM allocation",

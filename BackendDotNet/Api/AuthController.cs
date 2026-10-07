@@ -143,6 +143,10 @@ public class AuthController(
                 timestamp = NowIso(),
             });
         }
+        if (await EmployeeNames.IsTakenAsync(db, fullName))
+        {
+            return StatusCode(409, EmployeeNames.DuplicateError(Request));
+        }
 
         if (data.AcceptTerms != true)
         {

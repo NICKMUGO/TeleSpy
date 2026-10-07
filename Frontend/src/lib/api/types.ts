@@ -41,6 +41,15 @@ export interface Employee {
   total_cost_kes?: number; // current month — Admin/self/own-manager only
 }
 
+/** One line of the company phone directory (GET /directory) — visible to
+ * every signed-in role. */
+export interface DirectoryEntry {
+  id: string;
+  full_name: string;
+  extension_code: string;
+  department: string | null;
+}
+
 export interface SimCard {
   id: string;
   provider: string | null;
@@ -65,6 +74,12 @@ export interface UsageEvent {
   attribution_state: string;
   call_classification: "Internal" | "External" | "International" | "Unknown";
   excluded_from_anomaly_detection: boolean;
+}
+
+/** One calendar month ("YYYY-MM") that has usage events, and how many. */
+export interface UsageMonth {
+  month: string;
+  count: number;
 }
 
 export interface UsageSummary {
@@ -105,7 +120,18 @@ export interface ForecastResult {
 
 export interface DepartmentForecast {
   department_id: string;
-  historical_monthly_spend: { month: string; total_cost: number }[];
+  department_name: string;
+  /** Everyone in the department — the forecast is their combined spend. */
+  employee_count: number;
+  /** Department totals per month. `days_covered` < `days_in_month` marks a
+   * month the call data only partly covers. */
+  historical_monthly_spend: {
+    month: string;
+    total_cost: number;
+    employees: number;
+    days_covered: number;
+    days_in_month: number;
+  }[];
   budget_ceiling: number | null;
   forecast: ForecastResult | null;
 }
@@ -116,7 +142,52 @@ export interface LocalCallRateSettings {
   peak_start_hour: number; // 0-23, inclusive
   peak_end_hour: number; // 0-23, exclusive
   default_international_rate_kes: number;
+  /** The telco the organisation's line is with, e.g. "Safaricom". */
+  home_network_name: string;
+  /** Number prefixes on that network: 3-digit prefixes or ranges, comma-
+   * separated, e.g. "700-729, 748". A call to one is "on-net". */
+  on_net_prefixes: string;
+  /** Contract discount per call type, 0-100. "On-net" = to a number on the
+   * home network; "off-net" = any other Kenyan network or fixed line. */
+  discount_on_net_peak_pct: number;
+  discount_on_net_off_peak_pct: number;
+  discount_off_net_peak_pct: number;
+  discount_off_net_off_peak_pct: number;
+  discount_international_pct: number;
+  /** The line's fixed monthly rental, before tax. */
+  fixed_monthly_charge_kes: number;
+  /** Read-only: the rental with excise and VAT added. */
+  fixed_monthly_charge_with_tax_kes: number;
+  excise_rate_pct: number;
+  vat_rate_pct: number;
   updated_at: string;
+}
+
+/** One month of GET /reconciliation: the bill rebuilt from the app's own
+ * records beside the telco's invoice total, if one has been entered. */
+export interface ReconciliationMonth {
+  month: string;
+  days_covered: number;
+  days_in_month: number;
+  employees: number;
+  calls_list_cost_kes: number;
+  discount_kes: number;
+  calls_cost_kes: number;
+  fixed_charge_kes: number;
+  /** Null for a month with an invoice entered but no call costs yet. */
+  rebuilt_total_kes: number | null;
+  invoice_total_kes: number | null;
+  note: string | null;
+  difference_kes: number | null;
+  difference_pct: number | null;
+}
+
+export interface Reconciliation {
+  months: ReconciliationMonth[];
+  fixed_monthly_charge_kes: number;
+  fixed_monthly_charge_with_tax_kes: number;
+  excise_rate_pct: number;
+  vat_rate_pct: number;
 }
 
 export interface InternationalCallRate {

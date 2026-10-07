@@ -58,6 +58,10 @@ public class SettingsController(TeleSpyDbContext db, IViewerContext viewerContex
         var user = await LoadFullUserAsync(current!.UserId) ?? current;
         if (!string.IsNullOrEmpty(data.FullName) && user.Employee is not null)
         {
+            if (await EmployeeNames.IsTakenAsync(db, data.FullName, exceptEmployeeId: user.Employee.EmployeeId))
+            {
+                return StatusCode(409, EmployeeNames.DuplicateError(Request));
+            }
             user.Employee.FullName = data.FullName.Trim();
         }
         await db.SaveChangesAsync();

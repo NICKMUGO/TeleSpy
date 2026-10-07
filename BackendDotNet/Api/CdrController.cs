@@ -45,7 +45,7 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
         var records = data.Records ?? [];
         var sourceFile = data.SourceFile;
 
-        int ingested = 0, attributed = 0, unattributed = 0;
+        int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0;
 
         // One transaction for the whole batch, mirroring Flask/SQLAlchemy's
         // single db.session.commit() at the end of the loop (with
@@ -59,6 +59,14 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
             var orig = row.Orig ?? "";
             var dest = row.Dest ?? "";
             var durationSec = row.DurationSec ?? 0;
+            // Duration runs from pickup to hang-up, so zero means the call
+            // was never answered. Those cost nothing and tell the analytics
+            // nothing — they are counted and dropped, not stored.
+            if (durationSec <= 0)
+            {
+                skippedUnanswered++;
+                continue;
+            }
             var durationMinutes = durationSec / 60.0;
             var callClassification = CallClassification.ClassifyCall(orig, dest);
             var excluded = CallClassification.IsExcludedFromAnomalyDetection(orig, dest, callClassification);
@@ -113,13 +121,16 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
                 ["ingested"] = ingested,
                 ["attributed"] = attributed,
                 ["unattributed"] = unattributed,
+                ["skipped_unanswered"] = skippedUnanswered,
                 ["source_file"] = sourceFile,
             });
         await transaction.CommitAsync();
         return StatusCode(201, new
         {
-            data = new { ingested, attributed, unattributed },
-            message = "CDR batch ingested.",
+            data = new { ingested, attributed, unattributed, skipped_unanswered = skippedUnanswered },
+            message = skippedUnanswered > 0
+                ? $"CDR batch ingested. {skippedUnanswered} unanswered call(s) with zero duration were skipped."
+                : "CDR batch ingested.",
         });
     }
 }
@@ -135,7 +146,7 @@ public class UsageController(TeleSpyDbContext db, IViewerContext viewerContext) 
     {
         var viewer = await viewerContext.LoadedUserAsync();
         var (page, limit) = Pagination.PaginateArgs(Request);
-        var query = db.UsageEvents.AsQueryable();
+        var query = ScopedToViewer(viewer!);
 
         var classification = Request.Query["classification"].ToString();
         if (!string.IsNullOrEmpty(classification))
@@ -147,8 +158,55 @@ public class UsageController(TeleSpyDbContext db, IViewerContext viewerContext) 
         {
             query = query.Where(e => e.MsisdnPbx == extension || e.Destination == extension);
         }
+        // ?search= — calls whose extension or destination contains the text.
+        var search = Request.Query["search"].ToString().Trim();
+        if (search.Length > 0)
+        {
+            query = query.Where(e => e.MsisdnPbx.Contains(search) || e.Destination.Contains(search));
+        }
+        // ?month=YYYY-MM — only calls made in that calendar month. Anything
+        // that isn't a month is ignored, like an empty filter.
+        if (DateTime.TryParseExact(Request.Query["month"].ToString(), "yyyy-MM", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var monthStart))
+        {
+            var monthEnd = monthStart.AddMonths(1);
+            query = query.Where(e => e.OccuredAt >= monthStart && e.OccuredAt < monthEnd);
+        }
 
-        if (viewer!.Role!.RoleName == TeleSpy.Role.Manager)
+        var total = await query.CountAsync();
+        var rows = await query.OrderByDescending(e => e.OccuredAt).ThenBy(e => e.EventId).Skip((page - 1) * limit).Take(limit).ToListAsync();
+        return Ok(new
+        {
+            data = rows.Select(r => r.ToDict()).ToList(),
+            meta = Pagination.PaginateMeta(page, limit, total),
+        });
+    }
+
+    /// <summary>GET /usage/months — the calendar months that have usage
+    /// events (as "YYYY-MM", newest first) with how many each holds, so the
+    /// usage list can offer a month to filter by.</summary>
+    [HttpGet("/usage/months")]
+    [RoleIdRequired("admin", "manager")]
+    public async Task<IActionResult> Months()
+    {
+        var viewer = await viewerContext.LoadedUserAsync();
+        var months = await ScopedToViewer(viewer!)
+            .GroupBy(e => new { e.OccuredAt.Year, e.OccuredAt.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Count = g.Count() })
+            .OrderByDescending(m => m.Year).ThenByDescending(m => m.Month)
+            .ToListAsync();
+        return Ok(new
+        {
+            data = months.Select(m => new { month = $"{m.Year:D4}-{m.Month:D2}", count = m.Count }).ToList(),
+        });
+    }
+
+    /// <summary>Every usage event an Admin may see; a Manager only sees
+    /// events attributed to their own department's employees.</summary>
+    private IQueryable<UsageEvent> ScopedToViewer(User viewer)
+    {
+        var query = db.UsageEvents.AsQueryable();
+        if (viewer.Role!.RoleName == TeleSpy.Role.Manager)
         {
             var deptId = viewerContext.ViewerDepartmentId(viewer);
             var allocationIds = db.SimAllocations.Join(db.Employees, a => a.EmployeeId, e => e.EmployeeId, (a, e) => new { a.AllocationId, e.DepartmentId })
@@ -156,13 +214,6 @@ public class UsageController(TeleSpyDbContext db, IViewerContext viewerContext) 
             // .Contains(<empty subquery>) correctly matches zero rows.
             query = query.Where(e => e.AllocationId != null && allocationIds.Contains(e.AllocationId));
         }
-
-        var total = await query.CountAsync();
-        var rows = await query.OrderByDescending(e => e.OccuredAt).Skip((page - 1) * limit).Take(limit).ToListAsync();
-        return Ok(new
-        {
-            data = rows.Select(r => r.ToDict()).ToList(),
-            meta = Pagination.PaginateMeta(page, limit, total),
-        });
+        return query;
     }
 }

@@ -62,7 +62,9 @@ export default function IngestionPage() {
 
   const batches = useMemo(
     () =>
-      (audit.data?.data ?? []).filter((entry) => entry.action === "cdr_ingested"),
+      (audit.data?.data ?? []).filter(
+        (entry) => entry.action === "cdr_ingested",
+      ),
     [audit.data],
   );
 
@@ -92,7 +94,9 @@ export default function IngestionPage() {
       });
       setResult(response.data);
       setStage("done");
-      toast.success(`Ingested ${response.data.ingested} record(s).`);
+      toast.success(
+        response.message ?? `Ingested ${response.data.ingested} record(s).`,
+      );
       audit.refetch();
     } catch (error) {
       setStage("idle");
@@ -364,7 +368,9 @@ export default function IngestionPage() {
                         {entry.actor_role ?? "system"}
                       </td>
                       <td className="font-tabular px-4 py-2.5 text-end">
-                        {Number(entry.meta.ingested ?? 0).toLocaleString("en-KE")}
+                        {Number(entry.meta.ingested ?? 0).toLocaleString(
+                          "en-KE",
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-end">
                         {Number(entry.meta.unattributed ?? 0) > 0 ? (

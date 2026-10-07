@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDepartmentForecast, useDepartments } from "@/lib/api/hooks";
+import { monthLabel } from "@/lib/format";
 
 function kes(value: number | null | undefined) {
   if (value === null || value === undefined) return "—";
@@ -44,7 +45,10 @@ export default function ForecastsPage() {
     if (!forecast.data) return [];
     const points: SpendChartPoint[] =
       forecast.data.data.historical_monthly_spend.map((p) => ({
-        month: p.month,
+        // A month the call data only partly covers is labelled as such, so
+        // its smaller total doesn't read as a drop in spend.
+        month:
+          p.days_covered < p.days_in_month ? `${p.month} (partial)` : p.month,
         historical: p.total_cost,
       }));
     const f = forecast.data.data.forecast;
@@ -60,11 +64,19 @@ export default function ForecastsPage() {
     return points;
   }, [forecast.data]);
 
+  const detail = forecast.data?.data;
+  const employeeCount = detail?.employee_count ?? 0;
+  const forecastedCost = detail?.forecast?.forecasted_cost;
+  const partialMonths = (detail?.historical_monthly_spend ?? []).filter(
+    (p) => p.days_covered < p.days_in_month,
+  );
+  const staffLabel = `${employeeCount.toLocaleString("en-KE")} ${employeeCount === 1 ? "employee" : "employees"}`;
+
   return (
     <>
       <PageHeader
         title="Spend forecasts"
-        description="Historical monthly spend plus Prophet's next-month projection, per department."
+        description="Each department's total monthly call spend — every employee in it added together — and the projection for next month."
       />
       <div className="flex flex-col gap-4 p-6">
         <DropdownMenu>
@@ -100,18 +112,36 @@ export default function ForecastsPage() {
           />
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
-                label="Next month forecast"
-                value={kes(forecast.data.data.forecast?.forecasted_cost)}
+                label={
+                  detail?.forecast
+                    ? `Department forecast · ${monthLabel(detail.forecast.period)}`
+                    : "Department forecast"
+                }
+                value={kes(forecastedCost)}
+                hint={`Whole department · ${staffLabel} combined`}
               />
               <StatCard
-                label="Confidence range"
-                value={`${kes(forecast.data.data.forecast?.confidence_low)} – ${kes(forecast.data.data.forecast?.confidence_high)}`}
+                label="Likely range"
+                value={`${kes(detail?.forecast?.confidence_low)} – ${kes(detail?.forecast?.confidence_high)}`}
+                hint="Whole department, full month"
               />
               <StatCard
-                label="Budget ceiling"
-                value={kes(forecast.data.data.budget_ceiling)}
+                label="Average per employee"
+                value={kes(
+                  forecastedCost !== null &&
+                    forecastedCost !== undefined &&
+                    employeeCount > 0
+                    ? forecastedCost / employeeCount
+                    : null,
+                )}
+                hint={`Department forecast ÷ ${staffLabel}`}
+              />
+              <StatCard
+                label="Department budget"
+                value={kes(detail?.budget_ceiling)}
+                hint="Monthly ceiling for the whole department"
               />
             </div>
             <div className="border-border h-80 w-full rounded-lg border p-4">
@@ -120,6 +150,21 @@ export default function ForecastsPage() {
                 budgetCeiling={forecast.data.data.budget_ceiling}
               />
             </div>
+            <p className="text-muted-foreground text-sm">
+              Every figure is the {detail?.department_name ?? "department"}{" "}
+              department&rsquo;s total: the call costs of all {staffLabel} in it
+              added together, not one person&rsquo;s spend.
+              {partialMonths.length > 0
+                ? ` ${partialMonths
+                    .map(
+                      (p) =>
+                        `${monthLabel(p.month)} has call data for ${p.days_covered} of ${p.days_in_month} days`,
+                    )
+                    .join(
+                      "; ",
+                    )}, so those totals are lower than a full month. The forecast is for a full month.`
+                : ""}
+            </p>
           </>
         )}
       </div>

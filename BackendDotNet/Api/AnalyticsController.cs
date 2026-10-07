@@ -131,14 +131,42 @@ public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerConte
         }
 
         var employeeIds = dept.Employees.Select(e => e.EmployeeId).ToList();
+        // Department totals: every employee's usage_summaries for a month
+        // added together, plus how many employees that total is made of.
         var history = new SortedDictionary<string, double>(StringComparer.Ordinal);
+        var employeesWithSpend = new Dictionary<string, int>();
         if (employeeIds.Count > 0)
         {
             var summaries = await db.UsageSummaries.Where(s => employeeIds.Contains(s.EmployeeId)).ToListAsync();
             foreach (var summary in summaries)
             {
                 history[summary.Month] = Math.Round(history.GetValueOrDefault(summary.Month) + summary.TotalCost, 2);
+                employeesWithSpend[summary.Month] = employeesWithSpend.GetValueOrDefault(summary.Month) + 1;
             }
+        }
+
+        // The days the call data spans, so a month it only partly covers
+        // (the first month of data, the month still in progress) can be
+        // shown as partial rather than as a drop in spend — the same
+        // partial-month rule ML/training/forecasting.py scales by.
+        DateTime? dataFrom = null, dataTo = null;
+        if (await db.UsageEvents.AnyAsync())
+        {
+            dataFrom = await db.UsageEvents.MinAsync(e => e.OccuredAt);
+            dataTo = await db.UsageEvents.MaxAsync(e => e.OccuredAt);
+        }
+        (int Covered, int InMonth) DaysCovered(string month)
+        {
+            if (!DateTime.TryParseExact(month, "yyyy-MM", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var first))
+            {
+                return (0, 0);
+            }
+            var inMonth = DateTime.DaysInMonth(first.Year, first.Month);
+            if (dataFrom is null || dataTo is null) return (inMonth, inMonth);
+            var start = dataFrom.Value.Year == first.Year && dataFrom.Value.Month == first.Month ? dataFrom.Value.Day : 1;
+            var end = dataTo.Value.Year == first.Year && dataTo.Value.Month == first.Month ? dataTo.Value.Day : inMonth;
+            return (Math.Max(0, end - start + 1), inMonth);
         }
 
         var stored = await db.ForecastResults.Where(f => f.DepartmentId == departmentId)
@@ -149,7 +177,20 @@ public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerConte
             ["data"] = new Dictionary<string, object?>
             {
                 ["department_id"] = departmentId,
-                ["historical_monthly_spend"] = history.Select(kv => new { month = kv.Key, total_cost = kv.Value }).ToList(),
+                ["department_name"] = dept.Name,
+                ["employee_count"] = employeeIds.Count,
+                ["historical_monthly_spend"] = history.Select(kv =>
+                {
+                    var (covered, inMonth) = DaysCovered(kv.Key);
+                    return new
+                    {
+                        month = kv.Key,
+                        total_cost = kv.Value,
+                        employees = employeesWithSpend.GetValueOrDefault(kv.Key),
+                        days_covered = covered,
+                        days_in_month = inMonth,
+                    };
+                }).ToList(),
                 ["budget_ceiling"] = dept.BudgetCeiling,
                 ["forecast"] = stored?.ToDict(),
             },

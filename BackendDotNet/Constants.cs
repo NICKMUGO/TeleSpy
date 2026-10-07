@@ -37,12 +37,14 @@ public static class Constants
     // roles.call_limit_kshs by EnsureDefaultRoles() at startup. From then on
     // the database row is the source of truth (editable via PUT /roles/<id>),
     // these constants are only the bootstrap default. Admin has no personal
-    // ceiling (null).
+    // ceiling (null). Sized against call costs *after* the contract
+    // discount (roughly half of list price), which is what usage_summaries
+    // now holds.
     public static readonly IReadOnlyDictionary<string, double?> DefaultCallLimitKes = new Dictionary<string, double?>
     {
         [Role.Admin] = null,
-        [Role.Manager] = 2000,
-        [Role.Employee] = 1000,
+        [Role.Manager] = 1000,
+        [Role.Employee] = 500,
     };
 
     // Password Bank: a new password may not match the current password or any
@@ -108,12 +110,41 @@ public static class BillingConstants
     // seeds roles.call_limit_kshs.
     public const string BillingSettingsId = "default";
 
-    // Safaricom's published local (on-net + off-net) tariff.
-    public const double DefaultPeakRateKes = 4.87;
-    public const double DefaultOffPeakRateKes = 2.50;
+    // Local (Kenyan) list rates per minute, tax-inclusive — taken from the
+    // organisation's itemised Safaricom E1 bill: KSh 3.50 (peak) and
+    // KSh 1.80 (off-peak) before tax, times 1.334 (15% excise, then 16%
+    // VAT). The contract discount below comes off these.
+    public const double DefaultPeakRateKes = 4.67;
+    public const double DefaultOffPeakRateKes = 2.40;
     public const int DefaultPeakStartHour = 8;   // 08:00, inclusive
     public const int DefaultPeakEndHour = 22;    // 22:00, exclusive
     public const double DefaultInternationalRateKes = 40.0; // fallback for an unpriced country code
+
+    // Corporate discount, as a percentage off the list rate, per call type
+    // — the "0.54" discount lines on the Safaricom invoice. It applies to
+    // peak calls and to off-peak calls to other networks; Safaricom-to-
+    // Safaricom off-peak and international calls are billed at list price.
+    public const double DefaultDiscountOnNetPeakPct = 54.0;
+    public const double DefaultDiscountOnNetOffPeakPct = 0.0;
+    public const double DefaultDiscountOffNetPeakPct = 54.0;
+    public const double DefaultDiscountOffNetOffPeakPct = 54.0;
+    public const double DefaultDiscountInternationalPct = 0.0;
+
+    // The organisation's own telco ("home network") and the number
+    // prefixes that belong to it — the first three digits of a mobile
+    // number after its leading 0, singly or as ranges. A call to one of
+    // these is "on-net"; any other Kenyan number is "off-net". These are
+    // Safaricom's allocated ranges; an institution on another network sets
+    // its own in Settings.
+    public const string DefaultHomeNetworkName = "Safaricom";
+    public const string DefaultOnNetPrefixes = "700-729, 740-743, 745-746, 748, 757-759, 768-769, 790-799, 110-119";
+
+    // The E1 line's fixed monthly rental ("E1 Corporate Direct
+    // Connectivity"), before tax as the invoice states it, and the taxes
+    // the invoice adds on top: excise first, then VAT on the result.
+    public const double DefaultFixedMonthlyChargeKes = 26_086.96;
+    public const double DefaultExciseRatePct = 15.0;
+    public const double DefaultVatRatePct = 16.0;
 
     // Per-country KES/minute, sourced from
     // ML/training/International_Calling_Rates.pdf (Safaricom international

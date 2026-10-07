@@ -55,12 +55,33 @@ public class EmployeesController(
         }
 
         var total = await query.CountAsync();
-        var rows = await query.OrderBy(e => e.FullName).Skip((page - 1) * limit).Take(limit).ToListAsync();
+        var rows = await query.OrderBy(e => e.FullName).ThenBy(e => e.EmployeeId).Skip((page - 1) * limit).Take(limit).ToListAsync();
         return Ok(new
         {
             data = rows.Select(e => e.ToDict(viewer)).ToList(),
             meta = Pagination.PaginateMeta(page, limit, total),
         });
+    }
+
+    /// <summary>GET /directory — the company phone directory: every
+    /// employee who has an extension, with just their name, extension code
+    /// and department. Open to every signed-in role (Employee included),
+    /// and company-wide even for a Manager, so anyone can look up who is
+    /// on an extension — nothing beyond those three fields is exposed.</summary>
+    [HttpGet("/directory")]
+    public async Task<IActionResult> Directory()
+    {
+        var rows = await db.Employees.Where(e => e.ExtensionCode != null)
+            .OrderBy(e => e.FullName).ThenBy(e => e.EmployeeId)
+            .Select(e => new
+            {
+                id = e.EmployeeId,
+                full_name = e.FullName,
+                extension_code = e.ExtensionCode,
+                department = e.Department != null ? e.Department.Name : null,
+            })
+            .ToListAsync();
+        return Ok(new { data = rows });
     }
 
     [HttpPost("/employees")]
@@ -123,6 +144,10 @@ public class EmployeesController(
                 method = Request.Method,
                 timestamp = NowIso(),
             });
+        }
+        if (await EmployeeNames.IsTakenAsync(db, fullName))
+        {
+            return StatusCode(409, EmployeeNames.DuplicateError(Request));
         }
         if (!string.IsNullOrEmpty(departmentId) && await db.Departments.FindAsync(departmentId) is null)
         {
@@ -312,6 +337,10 @@ public class EmployeesController(
         if (data.TryGetValue("full_name", out var fullNameEl) && fullNameEl.ValueKind == JsonValueKind.String &&
             fullNameEl.GetString() is { Length: > 0 } fullNameVal)
         {
+            if (await EmployeeNames.IsTakenAsync(db, fullNameVal, exceptEmployeeId: employee.EmployeeId))
+            {
+                return StatusCode(409, EmployeeNames.DuplicateError(Request));
+            }
             employee.FullName = fullNameVal.Trim();
         }
         if (data.TryGetValue("staff_number", out var staffNumberEl) && staffNumberEl.ValueKind == JsonValueKind.String &&

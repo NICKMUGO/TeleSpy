@@ -9,21 +9,46 @@ import type {
   AuditLogEntry,
   Department,
   DepartmentForecast,
+  DirectoryEntry,
   Employee,
   InternationalCallRate,
   LocalCallRateSettings,
   OverLimitEntry,
+  Reconciliation,
   RoleRecord,
   SimCard,
   TutorialProgress,
   UsageEvent,
+  UsageMonth,
   UsageProfile,
   UsageSummary,
 } from "@/lib/api/types";
 
+// The API pages its lists (25 rows by default, 100 at most — see
+// Pagination in BackendDotNet/Core/Responses.cs). Screens that show or look
+// up the whole list (every employee, every SIM) use this to walk all the
+// pages and hand back one combined list.
+const ALL_PAGES_LIMIT = 100;
+
+async function fetchAllPages<T>(path: string): Promise<ApiEnvelope<T[]>> {
+  const first = await apiRequest<ApiEnvelope<T[]>>(path, {
+    query: { page: 1, limit: ALL_PAGES_LIMIT },
+  });
+  const pages = first.meta?.pages ?? 1;
+  if (pages <= 1) return first;
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      apiRequest<ApiEnvelope<T[]>>(path, {
+        query: { page: i + 2, limit: ALL_PAGES_LIMIT },
+      }),
+    ),
+  );
+  return { ...first, data: [first, ...rest].flatMap((page) => page.data) };
+}
+
 // --- Employees --------------------------------------------------------
 export const employeesApi = {
-  list: () => apiRequest<ApiEnvelope<Employee[]>>("/employees"),
+  list: () => fetchAllPages<Employee>("/employees"),
   get: (id: string) => apiRequest<ApiEnvelope<Employee>>(`/employees/${id}`),
   create: (body: {
     email: string;
@@ -49,6 +74,11 @@ export const employeesApi = {
     }),
   remove: (id: string) =>
     apiRequest<ApiEnvelope<null>>(`/employees/${id}`, { method: "DELETE" }),
+};
+
+// --- Directory (name + extension lookup, every role) ---------------------
+export const directoryApi = {
+  list: () => apiRequest<ApiEnvelope<DirectoryEntry[]>>("/directory"),
 };
 
 // --- Departments --------------------------------------------------------
@@ -89,7 +119,7 @@ export const departmentsApi = {
 
 // --- SIMs --------------------------------------------------------
 export const simsApi = {
-  list: () => apiRequest<ApiEnvelope<SimCard[]>>("/sims"),
+  list: () => fetchAllPages<SimCard>("/sims"),
   create: (body: {
     iccid: string;
     msisdn: string;
@@ -143,6 +173,16 @@ export const callRatesApi = {
       peak_start_hour: number;
       peak_end_hour: number;
       default_international_rate_kes: number;
+      home_network_name: string;
+      on_net_prefixes: string;
+      discount_on_net_peak_pct: number;
+      discount_on_net_off_peak_pct: number;
+      discount_off_net_peak_pct: number;
+      discount_off_net_off_peak_pct: number;
+      discount_international_pct: number;
+      fixed_monthly_charge_kes: number;
+      excise_rate_pct: number;
+      vat_rate_pct: number;
     }>,
   ) =>
     apiRequest<ApiEnvelope<LocalCallRateSettings>>("/call-rates/local", {
@@ -163,14 +203,31 @@ export const callRatesApi = {
     ),
 };
 
+// --- Bill reconciliation (Admin) -----------------------------------------
+export const reconciliationApi = {
+  get: () => apiRequest<ApiEnvelope<Reconciliation>>("/reconciliation"),
+  /** `invoice_total_kes: null` clears the month's invoice. */
+  setInvoice: (
+    month: string,
+    body: { invoice_total_kes: number | null; note?: string },
+  ) =>
+    apiRequest<ApiEnvelope<unknown>>(`/reconciliation/${month}`, {
+      method: "PUT",
+      body,
+    }),
+};
+
 // --- Usage --------------------------------------------------------
 export const usageApi = {
   list: (params?: {
     classification?: string;
     extension?: string;
+    search?: string;
+    month?: string;
     page?: number;
     limit?: number;
   }) => apiRequest<ApiEnvelope<UsageEvent[]>>("/usage", { query: params }),
+  months: () => apiRequest<ApiEnvelope<UsageMonth[]>>("/usage/months"),
   mine: (params?: { page?: number; limit?: number }) =>
     apiRequest<
       ApiEnvelope<{
@@ -275,9 +332,10 @@ export const cdrApi = {
 
 // --- Invoices --------------------------------------------------------
 export const invoicesApi = {
-  sendMonthly: () =>
-    apiRequest<ApiEnvelope<{ month: string | null; sent: number }>>(
-      "/invoices/send-monthly",
-      { method: "POST" },
-    ),
+  /** Emails an invoice to each employee over their limit in `month`
+   * (the latest billed month when omitted), for the amount over. */
+  sendMonthly: (month?: string) =>
+    apiRequest<
+      ApiEnvelope<{ month: string | null; sent: number; over_limit: number }>
+    >("/invoices/send-monthly", { method: "POST", body: { month } }),
 };

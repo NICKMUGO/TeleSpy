@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   analyticsApi,
   auditApi,
@@ -8,8 +13,10 @@ import {
   callRatesApi,
   cdrApi,
   departmentsApi,
+  directoryApi,
   employeesApi,
   invoicesApi,
+  reconciliationApi,
   rolesApi,
   simsApi,
   telcoPlansApi,
@@ -23,11 +30,13 @@ import {
 
 export const queryKeys = {
   employees: ["employees"] as const,
+  directory: ["directory"] as const,
   departments: ["departments"] as const,
   departmentSpend: (id: string) => ["departments", id, "spend"] as const,
   sims: ["sims"] as const,
   telcoPlans: ["telco-plans"] as const,
   usage: (params?: Record<string, unknown>) => ["usage", params] as const,
+  usageMonths: ["usage", "months"] as const,
   myUsage: ["me", "usage"] as const,
   anomalies: (resolved?: boolean) =>
     ["analytics", "anomalies", resolved] as const,
@@ -35,6 +44,7 @@ export const queryKeys = {
   usageSummary: (month?: string) =>
     ["analytics", "usage-summary", month] as const,
   forecast: (departmentId: string) => ["forecast", departmentId] as const,
+  reconciliation: ["reconciliation"] as const,
   overLimit: (month?: string) => ["budgets", "over-limit", month] as const,
   roles: ["roles"] as const,
   audit: ["audit"] as const,
@@ -42,6 +52,18 @@ export const queryKeys = {
   localCallRate: ["call-rates", "local"] as const,
   internationalCallRates: ["call-rates", "international"] as const,
 };
+
+/** The name + extension directory behind the Ctrl+K search. Only fetched
+ * once it's wanted (`enabled`), then kept for a few minutes — it changes
+ * rarely, and reopening the search should be instant. */
+export function useDirectory(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.directory,
+    queryFn: directoryApi.list,
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
+}
 
 export function useEmployees() {
   return useQuery({
@@ -60,8 +82,10 @@ export function useUpdateEmployee() {
       id: string;
       body: Parameters<typeof employeesApi.update>[1];
     }) => employeesApi.update(id, body),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.employees }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.employees });
+      queryClient.invalidateQueries({ queryKey: queryKeys.directory });
+    },
   });
 }
 
@@ -86,6 +110,21 @@ export function useDepartmentSpend(id: string) {
     queryKey: queryKeys.departmentSpend(id),
     queryFn: () => departmentsApi.spend(id),
     enabled: !!id,
+  });
+}
+
+export function useUpdateDepartment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: Parameters<typeof departmentsApi.update>[1];
+    }) => departmentsApi.update(id, body),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.departments }),
   });
 }
 
@@ -136,12 +175,24 @@ export function useCreateSim() {
 export function useUsage(params?: {
   classification?: string;
   extension?: string;
+  search?: string;
+  month?: string;
   page?: number;
   limit?: number;
 }) {
   return useQuery({
     queryKey: queryKeys.usage(params),
     queryFn: () => usageApi.list(params),
+    // Keep the current page on screen while the next one loads, instead of
+    // dropping back to the loading skeleton on every page change.
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useUsageMonths() {
+  return useQuery({
+    queryKey: queryKeys.usageMonths,
+    queryFn: usageApi.months,
   });
 }
 
@@ -227,8 +278,36 @@ export function useUpdateLocalCallRate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: callRatesApi.updateLocal,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.localCallRate });
+      // The fixed charge and tax rates feed the rebuilt bill.
+      queryClient.invalidateQueries({ queryKey: queryKeys.reconciliation });
+    },
+  });
+}
+
+export function useReconciliation() {
+  return useQuery({
+    queryKey: queryKeys.reconciliation,
+    queryFn: reconciliationApi.get,
+  });
+}
+
+export function useSetMonthlyInvoice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      month,
+      invoiceTotalKes,
+    }: {
+      month: string;
+      invoiceTotalKes: number | null;
+    }) =>
+      reconciliationApi.setInvoice(month, {
+        invoice_total_kes: invoiceTotalKes,
+      }),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.localCallRate }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.reconciliation }),
   });
 }
 

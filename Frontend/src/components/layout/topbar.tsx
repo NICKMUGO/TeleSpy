@@ -46,7 +46,7 @@ export function Topbar({
           size="icon-sm"
           onClick={onOpenCommandPalette}
           className="sm:hidden"
-          aria-label="Open command palette"
+          aria-label="Search people, extensions and pages"
         >
           <Search aria-hidden="true" />
         </Button>

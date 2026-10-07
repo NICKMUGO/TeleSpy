@@ -1,17 +1,18 @@
 import {
   Activity,
+  BookOpen,
   Building2,
   FileText,
   FingerprintPattern,
   LayoutDashboard,
   Lock,
+  Scale,
   Settings,
   Smartphone,
   TrendingUp,
   TriangleAlert,
   Upload,
   Users,
-  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/lib/api/types";
@@ -100,13 +101,19 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     items: [
+      { title: "Spend ledger", href: "/ledger", icon: BookOpen },
       {
-        title: "Budgets",
-        href: "/budgets",
-        icon: Wallet,
+        title: "Invoices",
+        href: "/invoices",
+        icon: FileText,
         roles: ["Admin", "Manager"],
       },
-      { title: "Invoices", href: "/invoices", icon: FileText },
+      {
+        title: "Bill reconciliation",
+        href: "/reconciliation",
+        icon: Scale,
+        roles: ["Admin"],
+      },
       {
         title: "Audit log",
         href: "/audit",

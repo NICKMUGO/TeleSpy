@@ -15,6 +15,17 @@ time (usage_events.computed_cost is left at 0) — this script is now the
 only place a KES figure gets attached to usage, and usage_summaries only
 reflects reality as of this script's last run, not live as calls come in.
 
+What a call costs: the list rate for its type and time of day (local
+peak/off-peak, or the per-country international rate), less the
+organisation's contract discount for that call type. The rates are
+tax-inclusive, so the result is what the call adds to the telco's invoice.
+Both figures are kept per employee-month — usage_summaries.list_cost
+(before discount) and usage_summaries.total_cost (after) — so the
+discount's value can be reported. The line's fixed monthly rental is a
+company-level charge and is not attributed to anyone here; the
+reconciliation view (GET /reconciliation) adds it when it rebuilds the
+month's bill.
+
 Classification mirrors Backend/services/call_classification.py exactly
 (same regexes): International call > External (Kenyan) call > Internal
 (bare 3-digit extension) > Unknown. Only External/International calls are
@@ -235,22 +246,62 @@ def classify_call(orig, dest) -> str:
 # cost 0.
 CHARGEABLE_CALL_CLASSES = frozenset({CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL})
 
-# Safaricom's published local (on-net + off-net) tariff: KSh 4.87/minute
-# 08:00-22:00, KSh 2.50/minute 22:00-08:00.
-DEFAULT_PEAK_RATE_KES_PER_MINUTE = 4.87
-DEFAULT_OFF_PEAK_RATE_KES_PER_MINUTE = 2.50
+# Local (Kenyan) list rates per minute, tax-inclusive — from the
+# organisation's itemised Safaricom E1 bill: KSh 3.50 (08:00-22:00) and
+# KSh 1.80 (22:00-08:00) before tax, times 1.334 (15% excise, then 16% VAT).
+DEFAULT_PEAK_RATE_KES_PER_MINUTE = 4.67
+DEFAULT_OFF_PEAK_RATE_KES_PER_MINUTE = 2.40
 DEFAULT_PEAK_START_HOUR = 8
 DEFAULT_PEAK_END_HOUR = 22
 # Fallback for an International destination whose country code isn't (yet)
 # in international_call_rates — e.g. an admin hasn't priced it yet.
 DEFAULT_INTERNATIONAL_RATE_KES_PER_MINUTE = 40.0
+# Contract discount per call type, as a percentage off the list rate (the
+# "0.54" discount lines on the invoice): peak calls and off-peak calls to
+# other networks are discounted; Safaricom-to-Safaricom off-peak and
+# international calls are billed at list price.
+DEFAULT_DISCOUNT_PCT = {
+    "discount_on_net_peak_pct": 54.0,
+    "discount_on_net_off_peak_pct": 0.0,
+    "discount_off_net_peak_pct": 54.0,
+    "discount_off_net_off_peak_pct": 54.0,
+    "discount_international_pct": 0.0,
+}
+
+# "On-net" = a call to another number on the organisation's own telco (its
+# "home network"); everything else Kenyan (other mobile networks, fixed
+# lines) is "off-net". Told apart by the number's prefix — its first three
+# digits after the leading 0 — against billing_settings.on_net_prefixes,
+# an admin-editable list of prefixes and ranges. The default is Safaricom's
+# allocated ranges. A number ported between networks keeps its old prefix,
+# so a few calls will land on the wrong side; the only pricing difference
+# between the two is the off-peak discount.
+DEFAULT_ON_NET_PREFIXES = "700-729, 740-743, 745-746, 748, 757-759, 768-769, 790-799, 110-119"
+
+
+def _parse_prefix_ranges(text) -> tuple[tuple[int, int], ...]:
+    """"700-729, 748" -> ((700, 729), (748, 748)). Anything unreadable in
+    the list is skipped rather than failing the whole billing run."""
+    ranges = []
+    for part in str(text or "").split(","):
+        low, _, high = part.strip().partition("-")
+        low, high = low.strip(), (high.strip() or low.strip())
+        if low.isdigit() and high.isdigit():
+            ranges.append((int(low), int(high)))
+    return tuple(ranges)
+
+
+NETWORK_ON_NET = "on_net"
+NETWORK_OFF_NET = "off_net"
 
 
 def _load_billing_settings(backend) -> dict:
     # Fetch the single billing_settings row (id = "default") from the DB.
     row = backend.execute(
         "SELECT peak_rate_kes, off_peak_rate_kes, peak_start_hour, peak_end_hour, "
-        "default_international_rate_kes FROM billing_settings WHERE id = ?",
+        "default_international_rate_kes, discount_on_net_peak_pct, discount_on_net_off_peak_pct, "
+        "discount_off_net_peak_pct, discount_off_net_off_peak_pct, discount_international_pct, "
+        "on_net_prefixes FROM billing_settings WHERE id = ?",
         ("default",),
     ).fetchone()
     # No row yet (bootstrap hasn't run) -> fall back to the hardcoded
@@ -263,9 +314,12 @@ def _load_billing_settings(backend) -> dict:
             "peak_start_hour": DEFAULT_PEAK_START_HOUR,
             "peak_end_hour": DEFAULT_PEAK_END_HOUR,
             "default_international_rate_kes": DEFAULT_INTERNATIONAL_RATE_KES_PER_MINUTE,
+            **DEFAULT_DISCOUNT_PCT,
+            "on_net_prefix_ranges": _parse_prefix_ranges(DEFAULT_ON_NET_PREFIXES),
         }
-    # Unpack the row's five columns into named variables.
-    peak_rate, off_peak_rate, peak_start_hour, peak_end_hour, default_intl_rate = row
+    # Unpack the rate/window columns, then the five discount percentages.
+    peak_rate, off_peak_rate, peak_start_hour, peak_end_hour, default_intl_rate = row[:5]
+    discounts = dict(zip(DEFAULT_DISCOUNT_PCT, (float(pct) for pct in row[5:10])))
     # Return them as a plain dict, coerced to the right Python types (the
     # DB driver may hand back Decimal/str depending on backend).
     return {
@@ -274,6 +328,8 @@ def _load_billing_settings(backend) -> dict:
         "peak_start_hour": int(peak_start_hour),
         "peak_end_hour": int(peak_end_hour),
         "default_international_rate_kes": float(default_intl_rate),
+        **discounts,
+        "on_net_prefix_ranges": _parse_prefix_ranges(row[10]),
     }
 
 
@@ -302,6 +358,25 @@ def _international_destination_digits(destination) -> str | None:
     # Strip any remaining IDD marker (+/00/000), leaving just the country
     # code + subscriber number.
     return _strip_idd_marker(digits)
+
+
+def _kenyan_network(destination, on_net_prefix_ranges) -> str:
+    """NETWORK_ON_NET if a Kenyan destination is on the home network (its
+    prefix falls in one of on_net_prefix_ranges), else NETWORK_OFF_NET. Works on whatever form the number was
+    dialled in — "90722...", "9000254722...", with or without a "#"."""
+    digits = _international_destination_digits(destination) or ""
+    # Full international form -> drop Kenya's country code; local form ->
+    # drop the leading 0. Either way what's left starts with the prefix.
+    if digits.startswith("254"):
+        digits = digits[3:]
+    elif digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) < 3 or not digits[:3].isdigit():
+        return NETWORK_OFF_NET
+    prefix = int(digits[:3])
+    if any(low <= prefix <= high for low, high in on_net_prefix_ranges):
+        return NETWORK_ON_NET
+    return NETWORK_OFF_NET
 
 
 def _lookup_international_rate(destination, intl_rates: dict[str, float], default_rate: float) -> float:
@@ -358,30 +433,48 @@ def _peak_offpeak_seconds(orig_time, duration_sec: float, peak_start_hour: int, 
     return peak, off_peak
 
 
-def compute_call_cost(call_classification: str, duration_minutes: float, destination, orig_time,
-                       billing_settings: dict, intl_rates: dict[str, float]) -> float:
-    """Cost for one raw CDR row, in KES (rounded to 2dp).
+def compute_call_costs(call_classification: str, duration_minutes: float, destination, orig_time,
+                       billing_settings: dict, intl_rates: dict[str, float]) -> tuple[float, float]:
+    """(list cost, cost after discount) for one raw CDR row, in KES, each
+    rounded to 2dp.
 
     International: duration * the per-country rate from
     international_call_rates (fallback to the configured default) — flat,
-    no time-of-day banding. External (local Kenyan, on-net and off-net
-    alike): Safaricom's peak/off-peak tariff from billing_settings, with
-    the part of the call inside the peak window charged at the peak rate
-    and the rest at the off-peak rate. No SIM-plan override here — see
-    module docstring."""
+    no time-of-day banding. External (local Kenyan): the peak/off-peak
+    list rates from billing_settings, with the part of the call inside the
+    peak window charged at the peak rate and the rest at the off-peak rate.
+    Each part then has the contract discount for its call type taken off —
+    on-net or off-net, peak or off-peak, or international. No SIM-plan
+    override here — see module docstring."""
     # Internal/Unknown calls are never charged.
     if call_classification not in CHARGEABLE_CALL_CLASSES:
-        return 0.0
+        return 0.0, 0.0
     if call_classification == CALL_CLASS_INTERNATIONAL:
         rate = _lookup_international_rate(destination, intl_rates, billing_settings["default_international_rate_kes"])
-        return round(float(duration_minutes) * rate, 2)
+        list_cost = float(duration_minutes) * rate
+        cost = list_cost * (1 - billing_settings["discount_international_pct"] / 100)
+        return round(list_cost, 2), round(cost, 2)
     peak_sec, off_peak_sec = _peak_offpeak_seconds(
         orig_time, float(duration_minutes) * 60,
         billing_settings["peak_start_hour"], billing_settings["peak_end_hour"],
     )
-    cost = (peak_sec / 60) * billing_settings["peak_rate_kes"] + (off_peak_sec / 60) * billing_settings["off_peak_rate_kes"]
+    peak_list = (peak_sec / 60) * billing_settings["peak_rate_kes"]
+    off_peak_list = (off_peak_sec / 60) * billing_settings["off_peak_rate_kes"]
+    # The discount depends on which network was called, as well as when.
+    network = _kenyan_network(destination, billing_settings["on_net_prefix_ranges"])
+    peak_discount = billing_settings[f"discount_{network}_peak_pct"] / 100
+    off_peak_discount = billing_settings[f"discount_{network}_off_peak_pct"] / 100
+    cost = peak_list * (1 - peak_discount) + off_peak_list * (1 - off_peak_discount)
     # Rounded to 2 decimal places (KES cents).
-    return round(cost, 2)
+    return round(peak_list + off_peak_list, 2), round(cost, 2)
+
+
+def compute_call_cost(call_classification: str, duration_minutes: float, destination, orig_time,
+                       billing_settings: dict, intl_rates: dict[str, float]) -> float:
+    """What one raw CDR row costs after the contract discount, in KES — the
+    second figure of compute_call_costs()."""
+    return compute_call_costs(call_classification, duration_minutes, destination, orig_time,
+                              billing_settings, intl_rates)[1]
 
 
 # --- Dataset -> usage_summaries -------------------------------------------
@@ -443,14 +536,17 @@ def _load_dataset(billing_settings: dict, intl_rates: dict[str, float]) -> pd.Da
     df["call_classification"] = [
         classify_call(orig, dest) for orig, dest in zip(df["orig"], df["dest"])
     ]
-    # New column: compute the KES cost of every row from its
-    # classification, duration, destination, and time of day.
-    df["computed_cost"] = [
-        compute_call_cost(cls, dur, dest, orig_time, billing_settings, intl_rates)
+    # New columns: the KES cost of every row from its classification,
+    # duration, destination, and time of day — at list price (list_cost)
+    # and after the contract discount (computed_cost).
+    costs = [
+        compute_call_costs(cls, dur, dest, orig_time, billing_settings, intl_rates)
         for cls, dur, dest, orig_time in zip(
             df["call_classification"], df["duration_minutes"], df["dest"], df["orig_time"],
         )
     ]
+    df["list_cost"] = [list_cost for list_cost, _ in costs]
+    df["computed_cost"] = [cost for _, cost in costs]
     # New column: "YYYY-MM" extracted from the first 7 characters of the
     # "YYYY-MM-DD" date string — used to group costs by month below.
     df["month"] = df["date"].str.slice(0, 7)
@@ -491,7 +587,7 @@ def run(backend: Backend) -> int:
 
     # Sum computed_cost, grouped by (originating extension, month) — one
     # total per employee per month.
-    by_origin = dataset.groupby(["orig", "month"])["computed_cost"].sum()
+    by_origin = dataset.groupby(["orig", "month"])[["computed_cost", "list_cost"]].sum()
 
     # Fetch every employee that currently has an extension_code assigned.
     employees = backend.execute(
@@ -502,15 +598,16 @@ def run(backend: Backend) -> int:
 
     written = 0
     # Iterate every (extension, month) group and its summed cost.
-    for (extension_code, month), total_cost in by_origin.items():
+    for (extension_code, month), totals in by_origin.iterrows():
         if not _INTERNAL_RE.match(extension_code):
             continue  # not a 3-digit PBX extension — never billed to an employee
         # Look up which employee (if any) currently owns this extension.
         employee_id = employee_by_extension.get(extension_code)
         if employee_id is None:
             continue
-        # Round the summed cost to 2 decimal places.
-        total_cost = round(float(total_cost), 2)
+        # Round the summed costs to 2 decimal places.
+        total_cost = round(float(totals["computed_cost"]), 2)
+        list_cost = round(float(totals["list_cost"]), 2)
         # Check whether a usage_summaries row already exists for this
         # employee+month.
         existing = backend.execute(
@@ -520,15 +617,17 @@ def run(backend: Backend) -> int:
         if existing:
             # Update the existing row's total_cost/extension_code/updated_at.
             backend.execute(
-                "UPDATE usage_summaries SET total_cost = ?, extension_code = ?, updated_at = ? WHERE summary_id = ?",
-                (total_cost, extension_code, now_str(), existing[0]),
+                "UPDATE usage_summaries SET total_cost = ?, list_cost = ?, extension_code = ?, updated_at = ? "
+                "WHERE summary_id = ?",
+                (total_cost, list_cost, extension_code, now_str(), existing[0]),
             )
         else:
             # No row yet — insert a brand new one with a fresh UUID.
             backend.execute(
-                """INSERT INTO usage_summaries (summary_id, employee_id, month, total_cost, extension_code, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (new_id(), employee_id, month, total_cost, extension_code, now_str()),
+                """INSERT INTO usage_summaries
+                   (summary_id, employee_id, month, total_cost, list_cost, extension_code, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id(), employee_id, month, total_cost, list_cost, extension_code, now_str()),
             )
         written += 1
     # Persist all the inserts/updates made in this loop.

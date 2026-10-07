@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { ScoreGauge } from "@/features/anomalies/score-gauge";
 import type { AnomalyFlag } from "@/lib/api/types";
+import { callDuration } from "@/lib/format";
 
 /** Keys inside contributing_features that are rendered by the dedicated
  * rows below, so the raw dump doesn't repeat them. */
@@ -104,9 +105,7 @@ export function AnomalyDetailSheet({
               <DetailRow
                 label="Duration"
                 value={
-                  flag.event
-                    ? `${flag.event.duration_minutes.toFixed(2)} min`
-                    : "—"
+                  flag.event ? callDuration(flag.event.duration_minutes) : "—"
                 }
               />
               <DetailRow

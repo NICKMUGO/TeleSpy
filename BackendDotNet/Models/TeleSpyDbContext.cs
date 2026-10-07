@@ -30,6 +30,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<AnomalyFlag> AnomalyFlags => Set<AnomalyFlag>();
     public DbSet<UsageProfile> UsageProfiles => Set<UsageProfile>();
     public DbSet<UsageSummary> UsageSummaries => Set<UsageSummary>();
+    public DbSet<MonthlyInvoice> MonthlyInvoices => Set<MonthlyInvoice>();
     public DbSet<ForecastResult> ForecastResults => Set<ForecastResult>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
@@ -208,6 +209,18 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.PeakStartHour).HasColumnName("peak_start_hour").IsRequired();
             e.Property(x => x.PeakEndHour).HasColumnName("peak_end_hour").IsRequired();
             e.Property(x => x.DefaultInternationalRateKes).HasColumnName("default_international_rate_kes").IsRequired();
+            // Database defaults too, so the row that already exists when
+            // these columns are added picks up the contract's values.
+            e.Property(x => x.DiscountOnNetPeakPct).HasColumnName("discount_on_net_peak_pct").HasDefaultValue(BillingConstants.DefaultDiscountOnNetPeakPct);
+            e.Property(x => x.DiscountOnNetOffPeakPct).HasColumnName("discount_on_net_off_peak_pct").HasDefaultValue(BillingConstants.DefaultDiscountOnNetOffPeakPct);
+            e.Property(x => x.DiscountOffNetPeakPct).HasColumnName("discount_off_net_peak_pct").HasDefaultValue(BillingConstants.DefaultDiscountOffNetPeakPct);
+            e.Property(x => x.DiscountOffNetOffPeakPct).HasColumnName("discount_off_net_off_peak_pct").HasDefaultValue(BillingConstants.DefaultDiscountOffNetOffPeakPct);
+            e.Property(x => x.DiscountInternationalPct).HasColumnName("discount_international_pct").HasDefaultValue(BillingConstants.DefaultDiscountInternationalPct);
+            e.Property(x => x.HomeNetworkName).HasColumnName("home_network_name").HasMaxLength(60).HasDefaultValue(BillingConstants.DefaultHomeNetworkName);
+            e.Property(x => x.OnNetPrefixes).HasColumnName("on_net_prefixes").HasMaxLength(500).HasDefaultValue(BillingConstants.DefaultOnNetPrefixes);
+            e.Property(x => x.FixedMonthlyChargeKes).HasColumnName("fixed_monthly_charge_kes").HasDefaultValue(BillingConstants.DefaultFixedMonthlyChargeKes);
+            e.Property(x => x.ExciseRatePct).HasColumnName("excise_rate_pct").HasDefaultValue(BillingConstants.DefaultExciseRatePct);
+            e.Property(x => x.VatRatePct).HasColumnName("vat_rate_pct").HasDefaultValue(BillingConstants.DefaultVatRatePct);
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 
@@ -266,7 +279,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasIndex(x => x.AllocationId);
             e.Property(x => x.MsisdnPbx).HasColumnName("msisdn_pbx").HasMaxLength(20).IsRequired();
             e.HasIndex(x => x.MsisdnPbx);
-            e.Property(x => x.Destination).HasColumnName("destination").HasMaxLength(20).IsRequired();
+            e.Property(x => x.Destination).HasColumnName("destination").HasMaxLength(32).IsRequired();
             e.Property(x => x.OccuredAt).HasColumnName("occured_at").IsRequired();
             e.HasIndex(x => x.OccuredAt);
             e.Property(x => x.DurationMinutes).HasColumnName("duration_minutes").IsRequired();
@@ -315,7 +328,18 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.Month).HasColumnName("month").HasMaxLength(7).IsRequired();
             e.HasIndex(x => new { x.EmployeeId, x.Month }).IsUnique().HasDatabaseName("uq_usage_summaries_employee_month");
             e.Property(x => x.TotalCost).HasColumnName("total_cost");
+            e.Property(x => x.ListCost).HasColumnName("list_cost").HasDefaultValue(0.0);
             e.Property(x => x.ExtensionCode).HasColumnName("extension_code").HasMaxLength(3);
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<MonthlyInvoice>(e =>
+        {
+            e.ToTable("monthly_invoices");
+            e.HasKey(x => x.Month);
+            e.Property(x => x.Month).HasColumnName("month").HasMaxLength(7);
+            e.Property(x => x.InvoiceTotalKes).HasColumnName("invoice_total_kes").IsRequired();
+            e.Property(x => x.Note).HasColumnName("note").HasMaxLength(255);
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 

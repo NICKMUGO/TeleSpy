@@ -11,6 +11,15 @@ usage_summaries data actually changes just repeats the same forecast.
 Run standalone:
     python forecasting.py
 
+Partial months: the call data rarely starts on the 1st or ends on the
+last day of a month (the first month of data, and the month still in
+progress whenever this runs). A partial month's total is that much
+smaller than a full month's, so left as-is it reads as a collapse in
+spend and drags the forecast down with it. _full_month_series() scales
+each partial month up to its full-month equivalent (same daily rate, all
+the month's days) before any model sees it, so every forecast is for a
+whole month of the whole department.
+
 Model selection: this is regression on a time series, so accuracy/
 precision/recall don't apply (those are classification metrics) — MAE,
 RMSE and MAPE are used instead. CV can't be a random/stratified K-Fold
@@ -27,6 +36,9 @@ grid_search() searches over both and evaluate() reports in-sample
 train/test gap surfaces over/underfitting the same way it would for any
 other regressor.
 """
+# calendar: number of days in a month, for partial-month scaling.
+import calendar
+
 # numpy: array math + the naive fallback's log-linear regression.
 import numpy as np
 # pandas: builds the (ds, y) DataFrame Prophet expects.
@@ -42,6 +54,11 @@ MIN_TRAIN_MONTHS_FOR_CV = 3  # each walk-forward fold needs >=3 training months:
 # error by construction, not because it generalizes well — that's a degenerate fit, not a
 # real training-error reading, so folds below this are skipped.
 
+# A month with less than this share of its days covered by call data is
+# dropped rather than scaled up: a day or two extrapolated to a whole month
+# is noise, not a reading.
+MIN_MONTH_COVERAGE = 0.1
+
 # --- Regularization search space (Prophet's changepoint/seasonality priors)
 CHANGEPOINT_PRIOR_GRID = [0.01, 0.05, 0.5]  # lower = stiffer trend = more regularized
 SEASONALITY_PRIOR_GRID = [0.1, 1.0, 10.0]  # lower = dampened seasonality = more regularized
@@ -56,6 +73,51 @@ _DEPARTMENT_MONTHLY_SQL = """
     WHERE e.department_id = ?
     GROUP BY us.month
 """
+
+
+# SQL: the first and last moment any call was recorded — the span of days
+# the cost data actually covers.
+_DATA_COVERAGE_SQL = "SELECT MIN(occured_at), MAX(occured_at) FROM usage_events"
+
+
+def _data_coverage(backend: Backend):
+    """(first day, last day) the call data covers, as dates — or None if
+    there are no usage events to tell from."""
+    first, last = backend.execute(_DATA_COVERAGE_SQL).fetchone()
+    if first is None or last is None:
+        return None
+    # psycopg2 hands back datetimes, sqlite3 strings; pandas reads both.
+    return pd.to_datetime(first).date(), pd.to_datetime(last).date()
+
+
+def _month_coverage(month: str, coverage) -> tuple[int, int]:
+    """(days of `month` the data covers, days in `month`). With no
+    coverage information every month counts as fully covered."""
+    year, mo = (int(part) for part in month.split("-"))
+    days_in_month = calendar.monthrange(year, mo)[1]
+    if coverage is None:
+        return days_in_month, days_in_month
+    first_day, last_day = coverage
+    # Clamp the data's span to this month: day-of-month it starts and ends
+    # on within the month.
+    start = first_day.day if (first_day.year, first_day.month) == (year, mo) else 1
+    end = last_day.day if (last_day.year, last_day.month) == (year, mo) else days_in_month
+    return max(0, end - start + 1), days_in_month
+
+
+def _full_month_series(months: list[str], values: list[float], coverage) -> tuple[list[str], list[float]]:
+    """Scales each partially-covered month's total up to its full-month
+    equivalent (total / days covered * days in month), and drops a month
+    covered too thinly to scale (see MIN_MONTH_COVERAGE). Fully-covered
+    months pass through unchanged."""
+    full_months, full_values = [], []
+    for month, value in zip(months, values):
+        covered, days_in_month = _month_coverage(month, coverage)
+        if covered < days_in_month * MIN_MONTH_COVERAGE:
+            continue
+        full_months.append(month)
+        full_values.append(value * days_in_month / covered)
+    return full_months, full_values
 
 
 def _next_month_key(month: str) -> str:
@@ -345,6 +407,8 @@ def run(backend: Backend) -> int:
     """Returns the number of forecast_results rows written."""
     # Every department id in the system.
     departments = backend.execute("SELECT department_id FROM departments").fetchall()
+    # The days the call data spans, to spot partial months below.
+    coverage = _data_coverage(backend)
     # department_id -> (list of month strings, list of matching total costs).
     all_series: dict[str, tuple[list[str], list[float]]] = {}
     for (department_id,) in departments:
@@ -357,13 +421,26 @@ def run(backend: Backend) -> int:
             continue
         # Make sure months are in chronological order.
         monthly_df = monthly_df.sort_values("month")
-        # Store as parallel lists (months, costs), missing costs filled
-        # with 0.
-        all_series[department_id] = (monthly_df["month"].tolist(), monthly_df["total_cost"].fillna(0.0).tolist())
+        # Parallel lists (months, costs), missing costs filled with 0, with
+        # partial months scaled up to full-month equivalents.
+        months, values = _full_month_series(
+            monthly_df["month"].tolist(), monthly_df["total_cost"].fillna(0.0).tolist(), coverage)
+        # Dropping too-thin months may leave too little to forecast from.
+        if len(months) < MIN_MONTHS:
+            continue
+        all_series[department_id] = (months, values)
 
     # No department had enough history at all — nothing to forecast.
     if not all_series:
         return 0
+
+    if coverage is not None:
+        every_month = sorted({month for months, _ in all_series.values() for month in months})
+        partial = [(m, *_month_coverage(m, coverage)) for m in every_month]
+        partial = [f"{m} ({covered} of {days} days)" for m, covered, days in partial if covered < days]
+        if partial:
+            print(f"  Call data covers {coverage[0]} to {coverage[1]}; partial month(s) scaled to a full month: "
+                  + ", ".join(partial))
 
     # Find the best regularization params via grid search + CV (or fall
     # back to defaults).

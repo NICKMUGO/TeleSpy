@@ -192,8 +192,14 @@ Check that it is up:
 curl http://localhost:5299/health
 ```
 
-The seed creates five departments, three telco plans, an admin, a manager per
-department, employees, SIM allocations, and three months of call history. It
+The seed is built from the preprocessed CDR dataset
+(`ML/data/processed/cdr_preprocessed.csv`, so run the preprocessing stage
+first; set `CDR_DATASET_PATH` to use a file elsewhere). Every extension that
+places a call in the dataset becomes an employee with a SIM allocation, and
+every call placed from one of those extensions becomes a usage event (calls
+coming in from outside numbers are not tracked). Departments, telco plans,
+names, and email addresses are not in the dataset, so those are generated: five
+departments, three telco plans, an admin, and a manager per department. It
 skips itself if any department already exists. The demo account credentials
 are defined at the top of `BackendDotNet/Seed.cs`. Never run the seed against
 a real environment.
@@ -285,6 +291,7 @@ All routes except the sign-in routes and `/health` require a bearer token.
 | Auth        | `POST /auth/register`, `/auth/login`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/refresh`, `/auth/logout` |
 | Passwords   | `POST /auth/forgot-password`, `/auth/reset-password`, `/auth/change-password`                                 |
 | Employees   | `GET` `POST /employees`, `GET` `PATCH` `DELETE /employees/{id}`                                               |
+| Directory   | `GET /directory` (name and extension lookup, every role)                                                      |
 | Departments | `GET` `POST /departments`, `PATCH /departments/{id}`, `GET /departments/{id}/spend`                           |
 | SIMs        | `GET` `POST /sims`, `PATCH /sims/{id}`, `POST /sims/{id}/allocate`, `POST /sims/{id}/unassign`                |
 | Telco plans | `GET` `POST /telco-plans`                                                                                     |
@@ -292,6 +299,7 @@ All routes except the sign-in routes and `/health` require a bearer token.
 | Analytics   | `GET /analytics/anomalies`, `POST /analytics/anomalies/{id}/resolve`, `GET /analytics/profiles`, `GET /analytics/usage-summary`, `GET /forecast/{departmentId}` |
 | Call rates  | `GET` `PATCH /call-rates/local`, `GET /call-rates/international`, `PATCH /call-rates/international/{countryCode}` |
 | Budgets     | `GET /roles`, `PATCH /roles/{id}`, `GET /budgets/over-limit`                                                  |
+| Reconciliation | `GET /reconciliation`, `PUT /reconciliation/{month}`                                                       |
 | Invoices    | `POST /invoices/send-monthly`                                                                                 |
 | Audit       | `GET /audit`                                                                                                  |
 | Account     | `GET` `PATCH /settings/me`, `GET` `POST /tutorial/progress`, `POST /tutorial/restart`, `POST /tutorial/dismiss` |
@@ -355,17 +363,29 @@ used for an outside line:
 | International | `+`, `00`, or `000` followed by a non-Kenyan country code |   Yes   |
 | Unknown       | Anything else                                  |   No    |
 
-Cost is call duration multiplied by a rate read from the database:
+Cost is call duration multiplied by a list rate, less the contract discount
+for that call type. Everything is read from the database:
 
-- **Local calls** use a peak and an off-peak rate. The defaults follow
-  Safaricom's published tariff: KES 4.87 per minute from 08:00 to 22:00 and
-  KES 2.50 per minute otherwise.
+- **Local calls** use a peak and an off-peak list rate, tax-inclusive. The
+  defaults come from the organisation's itemised Safaricom bill: KES 4.67 per
+  minute from 08:00 to 22:00 and KES 2.40 per minute otherwise.
 - **International calls** use a per-country rate, with a fallback of KES 40
   per minute for any country code that has no rate.
+- **The contract discount** is a percentage per call type. The defaults are
+  54% on peak calls and on off-peak calls to other networks, and none on
+  off-peak calls to Safaricom numbers or on international calls. Safaricom
+  numbers are told apart from other networks by prefix.
 
-Admins can change both from the web UI. A change takes effect the next time
-`billing.py` runs. The rate tables are filled with defaults on first startup
-and are never overwritten after that.
+Each employee's monthly figure is stored both at list price and after the
+discount. The line's fixed monthly charge (KES 26,086.96 before 15% excise and
+16% VAT by default) is a company-level cost and is not charged to anyone.
+
+Admins can change all of this from the web UI, under Settings. A change takes
+effect the next time `billing.py` runs. The rate tables are filled with
+defaults on first startup and are never overwritten after that.
+
+**Bill reconciliation** (Admin) rebuilds each month's bill from these figures
+and sets it beside the telco's actual invoice total, which an admin enters.
 
 ## Security
 

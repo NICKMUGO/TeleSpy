@@ -16,9 +16,9 @@ function hourLabel(hour: number) {
   return `${hour.toString().padStart(2, "0")}:00`;
 }
 
-/** Safaricom's local (on-net + off-net) tariff — peak/off-peak KES/minute
- * and the peak window, plus the fallback rate for an unpriced international
- * destination. Editable here (PATCH /call-rates/local) so a pricing change
+/** The local (Kenyan) list rates — peak/off-peak KES/minute, tax-inclusive,
+ * before the contract discount (see DiscountsCard) — and the peak window,
+ * plus the fallback rate for an unpriced international destination. Editable here (PATCH /call-rates/local) so a pricing change
  * doesn't need a redeploy; ML/training/billing.py reads this table on its
  * next run. */
 export function LocalRateCard() {
@@ -28,7 +28,7 @@ export function LocalRateCard() {
     return (
       <SectionCard
         title="Local call rates"
-        description="Peak and off-peak tariff for on-net and off-net Kenyan calls."
+        description="Peak and off-peak list price for Kenyan calls, before the contract discount."
       >
         <div className="flex flex-col gap-2">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -43,7 +43,7 @@ export function LocalRateCard() {
     return (
       <SectionCard
         title="Local call rates"
-        description="Peak and off-peak tariff for on-net and off-net Kenyan calls."
+        description="Peak and off-peak list price for Kenyan calls, before the contract discount."
       >
         <ErrorBanner error={error} onRetry={() => refetch()} />
       </SectionCard>
@@ -92,11 +92,11 @@ function LocalRateForm({ initial }: { initial: LocalCallRateSettings }) {
   return (
     <SectionCard
       title="Local call rates"
-      description={`Applies to on-net and off-net Kenyan calls. Peak is ${hourLabel(form.peak_start_hour)}–${hourLabel(form.peak_end_hour)}.`}
+      description={`List price per minute for Kenyan calls, including tax and before the contract discount. Peak is ${hourLabel(form.peak_start_hour)}–${hourLabel(form.peak_end_hour)}.`}
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="rate-peak">Peak rate (KES/minute)</Label>
+          <Label htmlFor="rate-peak">Peak list rate (KES/minute)</Label>
           <Input
             id="rate-peak"
             type="number"
@@ -107,7 +107,7 @@ function LocalRateForm({ initial }: { initial: LocalCallRateSettings }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="rate-off-peak">Off-peak rate (KES/minute)</Label>
+          <Label htmlFor="rate-off-peak">Off-peak list rate (KES/minute)</Label>
           <Input
             id="rate-off-peak"
             type="number"

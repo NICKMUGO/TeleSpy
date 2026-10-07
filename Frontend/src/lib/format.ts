@@ -8,9 +8,20 @@ export function kes(value: number | null | undefined) {
 /** Compact form for dashboard tiles, where the exact shilling isn't the point. */
 export function kesCompact(value: number | null | undefined) {
   if (value === null || value === undefined) return "—";
-  if (Math.abs(value) >= 1_000_000) return `KES ${(value / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(value) >= 1_000_000)
+    return `KES ${(value / 1_000_000).toFixed(2)}M`;
   if (Math.abs(value) >= 1_000) return `KES ${(value / 1_000).toFixed(1)}k`;
   return `KES ${value.toFixed(0)}`;
+}
+
+/** A call's length from its duration in minutes: "42 s", "3 min 05 s".
+ * Seconds rather than decimal minutes, so a short call doesn't read as
+ * "0.0 min". */
+export function callDuration(minutes: number) {
+  const totalSeconds = Math.round(minutes * 60);
+  if (totalSeconds < 60) return `${totalSeconds} s`;
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${Math.floor(totalSeconds / 60)} min ${seconds} s`;
 }
 
 export function monthKey(date: Date) {

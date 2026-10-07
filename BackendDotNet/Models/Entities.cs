@@ -320,8 +320,8 @@ public class TelcoPlan
 public class BillingSettings
 {
     public string Id { get; set; } = "";
-    // Safaricom's published local (on-net + off-net) tariff: KSh 4.87/minute
-    // in peak hours, KSh 2.50/minute off-peak.
+    // Local (Kenyan) list rates per minute, tax-inclusive, before the
+    // contract discount below.
     public double PeakRateKes { get; set; }
     public double OffPeakRateKes { get; set; }
     public int PeakStartHour { get; set; } // 0-23, inclusive
@@ -329,10 +329,44 @@ public class BillingSettings
     // Fallback rate for an International destination whose country code
     // isn't (yet) priced in InternationalCallRates.
     public double DefaultInternationalRateKes { get; set; }
+    // Contract discount per call type, as a percentage (0-100) off the list
+    // rate. "On-net" is a call to another Safaricom number, "off-net" one
+    // to any other Kenyan network or a fixed line.
+    public double DiscountOnNetPeakPct { get; set; } = BillingConstants.DefaultDiscountOnNetPeakPct;
+    public double DiscountOnNetOffPeakPct { get; set; } = BillingConstants.DefaultDiscountOnNetOffPeakPct;
+    public double DiscountOffNetPeakPct { get; set; } = BillingConstants.DefaultDiscountOffNetPeakPct;
+    public double DiscountOffNetOffPeakPct { get; set; } = BillingConstants.DefaultDiscountOffNetOffPeakPct;
+    public double DiscountInternationalPct { get; set; } = BillingConstants.DefaultDiscountInternationalPct;
+    // Which telco the organisation is on, and the number prefixes that
+    // count as on-net (see BillingConstants.DefaultOnNetPrefixes).
+    public string HomeNetworkName { get; set; } = BillingConstants.DefaultHomeNetworkName;
+    public string OnNetPrefixes { get; set; } = BillingConstants.DefaultOnNetPrefixes;
+    // The line's fixed monthly rental, before tax — a company-level cost,
+    // not attributed to any employee — and the taxes the telco adds to it.
+    public double FixedMonthlyChargeKes { get; set; } = BillingConstants.DefaultFixedMonthlyChargeKes;
+    public double ExciseRatePct { get; set; } = BillingConstants.DefaultExciseRatePct;
+    public double VatRatePct { get; set; } = BillingConstants.DefaultVatRatePct;
     public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    /// <summary>Excise is charged on the amount, then VAT on amount + excise
+    /// — 1.15 x 1.16 = 1.334 at the default rates.</summary>
+    public double TaxMultiplier() => (1 + ExciseRatePct / 100.0) * (1 + VatRatePct / 100.0);
+
+    public double FixedMonthlyChargeWithTaxKes() => Math.Round(FixedMonthlyChargeKes * TaxMultiplier(), 2);
 
     public Dictionary<string, object?> ToDict() => new()
     {
+        ["home_network_name"] = HomeNetworkName,
+        ["on_net_prefixes"] = OnNetPrefixes,
+        ["discount_on_net_peak_pct"] = DiscountOnNetPeakPct,
+        ["discount_on_net_off_peak_pct"] = DiscountOnNetOffPeakPct,
+        ["discount_off_net_peak_pct"] = DiscountOffNetPeakPct,
+        ["discount_off_net_off_peak_pct"] = DiscountOffNetOffPeakPct,
+        ["discount_international_pct"] = DiscountInternationalPct,
+        ["fixed_monthly_charge_kes"] = FixedMonthlyChargeKes,
+        ["fixed_monthly_charge_with_tax_kes"] = FixedMonthlyChargeWithTaxKes(),
+        ["excise_rate_pct"] = ExciseRatePct,
+        ["vat_rate_pct"] = VatRatePct,
         ["peak_rate_kes"] = PeakRateKes,
         ["off_peak_rate_kes"] = OffPeakRateKes,
         ["peak_start_hour"] = PeakStartHour,
@@ -572,7 +606,12 @@ public class UsageSummary
     public string SummaryId { get; set; } = Guid.NewGuid().ToString();
     public string EmployeeId { get; set; } = "";
     public string Month { get; set; } = ""; // "YYYY-MM"
+    // What the employee's calls actually cost: list price less the
+    // contract discount, tax-inclusive.
     public double TotalCost { get; set; }
+    // The same calls at list price, before the discount — kept so the
+    // discount's value can be reported (ListCost - TotalCost).
+    public double ListCost { get; set; }
     // Denormalized copy of Employee.ExtensionCode as of when this row was
     // last written — filled in by ML/training/billing.py (see that
     // module's docstring), so a row is self-contained for reporting
@@ -590,9 +629,22 @@ public class UsageSummary
         ["employee_id"] = EmployeeId,
         ["month"] = Month,
         ["total_cost"] = TotalCost,
+        ["list_cost"] = ListCost,
         ["extension_code"] = ExtensionCode,
         ["updated_at"] = UpdatedAt.ToString("o"),
     };
+}
+
+/// <summary>The telco's actual invoice total for one month of calls, typed
+/// in by an Admin so it can be set beside the bill the application rebuilds
+/// from its own records (GET /reconciliation). `Month` is the month the
+/// calls were made in — the invoice itself is dated the 1st of the next.</summary>
+public class MonthlyInvoice
+{
+    public string Month { get; set; } = ""; // "YYYY-MM"
+    public double InvoiceTotalKes { get; set; }
+    public string? Note { get; set; }
+    public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
 }
 
 /// <summary>Prophet output per department/period.</summary>

@@ -39,7 +39,7 @@ export default function DepartmentsPage() {
     <>
       <PageHeader
         title="Departments"
-        description="Cost centres and monthly budget ceilings."
+        description="Cost centres and monthly budget ceilings for call spend after the contract discount."
       />
       <DataTable
         columns={columns}

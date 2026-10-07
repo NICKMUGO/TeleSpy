@@ -29,13 +29,13 @@ import { useSession } from "@/lib/auth/session-store";
 import { downloadCsv } from "@/lib/export-csv";
 import {
   activePeriod,
+  callDuration,
   kes,
   kesCompact,
   monthLabel,
   percentDelta,
 } from "@/lib/format";
 import type { UsageSummary } from "@/lib/api/types";
-
 
 export default function DashboardPage() {
   const user = useSession((state) => state.user);
@@ -65,10 +65,7 @@ function OrgDashboard() {
     summaries.isLoading;
   const error = employees.error ?? sims.error ?? departments.error;
 
-  const rows = useMemo(
-    () => summaries.data?.data ?? [],
-    [summaries.data],
-  );
+  const rows = useMemo(() => summaries.data?.data ?? [], [summaries.data]);
 
   const period = useMemo(() => activePeriod(rows), [rows]);
 
@@ -377,13 +374,22 @@ function OrgDashboard() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-border-subtle border-y text-[0.6875rem] tracking-wide uppercase">
-                    <th scope="col" className="px-4 py-2 text-start font-medium">
+                    <th
+                      scope="col"
+                      className="px-4 py-2 text-start font-medium"
+                    >
                       Severity
                     </th>
-                    <th scope="col" className="px-4 py-2 text-start font-medium">
+                    <th
+                      scope="col"
+                      className="px-4 py-2 text-start font-medium"
+                    >
                       Employee
                     </th>
-                    <th scope="col" className="px-4 py-2 text-start font-medium">
+                    <th
+                      scope="col"
+                      className="px-4 py-2 text-start font-medium"
+                    >
                       Destination
                     </th>
                     <th scope="col" className="px-4 py-2 text-end font-medium">
@@ -419,9 +425,9 @@ function OrgDashboard() {
 
           <div className="flex flex-col gap-4">
             <SectionCard
-              title="Budgets over threshold"
-              description="Past 90% of ceiling"
-              actionHref={{ label: "View all", href: "/budgets" }}
+              title="Near or over spending limit"
+              description="Past 90% of their monthly limit"
+              actionHref={{ label: "View invoices", href: "/invoices" }}
             >
               {overThreshold.length > 0 ? (
                 <BudgetMeter items={overThreshold} />
@@ -464,6 +470,127 @@ function OrgDashboard() {
         </div>
       </div>
     </>
+  );
+}
+
+/** The employee's own standing against their monthly limit: a plain
+ * verdict for the latest month, then every month with what was spent and,
+ * where they went over, by how much — the amount they are invoiced for. */
+function SpendingLimitSection({
+  summaries,
+  limit,
+  isLoading,
+}: {
+  summaries: { month: string; total_cost: number }[];
+  limit: number | null;
+  isLoading: boolean;
+}) {
+  const months = [...summaries].sort((a, b) => b.month.localeCompare(a.month));
+  const latest = months[0];
+  const latestOverBy = latest && limit !== null ? latest.total_cost - limit : 0;
+  const monthsOver =
+    limit === null ? 0 : months.filter((m) => m.total_cost > limit).length;
+
+  return (
+    <SectionCard
+      title="Your spending limit"
+      description={
+        limit === null
+          ? "No monthly limit is set for your role."
+          : `${kes(limit)} a month. You are invoiced only for the amount you go over it.`
+      }
+    >
+      {isLoading ? (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      ) : limit === null || !latest ? (
+        <EmptyHint>
+          {limit === null
+            ? "Your call costs are still recorded in your spend ledger."
+            : "No monthly totals yet."}
+        </EmptyHint>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <p
+            role="status"
+            className={
+              latestOverBy > 0
+                ? "text-destructive text-sm font-medium"
+                : "text-success text-sm font-medium"
+            }
+          >
+            {latestOverBy > 0
+              ? `You are over your limit for ${monthLabel(latest.month)} by ${kes(latestOverBy)}.`
+              : `You are within your limit for ${monthLabel(latest.month)}, with ${kes(limit - latest.total_cost)} to spare.`}
+            {monthsOver > 0 ? (
+              <span className="text-muted-foreground font-normal">
+                {" "}
+                Over the limit in {monthsOver} of {months.length}{" "}
+                {months.length === 1 ? "month" : "months"} on record.
+              </span>
+            ) : null}
+          </p>
+          <div className="border-border-subtle overflow-x-auto rounded-lg border">
+            <table className="w-full text-sm">
+              <caption className="sr-only">
+                Your call costs against your limit, by month
+              </caption>
+              <thead className="border-border-subtle bg-muted/40 border-b">
+                <tr>
+                  <th scope="col" className="px-3 py-2 text-left font-medium">
+                    Month
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Spent
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Limit
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Over by
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {months.map((m) => {
+                  const overBy = m.total_cost - limit;
+                  return (
+                    <tr
+                      key={m.month}
+                      className="border-border-subtle border-b last:border-b-0"
+                    >
+                      <th
+                        scope="row"
+                        className="px-3 py-2 text-left font-normal whitespace-nowrap"
+                      >
+                        {monthLabel(m.month)}
+                      </th>
+                      <td className="font-tabular px-3 py-2 text-right">
+                        {kes(m.total_cost)}
+                      </td>
+                      <td className="font-tabular text-muted-foreground px-3 py-2 text-right">
+                        {kes(limit)}
+                      </td>
+                      <td
+                        className={
+                          overBy > 0
+                            ? "font-tabular text-destructive px-3 py-2 text-right font-medium"
+                            : "font-tabular text-muted-foreground px-3 py-2 text-right"
+                        }
+                      >
+                        {overBy > 0 ? kes(overBy) : "Within limit"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -548,9 +675,15 @@ function EmployeeDashboard() {
           )}
         </div>
 
+        <SpendingLimitSection
+          summaries={summaries}
+          limit={limit}
+          isLoading={myUsage.isLoading}
+        />
+
         <SectionCard
           title="Recent calls"
-          actionHref={{ label: "View invoices", href: "/invoices" }}
+          actionHref={{ label: "View spend ledger", href: "/ledger" }}
           bodyClassName="px-0 pb-0"
         >
           {myUsage.isLoading ? (
@@ -569,7 +702,7 @@ function EmployeeDashboard() {
                     {event.destination}
                   </span>
                   <span className="text-muted-foreground font-tabular shrink-0 text-xs">
-                    {event.duration_minutes.toFixed(1)} min
+                    {callDuration(event.duration_minutes)}
                   </span>
                   <Badge variant="outline" className="shrink-0">
                     {event.call_classification}

@@ -167,3 +167,10 @@ ML/data/processed/*
 !ML/data/processed/.gitkeep
 ML/data/archive/*
 !ML/data/archive/.gitkeep
+
+# KenyaRe billing reference documents (real customer invoices, statements,
+# Bonga points) - kept local, never tracked. Any file with KenyaRe in its name.
+*KenyaRe*
+
+# Windows download markers left behind when files are copied into WSL
+*:Zone.Identifier

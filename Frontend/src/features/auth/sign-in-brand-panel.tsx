@@ -95,7 +95,6 @@ export function SignInBrandPanel() {
       <p className="text-muted-foreground relative z-10 mt-auto pt-10 text-xs">
         Build {BUILD_LABEL}
       </p>
-
     </aside>
   );
 }

@@ -28,12 +28,12 @@ test("command palette opens with Ctrl+K and navigates", async ({ page }) => {
   await page.goto("/dashboard");
   await page.keyboard.press("Control+k");
   await expect(
-    page.getByPlaceholder("Jump to a page or run a command..."),
+    page.getByPlaceholder("Search a name or extension, or jump to a page..."),
   ).toBeVisible();
 
-  await page.keyboard.type("Budgets");
+  await page.keyboard.type("Invoices");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/budgets$/);
+  await expect(page).toHaveURL(/\/invoices$/);
 });
 
 test("keyboard shortcuts dialog opens with ?", async ({ page }) => {
