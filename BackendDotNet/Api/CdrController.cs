@@ -9,6 +9,7 @@
 // (ML/training/anomaly_detection.py) still runs against usage_events
 // independently of cost. Mirrors Backend/api/cdr.py 1:1.
 using System.Globalization;
+using Bogus;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TeleSpy.Core;
@@ -46,6 +47,14 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
         var sourceFile = data.SourceFile;
 
         int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0;
+        var createdExtensions = new List<string>();
+        var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
+        // When each extension's earliest answered call in this batch was —
+        // a line created for a new extension is allocated from before it.
+        var firstCallByExtension = records
+            .Where(r => (r.DurationSec ?? 0) > 0)
+            .GroupBy(r => r.Orig ?? "")
+            .ToDictionary(g => g.Key, g => g.Min(r => ParseOccuredAt(r)));
 
         // One transaction for the whole batch, mirroring Flask/SQLAlchemy's
         // single db.session.commit() at the end of the loop (with
@@ -71,12 +80,7 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
             var callClassification = CallClassification.ClassifyCall(orig, dest);
             var excluded = CallClassification.IsExcludedFromAnomalyDetection(orig, dest, callClassification);
 
-            DateTime occuredAt;
-            if (!DateTime.TryParseExact($"{row.Date} {row.OrigTime}", "yyyy-MM-dd HH:mm:ss",
-                    CultureInfo.InvariantCulture, DateTimeStyles.None, out occuredAt))
-            {
-                occuredAt = Clock.UtcNow();
-            }
+            var occuredAt = ParseOccuredAt(row);
 
             // Resolve MSISDN (the CDR's own extension, `orig`) to the SIM
             // allocation that was active at the time of the call.
@@ -85,6 +89,14 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
                 .ThenInclude(u => u!.Role)
                 .Include(s => s.Plan)
                 .FirstOrDefaultAsync(s => s.MsisdnPbxHash == origHash);
+            // An extension no SIM carries yet: the CSV is where new lines
+            // first show up, so set the line up here — SIM, number from the
+            // company format, and a holder — before attributing the call.
+            if (sim is null && CallClassification.ClassifyNumber(orig) == Constants.CallClassInternal)
+            {
+                sim = await CreateLineForExtensionAsync(orig, settings, firstCallByExtension[orig]);
+                if (sim is not null) createdExtensions.Add(orig);
+            }
             SimAllocation? allocation = sim?.Allocations.FirstOrDefault(a => a.IsActiveAt(occuredAt));
             if (allocation is not null) allocation.Sim = sim;
 
@@ -122,24 +134,107 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
                 ["attributed"] = attributed,
                 ["unattributed"] = unattributed,
                 ["skipped_unanswered"] = skippedUnanswered,
+                ["lines_created"] = createdExtensions,
                 ["source_file"] = sourceFile,
             });
         await transaction.CommitAsync();
         return StatusCode(201, new
         {
-            data = new { ingested, attributed, unattributed, skipped_unanswered = skippedUnanswered },
+            data = new
+            {
+                ingested, attributed, unattributed, skipped_unanswered = skippedUnanswered,
+                lines_created = createdExtensions.Count, new_extensions = createdExtensions,
+            },
             message = skippedUnanswered > 0
                 ? $"CDR batch ingested. {skippedUnanswered} unanswered call(s) with zero duration were skipped."
                 : "CDR batch ingested.",
         });
     }
-}
 
-/// <summary>Operational list view for Admin/Manager — not in the diagrams,
-/// but a reasonable addition alongside the self-service GET /me/usage.</summary>
-[ApiController]
-public class UsageController(TeleSpyDbContext db, IViewerContext viewerContext) : ControllerBase
-{
+    private static DateTime ParseOccuredAt(CdrRecordDto row) =>
+        DateTime.TryParseExact($"{row.Date} {row.OrigTime}", "yyyy-MM-dd HH:mm:ss",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var occuredAt)
+            ? occuredAt
+            : Clock.UtcNow();
+
+    /// <summary>Sets up a line for an extension first seen in a CDR batch,
+    /// the way the seed does for every extension in its dataset: a SIM
+    /// whose number is the company prefix + the extension, and a holder for
+    /// it, so the batch's calls are attributed from the start. The holder
+    /// is whoever already has that extension code, otherwise a generated
+    /// stand-in employee (random name, random department, no usable login)
+    /// for an Admin to rename or hand the line on from. The ICCID isn't in
+    /// a CDR, so it gets a placeholder (8925999… + the extension). Returns
+    /// null, creating nothing, if that number already belongs to another
+    /// SIM.</summary>
+    private async Task<SimCard?> CreateLineForExtensionAsync(string extension, BillingSettings? settings, DateTime firstCallAt)
+    {
+        var msisdn = (settings?.CompanyNumberPrefix ?? BillingConstants.DefaultCompanyNumberPrefix) + extension;
+        var iccid = $"8925999000000000{extension}";
+        var msisdnHash = Security.BlindIndex(msisdn)!;
+        var iccidHash = Security.BlindIndex(iccid)!;
+        if (await db.SimCards.AnyAsync(s => s.MsisdnHash == msisdnHash || s.IccidHash == iccidHash)) return null;
+
+        var sim = new SimCard
+        {
+            IccidEnc = Security.EncryptValue(iccid)!, IccidHash = iccidHash,
+            MsisdnEnc = Security.EncryptValue(msisdn)!, MsisdnHash = msisdnHash,
+            MsisdnPbxEnc = Security.EncryptValue(extension), MsisdnPbxHash = Security.BlindIndex(extension),
+            Provider = settings?.HomeNetworkName ?? BillingConstants.DefaultHomeNetworkName,
+            LifecycleState = "active",
+        };
+        db.SimCards.Add(sim);
+
+        var employee = await db.Employees.Include(e => e.User).ThenInclude(u => u!.Role)
+            .FirstOrDefaultAsync(e => e.ExtensionCode == extension);
+        if (employee is null)
+        {
+            var faker = new Faker();
+            string fullName;
+            do
+            {
+                fullName = faker.Name.FullName();
+            } while (await EmployeeNames.IsTakenAsync(db, fullName));
+
+            var departments = await db.Departments.OrderBy(d => d.Name).ToListAsync();
+            var department = departments.Count > 0 ? faker.PickRandom(departments) : null;
+            employee = new Employee
+            {
+                FullName = fullName,
+                DepartmentId = department?.DepartmentId,
+                StaffNumber = $"{department?.CostCentreCode ?? "EXT"}-X{extension}",
+                ExtensionCode = extension,
+            };
+            db.Employees.Add(employee);
+
+            // Every employee has a login row; this one can't be used until
+            // an Admin gives the account a real address and it's reset —
+            // the password is random and never revealed.
+            var user = new User
+            {
+                EmployeeId = employee.EmployeeId,
+                Email = $"ext{extension}.{employee.EmployeeId[..8]}@telespy.local",
+                RoleId = Constants.RoleSlugs[TeleSpy.Role.Employee],
+                IsActive = true,
+                MustChangePassword = true,
+            };
+            user.SetPassword(Security.GenerateResetToken());
+            db.Users.Add(user);
+            employee.User = user;
+        }
+
+        // Starts before the extension's first call in the batch, so every
+        // one of them falls inside the allocation.
+        var allocation = new SimAllocation
+        {
+            SimId = sim.SimId, EmployeeId = employee.EmployeeId, StartAt = firstCallAt.Date.AddDays(-1),
+            Sim = sim, Employee = employee,
+        };
+        db.SimAllocations.Add(allocation);
+        sim.Allocations.Add(allocation);
+        await db.SaveChangesAsync();
+        return sim;
+    }
     [HttpGet("/usage")]
     [RoleIdRequired("admin", "manager")]
     public async Task<IActionResult> Get()

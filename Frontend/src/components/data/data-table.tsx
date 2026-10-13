@@ -91,7 +91,7 @@ export function DataTable<TData extends object>({
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-2 p-6">
+      <div className="flex flex-col gap-2 p-4 sm:p-6">
         {Array.from({ length: 6 }).map((_, i) => (
           <Skeleton key={i} className="h-10 w-full" />
         ))}
@@ -110,11 +110,11 @@ export function DataTable<TData extends object>({
   }
 
   return (
-    <div className="flex flex-col gap-3 p-6">
+    <div className="flex flex-col gap-3 p-4 sm:p-6">
       {searchable || toolbarEnd ? (
         <div className="flex flex-wrap items-center gap-2">
           {searchable ? (
-            <InputGroup className="max-w-xs">
+            <InputGroup className="w-full sm:w-80">
               <InputGroupAddon>
                 <Search aria-hidden="true" className="size-4" />
               </InputGroupAddon>
@@ -127,12 +127,14 @@ export function DataTable<TData extends object>({
             </InputGroup>
           ) : null}
           {toolbarEnd ? (
-            <div className="ml-auto flex items-center gap-2">{toolbarEnd}</div>
+            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+              {toolbarEnd}
+            </div>
           ) : null}
         </div>
       ) : null}
 
-      <div className="border-border overflow-x-auto rounded-lg border">
+      <div className="border-border relative overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
           <thead className="border-border bg-muted/40 border-b">
             {table.getHeaderGroups().map((headerGroup) => (

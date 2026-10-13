@@ -78,7 +78,7 @@ export default function ForecastsPage() {
         title="Spend forecasts"
         description="Each department's total monthly call spend — every employee in it added together — and the projection for next month."
       />
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="outline" className="w-fit">

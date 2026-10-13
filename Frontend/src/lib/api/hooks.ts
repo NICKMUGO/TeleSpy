@@ -5,6 +5,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query";
 import {
   analyticsApi,
@@ -16,7 +17,9 @@ import {
   directoryApi,
   employeesApi,
   invoicesApi,
+  numberFormatApi,
   reconciliationApi,
+  reportsApi,
   rolesApi,
   simsApi,
   telcoPlansApi,
@@ -33,6 +36,8 @@ export const queryKeys = {
   directory: ["directory"] as const,
   departments: ["departments"] as const,
   departmentSpend: (id: string) => ["departments", id, "spend"] as const,
+  departmentsOverview: (month?: string) =>
+    ["departments", "overview", month] as const,
   sims: ["sims"] as const,
   telcoPlans: ["telco-plans"] as const,
   usage: (params?: Record<string, unknown>) => ["usage", params] as const,
@@ -51,7 +56,18 @@ export const queryKeys = {
   tutorial: ["tutorial", "progress"] as const,
   localCallRate: ["call-rates", "local"] as const,
   internationalCallRates: ["call-rates", "international"] as const,
+  numberFormat: ["settings", "number-format"] as const,
+  monthlyReport: (month?: string) => ["reports", "monthly", month] as const,
 };
+
+/** Who holds which line shows up on three screens — the employee list, the
+ * SIM inventory and the directory — so any change to it refreshes all
+ * three. */
+function invalidateLineHolders(queryClient: QueryClient) {
+  queryClient.invalidateQueries({ queryKey: queryKeys.employees });
+  queryClient.invalidateQueries({ queryKey: queryKeys.sims });
+  queryClient.invalidateQueries({ queryKey: queryKeys.directory });
+}
 
 /** The name + extension directory behind the Ctrl+K search. Only fetched
  * once it's wanted (`enabled`), then kept for a few minutes — it changes
@@ -82,10 +98,7 @@ export function useUpdateEmployee() {
       id: string;
       body: Parameters<typeof employeesApi.update>[1];
     }) => employeesApi.update(id, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.employees });
-      queryClient.invalidateQueries({ queryKey: queryKeys.directory });
-    },
+    onSuccess: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -93,8 +106,7 @@ export function useCreateEmployee() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: employeesApi.create,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.employees }),
+    onSuccess: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -102,6 +114,14 @@ export function useDepartments() {
   return useQuery({
     queryKey: queryKeys.departments,
     queryFn: departmentsApi.list,
+  });
+}
+
+export function useDepartmentsOverview(month?: string) {
+  return useQuery({
+    queryKey: queryKeys.departmentsOverview(month),
+    queryFn: () => departmentsApi.overview(month),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -149,8 +169,7 @@ export function useAllocateSim() {
       simId: string;
       employeeId: string;
     }) => simsApi.allocate(simId, employeeId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.sims }),
+    onSuccess: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -158,8 +177,7 @@ export function useUnassignSim() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (simId: string) => simsApi.unassign(simId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.sims }),
+    onSuccess: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -286,6 +304,33 @@ export function useUpdateLocalCallRate() {
   });
 }
 
+export function useNumberFormat() {
+  return useQuery({
+    queryKey: queryKeys.numberFormat,
+    queryFn: numberFormatApi.get,
+  });
+}
+
+export function useUpdateNumberFormat() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: numberFormatApi.update,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.numberFormat });
+      // Renumbering changes the numbers the SIM and employee lists show.
+      invalidateLineHolders(queryClient);
+    },
+  });
+}
+
+export function useMonthlyReport(month?: string) {
+  return useQuery({
+    queryKey: queryKeys.monthlyReport(month),
+    queryFn: () => reportsApi.monthly(month),
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useReconciliation() {
   return useQuery({
     queryKey: queryKeys.reconciliation,
@@ -343,6 +388,7 @@ export function useAuditLog() {
 }
 
 export function useIngestCdr() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
       records,
@@ -351,6 +397,9 @@ export function useIngestCdr() {
       records: Record<string, unknown>[];
       sourceFile?: string;
     }) => cdrApi.ingest(records, sourceFile),
+    // A batch sets up a SIM and a holder for any extension it's the first
+    // to mention.
+    onSuccess: () => invalidateLineHolders(queryClient),
   });
 }
 

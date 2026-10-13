@@ -9,10 +9,13 @@ import type {
   AuditLogEntry,
   Department,
   DepartmentForecast,
+  DepartmentsOverview,
   DirectoryEntry,
   Employee,
   InternationalCallRate,
   LocalCallRateSettings,
+  MonthlyReport,
+  NumberFormat,
   OverLimitEntry,
   Reconciliation,
   RoleRecord,
@@ -65,7 +68,11 @@ export const employeesApi = {
       full_name: string;
       department_id: string;
       staff_number: string;
+      role: string;
       is_active: boolean;
+      /** The extension this employee answers on; `null` gives their line
+       * up. A code a SIM carries brings that SIM with it. */
+      extension_code: string | null;
     }>,
   ) =>
     apiRequest<ApiEnvelope<Employee>>(`/employees/${id}`, {
@@ -84,6 +91,12 @@ export const directoryApi = {
 // --- Departments --------------------------------------------------------
 export const departmentsApi = {
   list: () => apiRequest<ApiEnvelope<Department[]>>("/departments"),
+  /** The departments dashboard; the latest month with costs when `month`
+   * is omitted. */
+  overview: (month?: string) =>
+    apiRequest<ApiEnvelope<DepartmentsOverview>>("/departments/overview", {
+      query: month ? { month } : undefined,
+    }),
   create: (body: {
     name: string;
     cost_centre_code?: string;
@@ -120,9 +133,11 @@ export const departmentsApi = {
 // --- SIMs --------------------------------------------------------
 export const simsApi = {
   list: () => fetchAllPages<SimCard>("/sims"),
+  /** `msisdn` may be left out when `extension` is given — the number then
+   * follows the company number format. */
   create: (body: {
     iccid: string;
-    msisdn: string;
+    msisdn?: string;
     extension?: string;
     plan_id?: string;
     provider?: string;
@@ -201,6 +216,26 @@ export const callRatesApi = {
       `/call-rates/international/${countryCode}`,
       { method: "PATCH", body },
     ),
+};
+
+// --- Company number format (Admin only) -----------------------------------
+export const numberFormatApi = {
+  get: () => apiRequest<ApiEnvelope<NumberFormat>>("/settings/number-format"),
+  /** `apply_to_existing` also renumbers every SIM that has an extension. */
+  update: (body: { prefix: string; apply_to_existing?: boolean }) =>
+    apiRequest<ApiEnvelope<NumberFormat>>("/settings/number-format", {
+      method: "PATCH",
+      body,
+    }),
+};
+
+// --- Monthly report (Admin: company; Manager: own department) -------------
+export const reportsApi = {
+  /** The latest month with costs when `month` is omitted. */
+  monthly: (month?: string) =>
+    apiRequest<ApiEnvelope<MonthlyReport>>("/reports/monthly", {
+      query: month ? { month } : undefined,
+    }),
 };
 
 // --- Bill reconciliation (Admin) -----------------------------------------
@@ -323,6 +358,10 @@ export const cdrApi = {
         ingested: number;
         attributed: number;
         unattributed: number;
+        /** Lines set up for extensions this batch was the first to
+         * mention: a SIM, plus a generated stand-in employee holding it. */
+        lines_created: number;
+        new_extensions: string[];
       }>
     >("/cdr/ingest", {
       method: "POST",

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { ScoreGauge } from "@/features/anomalies/score-gauge";
 import type { AnomalyFlag } from "@/lib/api/types";
-import { callDuration } from "@/lib/format";
+import { callDuration, kes } from "@/lib/format";
 
 /** Keys inside contributing_features that are rendered by the dedicated
  * rows below, so the raw dump doesn't repeat them. */
@@ -20,6 +20,9 @@ const HANDLED_KEYS = new Set([
   "reason",
   "duration_minutes",
   "computed_cost",
+  "list_cost_kes",
+  "typical_duration_minutes",
+  "typical_list_cost_kes",
   "call_classification",
   "model_score",
 ]);
@@ -108,6 +111,19 @@ export function AnomalyDetailSheet({
                   flag.event ? callDuration(flag.event.duration_minutes) : "—"
                 }
               />
+              {typeof features.list_cost_kes === "number" ? (
+                <DetailRow
+                  label="Cost at list price"
+                  value={kes(features.list_cost_kes)}
+                />
+              ) : null}
+              {typeof features.typical_duration_minutes === "number" &&
+              typeof features.typical_list_cost_kes === "number" ? (
+                <DetailRow
+                  label="A typical paid call"
+                  value={`${callDuration(features.typical_duration_minutes)}, ${kes(features.typical_list_cost_kes)}`}
+                />
+              ) : null}
               <DetailRow
                 label="Classification"
                 value={flag.event?.call_classification ?? "—"}

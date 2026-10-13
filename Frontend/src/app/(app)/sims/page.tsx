@@ -1,27 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Smartphone } from "lucide-react";
 import type { LegacyColumnDef as ColumnDef } from "@tanstack/react-table/legacy";
-import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/data/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ApiError } from "@/lib/api/client";
+import { SimHolderDialog } from "@/features/sims/sim-holder-dialog";
 import type { SimCard } from "@/lib/api/types";
-import {
-  useAllocateSim,
-  useEmployees,
-  useSims,
-  useUnassignSim,
-} from "@/lib/api/hooks";
+import { useEmployees, useSims } from "@/lib/api/hooks";
 import { useSession } from "@/lib/auth/session-store";
 
 const LIFECYCLE_TONE: Record<string, "secondary" | "outline" | "destructive"> =
@@ -34,41 +22,15 @@ const LIFECYCLE_TONE: Record<string, "secondary" | "outline" | "destructive"> =
 export default function SimsPage() {
   const sims = useSims();
   const employees = useEmployees();
-  const allocate = useAllocateSim();
-  const unassign = useUnassignSim();
-  const role = useSession((state) => state.user?.role);
-  const canManage = role === "Admin" || role === "Manager";
+  // Only an Admin may change who holds a SIM (and so its extension) — a
+  // Manager can see the inventory but not reassign it.
+  const isAdmin = useSession((state) => state.user?.role) === "Admin";
+  const [changingHolder, setChangingHolder] = useState<SimCard | null>(null);
 
   const employeeNameById = useMemo(
     () => new Map((employees.data?.data ?? []).map((e) => [e.id, e.full_name])),
     [employees.data],
   );
-
-  async function handleAllocate(simId: string, employeeId: string) {
-    try {
-      await allocate.mutateAsync({ simId, employeeId });
-      toast.success("SIM allocated.");
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "Couldn't allocate this SIM.",
-      );
-    }
-  }
-
-  async function handleUnassign(simId: string) {
-    try {
-      await unassign.mutateAsync(simId);
-      toast.success("SIM unassigned.");
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "Couldn't unassign this SIM.",
-      );
-    }
-  }
 
   const columns = useMemo<ColumnDef<SimCard, unknown>[]>(() => {
     const base: ColumnDef<SimCard, unknown>[] = [
@@ -78,10 +40,14 @@ export default function SimsPage() {
         cell: (c) => c.getValue<string | null>() ?? "—",
       },
       {
-        accessorKey: "msisdn_masked",
-        header: "MSISDN",
-        cell: (c) =>
-          c.row.original.msisdn ?? c.row.original.msisdn_masked ?? "—",
+        id: "number",
+        header: "Number",
+        // An Admin gets the full number, everyone else a masked one —
+        // whichever it is, it's the column's value, so search finds it.
+        accessorFn: (sim) => sim.msisdn ?? sim.msisdn_masked ?? "",
+        cell: (c) => (
+          <span className="font-tabular">{c.getValue<string>() || "—"}</span>
+        ),
       },
       {
         accessorKey: "extension",
@@ -89,16 +55,22 @@ export default function SimsPage() {
         cell: (c) => c.getValue<string | null>() ?? "—",
       },
       {
-        accessorKey: "employee_id",
+        id: "allocated_to",
         header: "Allocated to",
-        cell: (c) => {
-          const id = c.getValue<string | null>();
-          return id ? (
-            (employeeNameById.get(id) ?? id)
-          ) : (
+        // The holder's name comes with the SIM itself; the employee list
+        // is only a fallback. Never the raw employee id — that means
+        // nothing to a person. Being the column's value, the name is also
+        // what search and sort work on.
+        accessorFn: (sim) =>
+          sim.employee_id
+            ? (sim.employee_name ??
+              employeeNameById.get(sim.employee_id) ??
+              "Name unavailable")
+            : "",
+        cell: (c) =>
+          c.getValue<string>() || (
             <span className="text-muted-foreground">Unallocated</span>
-          );
-        },
+          ),
       },
       {
         accessorKey: "lifecycle_state",
@@ -112,7 +84,7 @@ export default function SimsPage() {
       },
     ];
 
-    if (!canManage) return base;
+    if (!isAdmin) return base;
 
     return [
       ...base,
@@ -122,48 +94,29 @@ export default function SimsPage() {
         enableSorting: false,
         cell: (c) => {
           const sim = c.row.original;
-          return sim.employee_id ? (
+          return (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => handleUnassign(sim.id)}
+              // A suspended or decommissioned SIM can be taken back, but
+              // not given to anyone.
+              disabled={!sim.employee_id && sim.lifecycle_state !== "active"}
+              onClick={() => setChangingHolder(sim)}
             >
-              Unassign
+              {sim.employee_id ? "Change holder…" : "Assign…"}
             </Button>
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="outline" size="sm">
-                  Allocate…
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="max-h-64 overflow-y-auto"
-              >
-                {(employees.data?.data ?? []).map((employee) => (
-                  <DropdownMenuItem
-                    key={employee.id}
-                    onSelect={() => handleAllocate(sim.id, employee.id)}
-                  >
-                    {employee.full_name}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
           );
         },
       },
     ];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers are stable per render, employees.data is the real dep
-  }, [canManage, employeeNameById, employees.data]);
+  }, [isAdmin, employeeNameById]);
 
   return (
     <>
       <PageHeader
         title="SIM inventory"
-        description="Every SIM card, who it's allocated to, and its lifecycle state."
+        description="Every SIM card, its company number and extension, who holds it, and its lifecycle state."
       />
       <DataTable
         columns={columns}
@@ -176,6 +129,14 @@ export default function SimsPage() {
         emptyTitle="No SIM cards yet"
         getRowId={(row) => row.id}
       />
+      {changingHolder ? (
+        <SimHolderDialog
+          key={changingHolder.id}
+          sim={changingHolder}
+          employees={employees.data?.data ?? []}
+          onClose={() => setChangingHolder(null)}
+        />
+      ) : null}
     </>
   );
 }

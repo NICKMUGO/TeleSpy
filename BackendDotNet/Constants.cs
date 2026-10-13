@@ -28,11 +28,6 @@ public static class Constants
 
     public static readonly IReadOnlyList<string> AllRoles = RoleSlugs.Keys.ToList();
 
-    // Roles allowed to self-register through POST /auth/register. Every other
-    // role is provisioned by an admin via POST /users so privilege can't be
-    // self-granted at signup.
-    public static readonly IReadOnlyList<string> SelfRegisterableRoles = new[] { Role.Employee };
-
     // Default monthly telecom cost ceiling per role, in KES — written into
     // roles.call_limit_kshs by EnsureDefaultRoles() at startup. From then on
     // the database row is the source of truth (editable via PUT /roles/<id>),
@@ -145,6 +140,14 @@ public static class BillingConstants
     public const double DefaultFixedMonthlyChargeKes = 26_086.96;
     public const double DefaultExciseRatePct = 15.0;
     public const double DefaultVatRatePct = 16.0;
+
+    // The company's standard number format: this prefix followed by the
+    // 3-digit extension, so extension 370 is 0703083370. Editable in
+    // Settings; a full number must still be a valid MSISDN (9-12 digits),
+    // which bounds the prefix length.
+    public const string DefaultCompanyNumberPrefix = "0703083";
+    public const int CompanyNumberPrefixMinLength = 6;
+    public const int CompanyNumberPrefixMaxLength = 9;
 
     // Per-country KES/minute, sourced from
     // ML/training/International_Calling_Rates.pdf (Safaricom international

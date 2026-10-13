@@ -17,7 +17,6 @@ public class CurrentUserMiddleware(RequestDelegate next)
     // goes through the JWT check below.
     public static readonly string[] PublicPaths =
     [
-        "/auth/register",
         "/auth/login",
         "/auth/verify-otp",
         "/auth/resend-otp",

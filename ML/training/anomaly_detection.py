@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
 """Anomaly detection (Isolation Forest) — standalone batch job.
 
-Fits over every eligible historical usage_events row (attributed, not
-carved out via excluded_from_anomaly_detection) and inserts an
-anomaly_flags row for anything the model scores as anomalous that isn't
-already flagged. Safe to run frequently: already-flagged events are
-skipped, so re-running only picks up newly ingested events — meant to run
-often (e.g. every 4 hours via cron/systemd timer), unlike usage_profiling
-and forecasting which change slowly.
+Fits over every eligible historical usage_events row and inserts an
+anomaly_flags row for the few the model scores as clearly anomalous.
+
+What is scored: paid calls only — local (External) and International —
+that are attributed to an employee and not carved out via
+excluded_from_anomaly_detection. Internal extension-to-extension calls are
+free, so however long one runs it is never an anomaly worth reviewing, and
+they outnumber paid calls about five to one: scoring them only buries the
+calls that cost money.
+
+What a call is judged on: how long it lasted and what it costs at list
+price (billing.py's own pricing, so a long call to an expensive country
+stands out further than a long local one). Only calls that are unusually
+long or unusually expensive are flagged — never one that is merely short.
+
+How many are flagged: the model is asked for the most unusual
+CONTAMINATION share of paid calls (0.5%, a couple of dozen in a typical
+two months of traffic — a list a person can actually review), and a flag
+is only stored when its score clears MIN_ANOMALY_SCORE, so borderline
+calls are dropped rather than shown as low-severity noise. Of those, only
+the MAX_FLAGS (15) highest-scoring are kept.
+
+Safe to run frequently (e.g. every 4 hours via cron/systemd timer, unlike
+usage_profiling and forecasting which change slowly). Each run refits on
+everything and brings the open flags in line with the new fit: new
+anomalies are added, an open flag the model no longer supports is removed,
+and a flag someone has already resolved is kept as review history.
 
 Run standalone:
     python anomaly_detection.py
@@ -23,7 +43,10 @@ event really was anomalous" label exists anywhere in the schema), so
 there's nothing to compute accuracy/precision/recall against — doing so
 would mean scoring the model against its own output, which is circular
 and would just report near-perfect numbers that mean nothing. Instead,
-evaluate() below grid-searches (max_samples, max_features, contamination)
+evaluate() below grid-searches max_samples (contamination is a policy
+choice — how many calls are worth a reviewer's time — not something the
+data can pick: mean decision_function always rises as contamination
+falls, so a search over it just returns the smallest value offered)
 using repeated K-Fold CV (plain, not stratified — stratification needs a
 class label, which doesn't exist here) and reports the metrics that are
 actually meaningful for an unsupervised detector: mean decision_function
@@ -48,20 +71,37 @@ from sklearn.ensemble import IsolationForest
 # RepeatedKFold: the cross-validation splitter used during grid search.
 from sklearn.model_selection import ParameterGrid, RepeatedKFold
 
-# Shared DB wrapper type/helpers, plus the two classification label
-# constants used as one-hot features below.
+# billing: the one place a call is priced — used here for each call's list
+# price, the model's second feature.
+import billing
+# Shared DB wrapper type/helpers, plus the two paid-call classification
+# labels (the only calls that are scored).
 from common import Backend, CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL, new_id, now_str, open_backend_connections
 
-CONTAMINATION = 0.05  # default/fallback expected fraction of eligible events that are anomalous
+CONTAMINATION = 0.005  # share of paid calls treated as anomalous: the most unusual 0.5%
+# A flag is stored only at or above this 0-1 anomaly score. 0.5 is the
+# model's own anomaly boundary, and the calls sitting right on it are the
+# borderline ones — indistinguishable from the next few hundred the model
+# left alone — so they are dropped rather than shown as low-severity
+# noise. The UI grades what is stored as medium (0.52+) or high (0.55+);
+# see Frontend/src/lib/anomaly-severity.ts.
+MIN_ANOMALY_SCORE = 0.52
+# The most flags a run leaves standing: the highest-scoring calls that
+# clear every test above. A review list is only useful if someone can get
+# through it, so past this the weaker flags are dropped however much
+# traffic there is.
+MAX_FLAGS = 15
 MIN_EVENTS = 20  # below this, Isolation Forest has too little data to be meaningful
 RANDOM_STATE = 20260912  # fixed seed so grid search / model fits are reproducible run to run
 
 # --- Hyperparameter search space ------------------------------------------
 # Every combination of these three params is tried during grid_search().
 PARAM_GRID = {
-    "max_samples": [0.75, 1.0],
-    "max_features": [0.75, 1.0],
-    "contamination": [0.05, 0.08],
+    "max_samples": [0.5, 0.75, 1.0],
+    # Both features, always: with only two, a tree built on a subset would
+    # be looking at duration alone or price alone.
+    "max_features": [1.0],
+    "contamination": [CONTAMINATION],
 }
 CV_SPLITS = 5  # k in k-fold
 CV_REPEATS = 2  # how many times the k-fold split is repeated with different shuffles
@@ -74,30 +114,36 @@ EARLY_STOPPING_MAX_ESTIMATORS = 300  # hard ceiling on forest size
 EARLY_STOPPING_PATIENCE = 3  # consecutive non-improving increments before stopping
 EARLY_STOPPING_TOLERANCE = 1e-3  # minimum improvement to count as "still improving"
 
-# SQL pulling every usage_event eligible for anomaly scoring: successfully
-# attributed to an employee, and not carved out via the excluded flag.
-_EVENTS_SQL = """
-    SELECT event_id, duration_minutes, computed_cost, occured_at, call_classification
+# SQL pulling every usage_event eligible for anomaly scoring: a paid call
+# (local or international — internal calls are free and never scored),
+# successfully attributed to an employee, and not carved out via the
+# excluded flag.
+_EVENTS_SQL = f"""
+    SELECT event_id, duration_minutes, destination, occured_at, call_classification
     FROM usage_events
     WHERE attribution_state = 'attributed'
       AND excluded_from_anomaly_detection = FALSE
+      AND call_classification IN ('{CALL_CLASS_EXTERNAL}', '{CALL_CLASS_INTERNATIONAL}')
 """
 
 
-def _event_features(row: pd.Series) -> list[float]:
-    # Parse the occured_at string into a real datetime; invalid/missing
-    # values become NaT ("errors='coerce'") instead of raising.
+def _list_price(row: pd.Series, billing_settings: dict, intl_rates: dict[str, float]) -> float:
+    """What the call costs at list price, in KES, priced by billing.py from
+    its duration, destination and the time it started. usage_events carries
+    no per-call cost of its own (computed_cost is always 0)."""
     occured_at = pd.to_datetime(row["occured_at"], errors="coerce")
-    # Build this event's 5-number feature vector: duration, cost, hour of
-    # day, and two one-hot flags for International/External classification
-    # (Internal/Unknown implicitly means both flags are 0).
-    return [
-        float(row["duration_minutes"] or 0.0),
-        float(row["computed_cost"] or 0.0),
-        float(occured_at.hour) if pd.notnull(occured_at) else 0.0,
-        1.0 if row["call_classification"] == CALL_CLASS_INTERNATIONAL else 0.0,
-        1.0 if row["call_classification"] == CALL_CLASS_EXTERNAL else 0.0,
-    ]
+    orig_time = occured_at.strftime("%H:%M:%S") if pd.notnull(occured_at) else None
+    list_cost, _ = billing.compute_call_costs(
+        row["call_classification"], float(row["duration_minutes"] or 0.0), row["destination"], orig_time,
+        billing_settings, intl_rates,
+    )
+    return list_cost
+
+
+def _event_features(row: pd.Series) -> list[float]:
+    # This event's feature vector: how long the call lasted, and what it
+    # costs at list price.
+    return [float(row["duration_minutes"] or 0.0), float(row["list_cost_kes"])]
 
 
 def _fit_with_early_stopping(train: np.ndarray, val: np.ndarray, params: dict, random_state: int):
@@ -259,11 +305,11 @@ def run(backend: Backend) -> int:
     if len(events) < MIN_EVENTS:
         return 0
 
-    # Set of event_ids that already have an anomaly_flags row, so we never
-    # double-flag the same event on a re-run.
-    already_flagged = {
-        row[0] for row in backend.execute("SELECT event_id FROM anomaly_flags").fetchall()
-    }
+    # Price every call at list, from the same rate tables billing.py uses.
+    billing_settings = billing._load_billing_settings(backend)
+    intl_rates = billing._load_international_rates(backend)
+    events["list_cost_kes"] = [_list_price(row, billing_settings, intl_rates) for _, row in events.iterrows()]
+
     # Build the full feature matrix, one row per event.
     features = np.array([_event_features(row) for _, row in events.iterrows()])
 
@@ -285,36 +331,71 @@ def run(backend: Backend) -> int:
     raw_scores = model.decision_function(features)  # higher = more normal
     predictions = model.predict(features)  # -1 = anomaly, 1 = normal
 
-    created = 0
+    # An isolation forest isolates anything rare, at either end. A flag is
+    # for a call that ran long or cost a lot, so one has to sit above the
+    # typical paid call on at least one of the two.
+    typical_duration = float(np.median(features[:, 0]))
+    typical_price = float(np.median(features[:, 1]))
+
+    # event_id -> (anomaly_score, contributing_features) for every call
+    # this fit flags.
+    flagged: dict[str, tuple[float, str]] = {}
     # Walk every event alongside its model score/prediction in lockstep.
     for (_, event), raw_score, prediction in zip(events.iterrows(), raw_scores, predictions):
-        # Skip anything the model didn't flag as an anomaly, and anything
-        # already flagged in a previous run.
-        if prediction != -1 or event["event_id"] in already_flagged:
+        if prediction != -1:
+            continue
+        duration, price = float(event["duration_minutes"] or 0.0), float(event["list_cost_kes"])
+        if duration <= typical_duration and price <= typical_price:
             continue
         # decision_function is roughly bounded in [-0.5, 0.5]; fold into a
-        # 0-1 "how anomalous" score for storage/display consistency with
-        # the rule-based scorer both backends already run at ingest time.
-        # (0.5 - raw_score flips "higher = more normal" into "higher = more
-        # anomalous", then clamp to [0, 1].)
+        # 0-1 "how anomalous" score (0.5 - raw_score flips "higher = more
+        # normal" into "higher = more anomalous", then clamp to [0, 1]).
         anomaly_score = round(min(1.0, max(0.0, 0.5 - float(raw_score))), 4)
+        # Borderline: the model put it just over its boundary. Not worth a
+        # reviewer's time.
+        if anomaly_score < MIN_ANOMALY_SCORE:
+            continue
         # Small JSON blob recording why this event was flagged, stored
-        # alongside the flag for later inspection/debugging.
-        contributing_features = json.dumps({
+        # alongside the flag for later inspection.
+        flagged[event["event_id"]] = (anomaly_score, json.dumps({
             "reason": "isolation_forest",
-            "duration_minutes": event["duration_minutes"],
-            "computed_cost": event["computed_cost"],
+            "duration_minutes": round(duration, 2),
+            "list_cost_kes": price,
+            "typical_duration_minutes": round(typical_duration, 2),
+            "typical_list_cost_kes": round(typical_price, 2),
             "call_classification": event["call_classification"],
             "model_score": round(float(raw_score), 4),
-        })
-        # Insert the new anomaly_flags row.
+        }))
+
+    # Keep only the strongest MAX_FLAGS, so the review list stays short.
+    if len(flagged) > MAX_FLAGS:
+        strongest = sorted(flagged.items(), key=lambda item: item[1][0], reverse=True)[:MAX_FLAGS]
+        print(f"  {len(flagged)} calls cleared the score threshold; keeping the {MAX_FLAGS} strongest.")
+        flagged = dict(strongest)
+
+    # Bring the stored flags in line with this fit. An open flag the model
+    # no longer supports (including every flag an earlier version raised on
+    # an internal call) is removed; a resolved one stays as review history.
+    existing = backend.execute("SELECT event_id, resolved_at FROM anomaly_flags").fetchall()
+    stale = [event_id for event_id, resolved_at in existing if resolved_at is None and event_id not in flagged]
+    for event_id in stale:
+        backend.execute("DELETE FROM anomaly_flags WHERE event_id = ? AND resolved_at IS NULL", (event_id,))
+    if stale:
+        print(f"  Removed {len(stale)} open flag(s) the model no longer supports.")
+
+    already_flagged = {event_id for event_id, _ in existing} - set(stale)
+    created = 0
+    for event_id, (anomaly_score, contributing_features) in flagged.items():
+        # Never double-flag an event that still has a flag.
+        if event_id in already_flagged:
+            continue
         backend.execute(
             """INSERT INTO anomaly_flags (flag_id, event_id, anomaly_score, contributing_features, created_at)
                VALUES (?, ?, ?, ?, ?)""",
-            (new_id(), event["event_id"], anomaly_score, contributing_features, now_str()),
+            (new_id(), event_id, anomaly_score, contributing_features, now_str()),
         )
         created += 1
-    # Persist all newly inserted flags.
+    # Persist the removals and the newly inserted flags.
     backend.commit()
     return created
 

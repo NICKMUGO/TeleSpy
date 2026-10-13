@@ -53,6 +53,7 @@ export default function IngestionPage() {
     ingested: number;
     attributed: number;
     unattributed: number;
+    lines_created: number;
   } | null>(null);
   const [openBatch, setOpenBatch] = useState<AuditLogEntry | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,6 +98,11 @@ export default function IngestionPage() {
       toast.success(
         response.message ?? `Ingested ${response.data.ingested} record(s).`,
       );
+      if (response.data.lines_created > 0) {
+        toast.info(
+          `New extension(s) ${response.data.new_extensions.join(", ")}: a SIM and a stand-in employee were created for each. Rename them under Employees.`,
+        );
+      }
       audit.refetch();
     } catch (error) {
       setStage("idle");
@@ -116,7 +122,7 @@ export default function IngestionPage() {
         description="Upload carrier CDR batches and track ingestion status."
       />
 
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* Upload */}
           <SectionCard
@@ -295,6 +301,12 @@ export default function IngestionPage() {
                       value={result.unattributed}
                       tone={result.unattributed > 0 ? "warning" : undefined}
                     />
+                    {result.lines_created > 0 ? (
+                      <Row
+                        label="New extensions set up"
+                        value={result.lines_created}
+                      />
+                    ) : null}
                   </>
                 ) : null}
                 {rejected > 0 ? (

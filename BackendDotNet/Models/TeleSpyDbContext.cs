@@ -221,6 +221,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.FixedMonthlyChargeKes).HasColumnName("fixed_monthly_charge_kes").HasDefaultValue(BillingConstants.DefaultFixedMonthlyChargeKes);
             e.Property(x => x.ExciseRatePct).HasColumnName("excise_rate_pct").HasDefaultValue(BillingConstants.DefaultExciseRatePct);
             e.Property(x => x.VatRatePct).HasColumnName("vat_rate_pct").HasDefaultValue(BillingConstants.DefaultVatRatePct);
+            e.Property(x => x.CompanyNumberPrefix).HasColumnName("company_number_prefix").HasMaxLength(BillingConstants.CompanyNumberPrefixMaxLength).HasDefaultValue(BillingConstants.DefaultCompanyNumberPrefix);
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 

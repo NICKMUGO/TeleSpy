@@ -75,7 +75,7 @@ export function AppShellChrome({ children }: { children: ReactNode }) {
       <main
         id="main-content"
         tabIndex={-1}
-        className="focus-visible:ring-ring flex flex-1 flex-col focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col focus-visible:ring-2 focus-visible:outline-none"
       >
         {children}
       </main>

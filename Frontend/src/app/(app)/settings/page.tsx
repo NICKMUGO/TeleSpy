@@ -8,6 +8,7 @@ import { DiscountsCard } from "@/features/billing/discounts-card";
 import { SpendingLimitsCard } from "@/features/billing/spending-limits-card";
 import { LocalRateCard } from "@/features/billing/local-rate-card";
 import { InternationalRatesTable } from "@/features/billing/international-rates-table";
+import { NumberFormatCard } from "@/features/settings/number-format-card";
 import { useSession } from "@/lib/auth/session-store";
 
 export default function SettingsPage() {
@@ -18,9 +19,9 @@ export default function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Display preferences, notifications and billing."
+        description="Display preferences, notifications, company numbers and billing."
       />
-      <div className="flex flex-col gap-8 px-6 py-6">
+      <div className="flex flex-col gap-8 px-4 py-6 sm:px-6">
         <section>
           <h2 className="mb-4 text-lg font-semibold">Display</h2>
           <DisplaySettingsForm />
@@ -33,6 +34,13 @@ export default function SettingsPage() {
             are wired up.
           </StubNotice>
         </section>
+
+        {isAdmin ? (
+          <section>
+            <h2 className="mb-4 text-lg font-semibold">Company numbers</h2>
+            <NumberFormatCard />
+          </section>
+        ) : null}
 
         <section>
           <h2 className="mb-4 text-lg font-semibold">Billing</h2>

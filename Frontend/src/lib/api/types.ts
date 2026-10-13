@@ -26,6 +26,58 @@ export interface Department {
   budget_ceiling: number | null;
 }
 
+/** One department's row on the departments dashboard
+ * (GET /departments/overview). */
+export interface DepartmentOverviewRow {
+  id: string;
+  name: string;
+  cost_centre_code: string | null;
+  budget_ceiling_kes: number | null;
+  headcount: number;
+  /** SIMs its staff hold today. */
+  lines: number;
+  staff_with_spend: number;
+  cost_kes: number;
+  list_cost_kes: number;
+  discount_kes: number;
+  /** Its share of every department's spend this month. */
+  share_pct: number;
+  previous_cost_kes: number | null;
+  cost_per_head_kes: number | null;
+  budget_used_pct: number | null;
+  over_budget_by_kes: number;
+  status: "unmonitored" | "over_budget" | "near_ceiling" | "within_budget";
+  /** Staff past their own monthly limit, and by how much in total. */
+  staff_over_limit: number;
+  staff_over_limit_kes: number;
+  open_anomalies: number;
+  calls: { type: string; calls: number; minutes: number }[];
+  trend: { month: string; cost_kes: number }[];
+  top_spenders: {
+    employee_id: string;
+    full_name: string;
+    cost_kes: number;
+    over_limit: boolean;
+  }[];
+  forecast: {
+    period: string;
+    forecasted_cost_kes: number | null;
+    confidence_low_kes: number | null;
+    confidence_high_kes: number | null;
+  } | null;
+}
+
+export interface DepartmentsOverview {
+  month: string;
+  previous_month: string;
+  /** Every month that has costs, newest first. */
+  months: string[];
+  trend_months: string[];
+  total_cost_kes: number;
+  total_budget_kes: number;
+  departments: DepartmentOverviewRow[];
+}
+
 export interface Employee {
   id: string;
   staff_number: string | null;
@@ -38,6 +90,8 @@ export interface Employee {
   is_active?: boolean;
   extension?: string | null; // decrypted SIM extension — Admin/self/own-manager only
   sim_id?: string;
+  /** Full number of the line this employee holds — Admin only. */
+  msisdn?: string;
   total_cost_kes?: number; // current month — Admin/self/own-manager only
 }
 
@@ -56,6 +110,8 @@ export interface SimCard {
   plan_id: string | null;
   lifecycle_state: string;
   employee_id: string | null;
+  /** Full name of whoever currently holds the SIM, if anyone. */
+  employee_name?: string | null;
   created_at: string;
   iccid?: string; // Admin only
   msisdn?: string; // Admin only
@@ -163,6 +219,17 @@ export interface LocalCallRateSettings {
   updated_at: string;
 }
 
+/** The company's standard number format (GET /settings/number-format):
+ * every staff line is `prefix` followed by the 3-digit extension. */
+export interface NumberFormat {
+  prefix: string;
+  extension_digits: number;
+  example: string;
+  updated_at: string;
+  /** Only on the response to a save. */
+  sims_renumbered?: number;
+}
+
 /** One month of GET /reconciliation: the bill rebuilt from the app's own
  * records beside the telco's invoice total, if one has been entered. */
 export interface ReconciliationMonth {
@@ -188,6 +255,88 @@ export interface Reconciliation {
   fixed_monthly_charge_with_tax_kes: number;
   excise_rate_pct: number;
   vat_rate_pct: number;
+}
+
+/** GET /reports/monthly — one month summarised for the printable
+ * management report. An Admin's covers the company; a Manager's covers
+ * their department and has no company-level bill lines (the optional
+ * fields on `bill`). No employee is named anywhere in it. */
+export interface MonthlyReport {
+  month: string;
+  /** Every month that has costs, newest first. */
+  months: string[];
+  scope: { type: "company" | "department"; department_name: string | null };
+  home_network_name: string;
+  days_covered: number;
+  days_in_month: number;
+  staff_with_spend: number;
+  bill: {
+    calls_list_cost_kes: number;
+    discount_kes: number;
+    discount_pct: number;
+    calls_cost_kes: number;
+    previous_calls_cost_kes: number | null;
+    fixed_charge_kes?: number;
+    excise_rate_pct?: number;
+    excise_kes?: number;
+    vat_rate_pct?: number;
+    vat_kes?: number;
+    fixed_charge_with_tax_kes?: number;
+    total_kes?: number;
+    invoice_total_kes?: number | null;
+    invoice_note?: string | null;
+    difference_kes?: number | null;
+    difference_pct?: number | null;
+  };
+  departments: {
+    id: string;
+    name: string;
+    cost_centre_code: string | null;
+    staff: number;
+    list_cost_kes: number;
+    cost_kes: number;
+    share_pct: number;
+    previous_cost_kes: number | null;
+    budget_ceiling_kes: number | null;
+    budget_used_pct: number | null;
+  }[];
+  unassigned_cost_kes: number;
+  trend: {
+    month: string;
+    list_cost_kes: number;
+    cost_kes: number;
+    days_covered: number;
+    days_in_month: number;
+  }[];
+  call_types: {
+    type: "Internal" | "External" | "International";
+    calls: number;
+    minutes: number;
+  }[];
+  local_mix: {
+    network: "on_net" | "off_net";
+    band: "peak" | "off_peak";
+    calls: number;
+    minutes: number;
+    discount_pct: number;
+  }[];
+  international_destinations: {
+    country_code: string | null;
+    country_name: string;
+    rate_kes_per_minute: number;
+    calls: number;
+    minutes: number;
+  }[];
+  limits: { over_limit_count: number; over_limit_total_kes: number };
+  anomalies: { flagged: number; resolved: number; open: number };
+  lines: {
+    total: number;
+    active: number;
+    allocated: number;
+    unallocated: number;
+    cost_per_allocated_line_kes: number | null;
+  };
+  generated_at: string;
 }
 
 export interface InternationalCallRate {

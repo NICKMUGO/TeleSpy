@@ -24,7 +24,7 @@ export function PolicyPage({
     <main
       id="main-content"
       tabIndex={-1}
-      className="focus-visible:ring-ring mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-14 focus-visible:ring-2 focus-visible:outline-none"
+      className="focus-visible:ring-ring mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-10 focus-visible:ring-2 focus-visible:outline-none sm:px-6 sm:py-14"
     >
       <BrandLockup eyebrow />
       <h1 className="font-heading mt-10 text-3xl font-semibold tracking-tight">

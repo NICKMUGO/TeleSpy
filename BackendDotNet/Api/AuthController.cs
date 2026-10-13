@@ -1,10 +1,10 @@
-// Authentication + account lifecycle: register, two-step (password + email
-// OTP) login, token refresh, logout, and the password reset / change /
-// bank-enforcement flow. Mirrors Backend/api/auth.py 1:1, including its
-// per-call-site descriptive error bodies (error_type/message/field/hint/
-// status/path/method/timestamp) — see Backend/core/responses.py's removal
-// of the old ok()/err() helpers for why every action builds its own body
-// inline instead of going through a shared response helper.
+// Authentication + account lifecycle: two-step (password + email OTP) login,
+// token refresh, logout, and the password reset / change / bank-enforcement
+// flow. There is no self-registration: an account only ever comes from an
+// Admin creating the employee (POST /employees), who then sets their own
+// password through the reset link that sends. Every action builds its own
+// descriptive error body inline (error_type/message/field/hint/status/path/
+// method/timestamp) instead of going through a shared response helper.
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -13,15 +13,6 @@ using TeleSpy.Models;
 using TeleSpy.Services;
 
 namespace TeleSpy.Api;
-
-public class RegisterRequest
-{
-    public string? Email { get; set; }
-    public string? Password { get; set; }
-    public string? FullName { get; set; }
-    public bool? AcceptTerms { get; set; }
-    public bool? AcceptDpaNotice { get; set; }
-}
 
 public class LoginRequest
 {
@@ -82,153 +73,6 @@ public class AuthController(
             dpa_policy_version = Config.DpaKePolicyVersion,
         },
     });
-
-    [HttpPost("/auth/register")]
-    public async Task<IActionResult> Register()
-    {
-        var data = await RequestBody.ReadJsonSilentAsync<RegisterRequest>(Request);
-
-        string email;
-        try
-        {
-            email = Validators.RequireValidEmail(data.Email);
-        }
-        catch (ValidationFailed exc)
-        {
-            return StatusCode(422, new
-            {
-                error_type = "validation_error",
-                message = exc.Message,
-                field = "email",
-                hint = "Provide a valid email address, e.g. name@example.com.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-
-        string password;
-        try
-        {
-            password = Validators.RequireStrongPassword(data.Password);
-        }
-        catch (ValidationFailed exc)
-        {
-            return StatusCode(422, new
-            {
-                error_type = "validation_error",
-                message = exc.Message,
-                field = "password",
-                hint = "Use at least 8 characters with an uppercase letter, a lowercase letter, a digit, and a symbol.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-
-        var fullName = (data.FullName ?? "").Trim();
-        if (fullName.Length == 0)
-        {
-            return StatusCode(422, new
-            {
-                error_type = "validation_error",
-                message = "Full name is required.",
-                field = "full_name",
-                hint = "Include your full name in the registration request.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-        if (await EmployeeNames.IsTakenAsync(db, fullName))
-        {
-            return StatusCode(409, EmployeeNames.DuplicateError(Request));
-        }
-
-        if (data.AcceptTerms != true)
-        {
-            return StatusCode(422, new
-            {
-                error_type = "consent_required",
-                message = "You must accept the Terms and Conditions to register.",
-                field = "accept_terms",
-                hint = "Set accept_terms to true after the user has reviewed the Terms and Conditions.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-        if (data.AcceptDpaNotice != true)
-        {
-            return StatusCode(422, new
-            {
-                error_type = "consent_required",
-                message = "You must acknowledge the Data Protection notice (Kenya DPA, 2019) to register.",
-                field = "accept_dpa_notice",
-                hint = "Set accept_dpa_notice to true after the user has reviewed the DPA notice.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-
-        if (await db.Users.AnyAsync(u => u.Email == email))
-        {
-            return StatusCode(409, new
-            {
-                error_type = "email_taken",
-                message = "An account with that email already exists.",
-                field = "email",
-                hint = "Sign in instead, or use a different email address.",
-                status = 409,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
-
-        // Self-registration creates a bare Employee record (no
-        // department/staff_number yet — HR assigns those later) plus the
-        // User login, since every login must map 1:1 to an Employee.
-        var employee = new Employee { FullName = fullName };
-        db.Employees.Add(employee);
-        await db.SaveChangesAsync();
-
-        var role = Constants.SelfRegisterableRoles[0];
-        var user = new User
-        {
-            EmployeeId = employee.EmployeeId,
-            Email = email,
-            RoleId = Constants.RoleSlugs[role],
-            IsActive = true,
-            MustChangePassword = false,
-        };
-        user.SetPassword(password);
-        db.Users.Add(user);
-        await db.SaveChangesAsync();
-
-        db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
-        // Kenya Data Protection Act (2019) + Terms & Conditions consent
-        // record — captured explicitly, with the policy version in force at
-        // the time.
-        db.Consents.Add(new Consent
-        {
-            UserId = user.UserId,
-            AcceptedTerms = true,
-            AcceptedDpaNotice = true,
-            DpaPolicyVersion = Config.DpaKePolicyVersion,
-            CreatedAt = Clock.UtcNow(),
-        });
-        await db.SaveChangesAsync();
-
-        await audit.RecordAuditAsync("register", "user", user.UserId, actorId: user.UserId, actorRole: role);
-        return StatusCode(201, new { data = user.ToDict(), message = "Account created. You can now sign in." });
-    }
 
     [HttpPost("/auth/login")]
     public async Task<IActionResult> Login()

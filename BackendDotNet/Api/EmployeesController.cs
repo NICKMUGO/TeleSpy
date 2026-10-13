@@ -1,6 +1,6 @@
-// Employees (HR records + their login): admin CRUD, manager read scoped to
-// their own department, employee read limited to themselves. Mirrors
-// Backend/api/employees.py 1:1.
+// Employees (HR records + their login): admin CRUD — an Admin creating an
+// employee here is the only way an account comes to exist — manager read
+// scoped to their own department, employee read limited to themselves.
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,6 +34,49 @@ public class EmployeesController(
         .Include(e => e.User).ThenInclude(u => u!.Role)
         .Include(e => e.Allocations).ThenInclude(a => a.Sim)
         .Include(e => e.UsageSummaries);
+
+    /// <summary>Checks an extension an Admin wants to give an employee and
+    /// finds the SIM that carries it, if one does. Returns the error
+    /// response instead when the code is malformed or its SIM is out of
+    /// service.</summary>
+    private async Task<(SimCard? Sim, IActionResult? Problem)> ResolveExtensionAsync(string extension)
+    {
+        try
+        {
+            Validators.RequireValidExtension(extension);
+        }
+        catch (ValidationFailed exc)
+        {
+            return (null, StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = exc.Message,
+                field = "extension_code",
+                hint = "Extension must be exactly 3 digits.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            }));
+        }
+        var extHash = Security.BlindIndex(extension);
+        var sim = await db.SimCards.Include(s => s.Allocations).FirstOrDefaultAsync(s => s.MsisdnPbxHash == extHash);
+        if (sim is not null && sim.LifecycleState != "active")
+        {
+            return (null, StatusCode(409, new
+            {
+                error_type = "sim_not_active",
+                message = $"The SIM on extension {extension} is not active.",
+                field = "extension_code",
+                hint = $"That SIM's lifecycle_state is '{sim.LifecycleState}'; only an active SIM can be given to someone.",
+                status = 409,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            }));
+        }
+        return (sim, null);
+    }
 
     [HttpGet("/employees")]
     [RoleIdRequired("admin", "manager")]
@@ -192,6 +235,16 @@ public class EmployeesController(
             });
         }
 
+        // Checked before anything is created, so a bad extension can't
+        // leave a half-made account behind.
+        SimCard? extensionSim = null;
+        if (!string.IsNullOrEmpty(extension))
+        {
+            var (sim, problem) = await ResolveExtensionAsync(extension);
+            if (problem is not null) return problem;
+            extensionSim = sim;
+        }
+
         var employee = new Employee { DepartmentId = departmentId, StaffNumber = staffNumber, FullName = fullName };
         db.Employees.Add(employee);
         await db.SaveChangesAsync();
@@ -214,45 +267,14 @@ public class EmployeesController(
         employee.User = user;
         await db.Entry(user).Reference(u => u.Role).LoadAsync();
 
-        if (!string.IsNullOrEmpty(extension))
+        if (extensionSim is not null)
         {
-            try
-            {
-                Validators.RequireValidExtension(extension);
-            }
-            catch (ValidationFailed exc)
-            {
-                return StatusCode(422, new
-                {
-                    error_type = "validation_error",
-                    message = exc.Message,
-                    field = "extension",
-                    hint = "Extension must be exactly 3 digits.",
-                    status = 422,
-                    path = Request.Path.Value,
-                    method = Request.Method,
-                    timestamp = NowIso(),
-                });
-            }
-            var extHash = Security.BlindIndex(extension);
-            var sim = await db.SimCards.Include(s => s.Allocations).FirstOrDefaultAsync(s => s.MsisdnPbxHash == extHash);
-            if (sim is null)
-            {
-                return StatusCode(404, new
-                {
-                    error_type = "extension_not_found",
-                    message = "No SIM found with that extension to allocate.",
-                    field = "extension",
-                    hint = "Register a SIM with this extension before assigning it to an employee.",
-                    status = 404,
-                    path = Request.Path.Value,
-                    method = Request.Method,
-                    timestamp = NowIso(),
-                });
-            }
-            await allocationService.AllocateSimAsync(sim, employee, actor!);
+            await allocationService.AllocateSimAsync(extensionSim, employee, actor!);
             await db.Entry(employee).Collection(e => e.Allocations).LoadAsync();
-            foreach (var a in employee.Allocations) await db.Entry(a).Reference(x => x.Sim).LoadAsync();
+        }
+        else if (!string.IsNullOrEmpty(extension))
+        {
+            await allocationService.AssignExtensionCodeAsync(extension, employee);
         }
 
         await passwordReset.IssuePasswordResetAsync(user);
@@ -382,6 +404,20 @@ public class EmployeesController(
             }
             employee.DepartmentId = deptIdVal;
         }
+        // Who answers on which extension. A code that a SIM carries moves
+        // with that SIM (the line is handed over); null or "" gives the
+        // employee's line up. Done last, after every other field has
+        // validated.
+        var changeExtension = data.TryGetValue("extension_code", out var extensionEl);
+        var newExtension = changeExtension && extensionEl.ValueKind == JsonValueKind.String ? extensionEl.GetString()?.Trim() : null;
+        SimCard? newExtensionSim = null;
+        if (!string.IsNullOrEmpty(newExtension))
+        {
+            var (sim, problem) = await ResolveExtensionAsync(newExtension);
+            if (problem is not null) return problem;
+            newExtensionSim = sim;
+        }
+
         if (employee.User is not null)
         {
             if (data.TryGetValue("role", out var roleEl) && roleEl.ValueKind == JsonValueKind.String &&
@@ -412,6 +448,29 @@ public class EmployeesController(
         }
 
         await db.SaveChangesAsync();
+
+        if (changeExtension)
+        {
+            if (newExtensionSim is not null)
+            {
+                await allocationService.AllocateSimAsync(newExtensionSim, employee, actor!);
+            }
+            else if (!string.IsNullOrEmpty(newExtension))
+            {
+                await allocationService.AssignExtensionCodeAsync(newExtension, employee);
+            }
+            else
+            {
+                foreach (var held in employee.Allocations.Where(a => a.EndAt == null && a.Sim is not null).ToList())
+                {
+                    await db.Entry(held.Sim!).Collection(s => s.Allocations).LoadAsync();
+                    await allocationService.ReleaseSimAsync(held.Sim!, actor!);
+                }
+                employee.ExtensionCode = null;
+                await db.SaveChangesAsync();
+            }
+        }
+
         await audit.RecordAuditAsync("employee_updated", "employee", employee.EmployeeId,
             meta: new Dictionary<string, object?> { ["fields"] = data.Keys.ToList() });
         return Ok(new { data = employee.ToDict(actor) });

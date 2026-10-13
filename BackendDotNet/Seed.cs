@@ -10,9 +10,12 @@
 // destination, timestamp and duration as the CDR, classified and attributed
 // by the same rules the real CDR ingestion endpoint (POST /cdr/ingest) uses.
 //
+// Each SIM's mobile number follows the company number format — the standard
+// prefix, then the extension — so extension 370 is 0703083370.
+//
 // Not in the dataset, so still generated with Bogus (the C# counterpart to
 // Python's Faker): departments, telco plans, people's names, staff numbers,
-// email addresses, and each SIM's ICCID / mobile number.
+// email addresses, and each SIM's ICCID.
 //
 // Idempotent: skips entirely if any Department already exists, so re-running
 // this after real data has accumulated is a no-op rather than a
@@ -36,15 +39,17 @@ public static class Seed
 
     // Every seeded account uses one of these two passwords, so the demo has
     // known, working credentials out of the box (MustChangePassword=false).
-    // The Admin and the DemoManagerDepartment manager use real mailboxes so
-    // their MFA OTP / password-reset mail actually arrives when SMTP is
-    // configured; every other seeded account stays on an unroutable
+    // The Admin, the DemoManagerDepartment manager and one Employee in that
+    // same department use real mailboxes so their MFA OTP / password-reset
+    // mail actually arrives when SMTP is configured — one working demo
+    // login per role; every other seeded account stays on an unroutable
     // @telespy.local (or Bogus) address.
     public const string AdminEmail = "nickmugo2@gmail.com";
     public const string AdminPassword = "Admin@12345!";
     public const string DemoPassword = "Passw0rd@1";
     public const string DemoManagerDepartment = "ENG";
     public const string DemoManagerEmail = "nicknjuru13@gmail.com";
+    public const string DemoEmployeeEmail = "nick.njuru@strathmore.edu";
 
     // Monthly call-spend ceilings, sized from the dataset: each
     // department's spend in its one full month (after the contract
@@ -164,7 +169,8 @@ public static class Seed
         // --- One Employee + SIM + allocation per dataset extension, dealt
         // round-robin across the departments. The first extension dealt to
         // each department is its Manager. ----------------------------------
-        var usedEmails = new HashSet<string>();
+        var usedEmails = new HashSet<string> { DemoEmployeeEmail };
+        var demoEmployeeSeeded = false;
         // Employee names are unique (see EmployeeNames) — the Admin's is
         // already taken.
         var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { adminEmployee.FullName };
@@ -186,12 +192,19 @@ public static class Seed
             await db.SaveChangesAsync();
 
             string email;
-            if (!isManager) email = UniqueEmail(faker, usedEmails);
+            if (!isManager && !demoEmployeeSeeded && code == DemoManagerDepartment)
+            {
+                // The first Employee dealt to the demo department — so the
+                // demo Manager is this person's own manager.
+                email = DemoEmployeeEmail;
+                demoEmployeeSeeded = true;
+            }
+            else if (!isManager) email = UniqueEmail(faker, usedEmails);
             else if (code == DemoManagerDepartment) email = DemoManagerEmail;
             else email = $"{code.ToLowerInvariant()}.manager@telespy.local";
             await MakeUserAsync(db, employee, email, isManager ? Role.Manager : Role.Employee, DemoPassword);
 
-            var sim = MakeSim(faker, index, extension);
+            var sim = MakeSim(index, extension);
             sim.PlanId = faker.PickRandom(plans).PlanId;
             db.SimCards.Add(sim);
             await db.SaveChangesAsync();
@@ -226,6 +239,7 @@ public static class Seed
             $"{calls.Min(c => c.OccuredAt):yyyy-MM-dd} to {calls.Max(c => c.OccuredAt):yyyy-MM-dd}.");
         Console.WriteLine($"Admin login:    {AdminEmail} / {AdminPassword}");
         Console.WriteLine($"Manager login:  {DemoManagerEmail} / {DemoPassword}");
+        Console.WriteLine($"Employee login: {DemoEmployeeEmail} / {DemoPassword}");
         Console.WriteLine($"All other seeded accounts share the password: {DemoPassword}");
         Console.WriteLine("(MFA OTP codes are logged to the console when MAIL_SUPPRESS_SEND=true.)");
     }
@@ -318,18 +332,19 @@ public static class Seed
     }
 
     /// <summary>A SIM whose PBX extension is the dataset extension it stands
-    /// for — the value CDR ingestion matches a call's `orig` against. The
-    /// ICCID and mobile number aren't in the dataset, so they're generated.</summary>
-    private static SimCard MakeSim(Faker faker, int index, string extension)
+    /// for — the value CDR ingestion matches a call's `orig` against — and
+    /// whose mobile number is the company prefix followed by that extension.
+    /// The ICCID isn't in the dataset, so it's generated.</summary>
+    private static SimCard MakeSim(int index, string extension)
     {
         var iccid = $"8925{index:D15}"; // deterministic, guaranteed-unique 19-digit ICCID
-        var msisdn = "07" + faker.Random.Replace("########");
+        var msisdn = BillingConstants.DefaultCompanyNumberPrefix + extension;
         return new SimCard
         {
             IccidEnc = Security.EncryptValue(iccid)!, IccidHash = Security.BlindIndex(iccid)!,
             MsisdnEnc = Security.EncryptValue(msisdn)!, MsisdnHash = Security.BlindIndex(msisdn)!,
             MsisdnPbxEnc = Security.EncryptValue(extension), MsisdnPbxHash = Security.BlindIndex(extension),
-            Provider = faker.PickRandom("Safaricom", "Airtel", "Telkom"),
+            Provider = BillingConstants.DefaultHomeNetworkName, // the company numbers are all on the home network
             LifecycleState = "active",
         };
     }

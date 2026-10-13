@@ -279,8 +279,10 @@ hides navigation a role cannot use, but only as a convenience.
 | Send monthly invoices                  |  Yes  |   No    |    No    |
 | Read the audit log                     |  Yes  |   No    |    No    |
 
-Only the Employee role can self-register. Admin and Manager accounts are
-created by an admin.
+There is no self-registration: every account, whatever its role, is created
+by an Admin (Employees → Add employee), and the new employee sets their own
+password from the emailed link. Only an Admin can change who holds a SIM and
+its extension.
 
 ## API overview
 
@@ -288,7 +290,7 @@ All routes except the sign-in routes and `/health` require a bearer token.
 
 | Area        | Endpoints                                                                                                   |
 | ----------- | ----------------------------------------------------------------------------------------------------------- |
-| Auth        | `POST /auth/register`, `/auth/login`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/refresh`, `/auth/logout` |
+| Auth        | `POST /auth/login`, `/auth/verify-otp`, `/auth/resend-otp`, `/auth/refresh`, `/auth/logout` |
 | Passwords   | `POST /auth/forgot-password`, `/auth/reset-password`, `/auth/change-password`                                 |
 | Employees   | `GET` `POST /employees`, `GET` `PATCH` `DELETE /employees/{id}`                                               |
 | Directory   | `GET /directory` (name and extension lookup, every role)                                                      |
@@ -302,6 +304,8 @@ All routes except the sign-in routes and `/health` require a bearer token.
 | Reconciliation | `GET /reconciliation`, `PUT /reconciliation/{month}`                                                       |
 | Invoices    | `POST /invoices/send-monthly`                                                                                 |
 | Audit       | `GET /audit`                                                                                                  |
+| Reports     | `GET /reports/monthly?month=YYYY-MM` (the printable monthly report; Manager: own department only)          |
+| Numbers     | `GET` `PATCH /settings/number-format` (Admin: the company number prefix; extension = last 3 digits)          |
 | Account     | `GET` `PATCH /settings/me`, `GET` `POST /tutorial/progress`, `POST /tutorial/restart`, `POST /tutorial/dismiss` |
 | Health      | `GET /health`                                                                                                 |
 

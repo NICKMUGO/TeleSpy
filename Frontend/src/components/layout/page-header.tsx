@@ -10,9 +10,9 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, actions }: PageHeaderProps) {
   return (
-    <div className="border-border-subtle flex flex-wrap items-start justify-between gap-x-6 gap-y-4 border-b px-6 py-5">
+    <div className="border-border-subtle flex flex-wrap items-start justify-between gap-x-6 gap-y-4 border-b px-4 py-5 sm:px-6">
       <div className="min-w-0">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+        <h1 className="font-heading text-xl font-semibold tracking-tight sm:text-2xl">
           {title}
         </h1>
         {description ? (
@@ -22,7 +22,7 @@ export function PageHeader({ title, description, actions }: PageHeaderProps) {
         ) : null}
       </div>
       {actions ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        <div className="flex flex-wrap items-center gap-2">{actions}</div>
       ) : null}
     </div>
   );

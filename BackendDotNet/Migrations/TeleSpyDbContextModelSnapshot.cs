@@ -123,6 +123,14 @@ namespace TeleSpy.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("id");
 
+                    b.Property<string>("CompanyNumberPrefix")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(9)
+                        .HasColumnType("character varying(9)")
+                        .HasDefaultValue("0703083")
+                        .HasColumnName("company_number_prefix");
+
                     b.Property<double>("DefaultInternationalRateKes")
                         .HasColumnType("double precision")
                         .HasColumnName("default_international_rate_kes");

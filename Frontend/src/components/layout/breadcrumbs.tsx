@@ -34,7 +34,7 @@ export function Breadcrumbs() {
 
   return (
     <Breadcrumb>
-      <BreadcrumbList>
+      <BreadcrumbList className="flex-nowrap">
         {crumbs.map((crumb, index) => {
           const isLast = index === crumbs.length - 1;
           return (
@@ -42,16 +42,22 @@ export function Breadcrumbs() {
             // must be direct children of the <ol> (BreadcrumbList), not
             // wrapped in a span, or the list markup is invalid.
             <Fragment key={crumb.href}>
-              <BreadcrumbItem>
+              <BreadcrumbItem
+                className={isLast ? "min-w-0" : "hidden sm:inline-flex"}
+              >
                 {isLast ? (
-                  <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+                  <BreadcrumbPage className="truncate">
+                    {crumb.label}
+                  </BreadcrumbPage>
                 ) : (
                   <BreadcrumbLink asChild>
                     <Link href={crumb.href}>{crumb.label}</Link>
                   </BreadcrumbLink>
                 )}
               </BreadcrumbItem>
-              {!isLast ? <BreadcrumbSeparator /> : null}
+              {!isLast ? (
+                <BreadcrumbSeparator className="hidden sm:list-item" />
+              ) : null}
             </Fragment>
           );
         })}

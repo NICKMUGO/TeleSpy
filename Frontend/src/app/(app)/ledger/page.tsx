@@ -106,7 +106,7 @@ function MyLedger() {
         }
       />
       {myUsage.isLoading ? (
-        <div className="flex flex-col gap-2 p-6">
+        <div className="flex flex-col gap-2 p-4 sm:p-6">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
         </div>

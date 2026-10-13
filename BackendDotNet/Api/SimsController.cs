@@ -1,7 +1,7 @@
 // SIM inventory (admin, with manager read): create, patch lifecycle,
-// allocate/unassign to employees. ICCID/MSISDN/extension are encrypted at
+// allocate/hand over/unassign to employees — changing who holds a SIM and
+// its extension is Admin only. ICCID/MSISDN/extension are encrypted at
 // rest with blind-index fingerprints for uniqueness (see Security.cs).
-// Mirrors Backend/api/sims.py 1:1.
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -41,7 +41,7 @@ public class SimsController(
     {
         var viewer = await viewerContext.LoadedUserAsync();
         var (page, limit) = Pagination.PaginateArgs(Request);
-        var query = db.SimCards.Include(s => s.Allocations).OrderByDescending(s => s.CreatedAt).ThenBy(s => s.SimId);
+        var query = db.SimCards.Include(s => s.Allocations).ThenInclude(a => a.Employee).OrderByDescending(s => s.CreatedAt).ThenBy(s => s.SimId);
         var total = await query.CountAsync();
         var rows = await query.Skip((page - 1) * limit).Take(limit).ToListAsync();
         return Ok(new
@@ -75,20 +75,6 @@ public class SimsController(
                 timestamp = NowIso(),
             });
         }
-        if (!(msisdn.Length > 0 && msisdn.All(char.IsAsciiDigit) && msisdn.Length is >= 9 and <= 12))
-        {
-            return StatusCode(422, new
-            {
-                error_type = "validation_error",
-                message = "MSISDN must be 9-12 digits.",
-                field = "msisdn",
-                hint = "Provide a numeric MSISDN between 9 and 12 digits long.",
-                status = 422,
-                path = Request.Path.Value,
-                method = Request.Method,
-                timestamp = NowIso(),
-            });
-        }
         if (!string.IsNullOrEmpty(extension))
         {
             try
@@ -109,6 +95,27 @@ public class SimsController(
                     timestamp = NowIso(),
                 });
             }
+            // No number given: it follows the company format — the
+            // standard prefix, then the extension.
+            if (msisdn.Length == 0)
+            {
+                var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
+                msisdn = (settings?.CompanyNumberPrefix ?? BillingConstants.DefaultCompanyNumberPrefix) + extension;
+            }
+        }
+        if (!(msisdn.Length > 0 && msisdn.All(char.IsAsciiDigit) && msisdn.Length is >= 9 and <= 12))
+        {
+            return StatusCode(422, new
+            {
+                error_type = "validation_error",
+                message = "MSISDN must be 9-12 digits.",
+                field = "msisdn",
+                hint = "Provide a numeric MSISDN between 9 and 12 digits long, or an extension to derive it from the company number format.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
         }
 
         var planId = data.PlanId;
@@ -170,7 +177,7 @@ public class SimsController(
     public async Task<IActionResult> Patch(string simId)
     {
         var viewer = await viewerContext.LoadedUserAsync();
-        var sim = await db.SimCards.Include(s => s.Allocations).FirstOrDefaultAsync(s => s.SimId == simId);
+        var sim = await db.SimCards.Include(s => s.Allocations).ThenInclude(a => a.Employee).FirstOrDefaultAsync(s => s.SimId == simId);
         if (sim is null)
         {
             return StatusCode(404, new
@@ -237,16 +244,15 @@ public class SimsController(
         return Ok(new { data = sim.ToDict(viewer!) });
     }
 
-    /// <summary>The employee&lt;-&gt;SIM/extension mapping is time-bounded:
-    /// allocating a SIM to a new employee closes the previous allocation
-    /// (end_at = now) and opens a new one, rather than overwriting a single
-    /// FK.</summary>
+    /// <summary>Gives the SIM and its extension to an employee — the first
+    /// allocation of a free line, or a handover from whoever holds it now
+    /// (see AllocationService). Admin only.</summary>
     [HttpPost("/sims/{simId}/allocate")]
     [RoleIdRequired("admin")]
     public async Task<IActionResult> Allocate(string simId)
     {
         var actor = await viewerContext.LoadedUserAsync();
-        var sim = await db.SimCards.Include(s => s.Allocations).FirstOrDefaultAsync(s => s.SimId == simId);
+        var sim = await db.SimCards.Include(s => s.Allocations).ThenInclude(a => a.Employee).FirstOrDefaultAsync(s => s.SimId == simId);
         if (sim is null)
         {
             return StatusCode(404, new
@@ -301,7 +307,7 @@ public class SimsController(
     public async Task<IActionResult> Unassign(string simId)
     {
         var actor = await viewerContext.LoadedUserAsync();
-        var sim = await db.SimCards.Include(s => s.Allocations).FirstOrDefaultAsync(s => s.SimId == simId);
+        var sim = await db.SimCards.Include(s => s.Allocations).ThenInclude(a => a.Employee).FirstOrDefaultAsync(s => s.SimId == simId);
         if (sim is null)
         {
             return StatusCode(404, new
@@ -331,10 +337,7 @@ public class SimsController(
                 timestamp = NowIso(),
             });
         }
-        current.CloseAllocation(Clock.UtcNow());
-        await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("sim_unassigned", "sim_allocation", current.AllocationId,
-            actorId: actor!.UserId, actorRole: actor.Role?.RoleName);
+        await allocationService.ReleaseSimAsync(sim, actor!);
         return Ok(new { message = "SIM unassigned." });
     }
 }

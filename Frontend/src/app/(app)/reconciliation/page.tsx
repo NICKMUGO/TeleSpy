@@ -47,7 +47,7 @@ export default function ReconciliationPage() {
         title="Bill reconciliation"
         description="The bill rebuilt from the app's own call records, beside what the telco actually invoiced."
       />
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         {reconciliation.error ? (
           <ErrorBanner
             error={reconciliation.error}

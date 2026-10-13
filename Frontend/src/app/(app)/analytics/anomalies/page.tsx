@@ -125,7 +125,9 @@ export default function AnomaliesPage() {
       // their own total five times over.
       exposure: [
         ...new Set(
-          open.map((flag) => flag.employee?.id).filter((id): id is string => !!id),
+          open
+            .map((flag) => flag.employee?.id)
+            .filter((id): id is string => !!id),
         ),
       ].reduce((sum, id) => sum + (costOf(id) ?? 0), 0),
     };
@@ -170,7 +172,10 @@ export default function AnomaliesPage() {
       }
     }
     const resolved = ids.length - failed;
-    if (resolved > 0) toast.success(`Resolved ${resolved} anomal${resolved === 1 ? "y" : "ies"}.`);
+    if (resolved > 0)
+      toast.success(
+        `Resolved ${resolved} anomal${resolved === 1 ? "y" : "ies"}.`,
+      );
     setSelected(new Set());
     setOpenFlag(null);
   }
@@ -216,7 +221,7 @@ export default function AnomaliesPage() {
         }
       />
 
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {anomalies.isLoading ? (
             Array.from({ length: 3 }).map((_, i) => (
@@ -419,7 +424,9 @@ export default function AnomaliesPage() {
                         </td>
                         <td className="px-4 py-2.5">
                           <Badge
-                            variant={flag.resolved ? "secondary" : "destructive"}
+                            variant={
+                              flag.resolved ? "secondary" : "destructive"
+                            }
                           >
                             {flag.resolved ? "Resolved" : "Open"}
                           </Badge>

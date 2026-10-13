@@ -265,3 +265,34 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* The printable report's chart colours: the light-mode --chart-1…5, fixed
+ * for both themes because the report is always drawn on white paper. */
+:root {
+  --report-1: oklch(0.55 0.18 250);
+  --report-2: oklch(0.72 0.15 75);
+  --report-3: oklch(0.5 0.18 300);
+  --report-4: oklch(0.6 0.12 195);
+  --report-5: oklch(0.4 0 0);
+}
+
+/* The monthly report (/report) prints as A4 pages: one .report-page per
+ * sheet, with the chart fills and rules kept as drawn. The page margin is
+ * the document's own padding on paper. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm 14mm 12mm;
+  }
+  .report-document {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .report-page {
+    break-after: page;
+    min-height: calc(297mm - 26mm);
+  }
+  .report-page:last-child {
+    break-after: auto;
+  }
+}

@@ -1,9 +1,13 @@
 // Per-user self-service: profile (GET/PATCH /settings/me) and the
-// employee's own usage view (GET /me/usage). Mirrors Backend/api/settings.py 1:1.
+// employee's own usage view (GET /me/usage) — plus the one company-wide
+// setting kept here, the standard number format (/settings/number-format,
+// Admin only).
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TeleSpy.Core;
 using TeleSpy.Models;
+using TeleSpy.Services;
 
 namespace TeleSpy.Api;
 
@@ -129,6 +133,130 @@ public class MyUsageController(TeleSpyDbContext db, IViewerContext viewerContext
                 usage_profile_cluster = profile?.ClusterLabel,
             },
             meta = Pagination.PaginateMeta(page, limit, total),
+        });
+    }
+}
+
+/// <summary>The company's standard number format: every staff line is one
+/// shared prefix followed by the 3-digit extension, so with the prefix
+/// 0703083 the person on extension 370 is 0703083370. Admin only.</summary>
+[ApiController]
+public class NumberFormatController(TeleSpyDbContext db, IAuditService audit) : ControllerBase
+{
+    private string NowIso() => DateTime.UtcNow.ToString("o");
+
+    private IActionResult Error(string errorType, string message, int status, string? field = null, string? hint = null) =>
+        StatusCode(status, new
+        {
+            error_type = errorType,
+            message,
+            field,
+            hint,
+            status,
+            path = Request.Path.Value,
+            method = Request.Method,
+            timestamp = NowIso(),
+        });
+
+    private static Dictionary<string, object?> ToDict(BillingSettings settings) => new()
+    {
+        ["prefix"] = settings.CompanyNumberPrefix,
+        ["extension_digits"] = 3,
+        ["example"] = settings.CompanyNumberFor("370"),
+        ["updated_at"] = settings.UpdatedAt.ToString("o"),
+    };
+
+    [HttpGet("/settings/number-format")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> Get()
+    {
+        var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
+        if (settings is null)
+        {
+            return Error("settings_not_found", "Company settings have not been initialised.", 404,
+                hint: "Restart the API so CallRateBootstrap can seed the defaults.");
+        }
+        return Ok(new { data = ToDict(settings) });
+    }
+
+    /// <summary>Body: { prefix, apply_to_existing? }. With apply_to_existing
+    /// the number of every SIM that has an extension is rewritten to the new
+    /// prefix + that extension; without it only SIMs registered from now on
+    /// follow the new format.</summary>
+    [HttpPatch("/settings/number-format")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> Patch()
+    {
+        var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
+        if (settings is null)
+        {
+            return Error("settings_not_found", "Company settings have not been initialised.", 404,
+                hint: "Restart the API so CallRateBootstrap can seed the defaults.");
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<Dictionary<string, JsonElement>>(Request);
+
+        var prefix = data.TryGetValue("prefix", out var prefixEl) && prefixEl.ValueKind == JsonValueKind.String
+            ? (prefixEl.GetString() ?? "").Replace(" ", "")
+            : "";
+        if (!prefix.All(char.IsAsciiDigit) ||
+            prefix.Length is < BillingConstants.CompanyNumberPrefixMinLength or > BillingConstants.CompanyNumberPrefixMaxLength)
+        {
+            return Error("validation_error",
+                $"prefix must be {BillingConstants.CompanyNumberPrefixMinLength} to {BillingConstants.CompanyNumberPrefixMaxLength} digits.",
+                422, "prefix", "The digits every company number starts with, before the 3-digit extension — e.g. 0703083.");
+        }
+        var applyToExisting = data.TryGetValue("apply_to_existing", out var applyEl) && applyEl.ValueKind == JsonValueKind.True;
+
+        var renumbered = 0;
+        if (applyToExisting)
+        {
+            var sims = await db.SimCards.ToListAsync();
+            var targets = sims.Where(s => s.Extension() is not null)
+                .ToDictionary(s => s.SimId, s => prefix + s.Extension());
+            // A SIM that keeps its number (it has no extension) mustn't
+            // already be on one of the new numbers.
+            var newHashes = targets.Values.Select(n => Security.BlindIndex(n)!).ToHashSet();
+            if (sims.Any(s => !targets.ContainsKey(s.SimId) && newHashes.Contains(s.MsisdnHash)))
+            {
+                return Error("duplicate_sim", "Another SIM already uses one of the numbers this format would produce.", 409,
+                    "prefix", "Choose a different prefix, or change that SIM's number first.");
+            }
+
+            var changing = sims.Where(s => targets.TryGetValue(s.SimId, out var number) &&
+                Security.BlindIndex(number) != s.MsisdnHash).ToList();
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            // Numbers are unique, and the new set can overlap the old one,
+            // so each SIM is moved off its old number before any takes a
+            // new one.
+            foreach (var sim in changing) sim.MsisdnHash = "renumbering:" + sim.SimId;
+            await db.SaveChangesAsync();
+            foreach (var sim in changing)
+            {
+                sim.MsisdnEnc = Security.EncryptValue(targets[sim.SimId])!;
+                sim.MsisdnHash = Security.BlindIndex(targets[sim.SimId])!;
+                sim.UpdatedAt = Clock.UtcNow();
+            }
+            settings.CompanyNumberPrefix = prefix;
+            settings.UpdatedAt = Clock.UtcNow();
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            renumbered = changing.Count;
+        }
+        else
+        {
+            settings.CompanyNumberPrefix = prefix;
+            settings.UpdatedAt = Clock.UtcNow();
+            await db.SaveChangesAsync();
+        }
+
+        await audit.RecordAuditAsync("number_format_updated", "billing_settings", settings.Id,
+            meta: new Dictionary<string, object?> { ["prefix"] = prefix, ["sims_renumbered"] = renumbered });
+        var outDict = ToDict(settings);
+        outDict["sims_renumbered"] = renumbered;
+        return Ok(new
+        {
+            data = outDict,
+            message = renumbered > 0 ? $"Number format updated; {renumbered} SIM(s) renumbered." : "Number format updated.",
         });
     }
 }

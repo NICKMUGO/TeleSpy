@@ -110,11 +110,11 @@ export default function UsagePage() {
         title="Usage events"
         description="Every answered call placed from an extension, most recent first. Duration runs from pickup to hang-up."
       />
-      <div className="flex flex-wrap items-end gap-3 px-6 pt-4">
-        <label className="flex flex-col gap-1 text-sm">
+      <div className="flex flex-wrap items-end gap-3 px-4 pt-4 sm:px-6">
+        <label className="flex w-full flex-col gap-1 text-sm sm:w-auto">
           <span className="text-muted-foreground">Month</span>
           <SelectNative
-            className="min-w-48"
+            className="sm:min-w-48"
             value={month}
             onChange={(e) => {
               setMonth(e.target.value);
@@ -134,7 +134,7 @@ export default function UsagePage() {
             ))}
           </SelectNative>
         </label>
-        <InputGroup className="max-w-xs">
+        <InputGroup className="w-full sm:w-80">
           <InputGroupAddon>
             <Search aria-hidden="true" className="size-4" />
           </InputGroupAddon>

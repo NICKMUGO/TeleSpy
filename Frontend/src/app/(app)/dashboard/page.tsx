@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
-import { CalendarDays, Download } from "lucide-react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { CalendarDays, FileText } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/data/stat-card";
 import { SectionCard } from "@/components/data/section-card";
@@ -11,6 +12,7 @@ import { DonutChart } from "@/components/data/donut-chart";
 import { SeverityBadge } from "@/components/data/severity-badge";
 import { SpendChart } from "@/components/data/spend-chart";
 import { Badge } from "@/components/ui/badge";
+import { SelectNative } from "@/components/ui/select-native";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/data/error-banner";
@@ -25,17 +27,19 @@ import {
   useUsage,
   useUsageSummary,
 } from "@/lib/api/hooks";
+import { HIGH_SEVERITY_THRESHOLD } from "@/lib/anomaly-severity";
 import { useSession } from "@/lib/auth/session-store";
-import { downloadCsv } from "@/lib/export-csv";
 import {
   activePeriod,
   callDuration,
   kes,
   kesCompact,
+  monthKey,
   monthLabel,
   percentDelta,
 } from "@/lib/format";
-import type { UsageSummary } from "@/lib/api/types";
+
+const UNKNOWN_DEPARTMENT = "unknown";
 
 export default function DashboardPage() {
   const user = useSession((state) => state.user);
@@ -51,7 +55,6 @@ function OrgDashboard() {
   const sims = useSims();
   const departments = useDepartments();
   const anomalies = useAnomalies(false);
-  const overLimit = useOverLimit();
   const summaries = useUsageSummary();
   const usage = useUsage({ limit: 500 });
   // Admin-only endpoint — a Manager gets a 403 here, which is expected, so
@@ -67,7 +70,24 @@ function OrgDashboard() {
 
   const rows = useMemo(() => summaries.data?.data ?? [], [summaries.data]);
 
-  const period = useMemo(() => activePeriod(rows), [rows]);
+  // Every month that has costs, newest first — the dashboard opens on the
+  // latest and can be switched to any other; the report exports whichever
+  // month is on screen.
+  const months = useMemo(
+    () => [...new Set(rows.map((row) => row.month))].sort().reverse(),
+    [rows],
+  );
+  const [chosenMonth, setChosenMonth] = useState<string | null>(null);
+  const period = useMemo(() => {
+    const latest = activePeriod(rows);
+    if (!chosenMonth || !months.includes(chosenMonth)) return latest;
+    const [year, index] = chosenMonth.split("-").map(Number);
+    return {
+      month: chosenMonth,
+      previous: monthKey(new Date(year, index - 2, 1)),
+    };
+  }, [rows, months, chosenMonth]);
+  const overLimit = useOverLimit(period.month);
 
   const totals = useMemo(() => {
     const sumFor = (month: string) =>
@@ -115,7 +135,11 @@ function OrgDashboard() {
     for (const row of rows.filter((r) => r.month === period.month)) {
       const deptId = deptOf.get(row.employee_id);
       if (!deptId) continue;
-      byDept.set(deptId, (byDept.get(deptId) ?? 0) + row.total_cost);
+      // Departments whose name isn't known (the department list hasn't
+      // loaded yet, or the department was removed) share one row, so the
+      // chart never gets several rows with the same label.
+      const key = nameOf.has(deptId) ? deptId : UNKNOWN_DEPARTMENT;
+      byDept.set(key, (byDept.get(key) ?? 0) + row.total_cost);
     }
     return [...byDept.entries()]
       .map(([id, spend]) => ({
@@ -196,26 +220,11 @@ function OrgDashboard() {
     return `${Math.round(pct)}%`;
   })();
 
-  function handleExport() {
-    downloadCsv(
-      `telespy-spend-${period.month}.csv`,
-      ["Employee", "Extension", "Month", "Total cost (KES)"],
-      rows
-        .filter((row: UsageSummary) => row.month === period.month)
-        .map((row) => [
-          row.full_name ?? row.employee_id,
-          row.extension_code ?? "",
-          row.month,
-          row.total_cost.toFixed(2),
-        ]),
-    );
-  }
-
   if (error) {
     return (
       <>
         <PageHeader title="Dashboard" />
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <ErrorBanner error={error} />
         </div>
       </>
@@ -229,24 +238,39 @@ function OrgDashboard() {
         description="A role-aware landing view summarising spend, anomalies and SIM activity."
         actions={
           <>
-            <Badge variant="outline" className="h-8 gap-1.5 px-2.5">
-              <CalendarDays aria-hidden="true" />
-              {monthLabel(period.month)}
-            </Badge>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleExport}
-              disabled={rows.length === 0}
+            <SelectNative
+              aria-label="Month"
+              value={period.month}
+              disabled={months.length === 0}
+              onChange={(e) => setChosenMonth(e.target.value)}
             >
-              <Download aria-hidden="true" data-icon="inline-start" />
-              Export report
-            </Button>
+              {months.length === 0 ? (
+                <option value={period.month}>{monthLabel(period.month)}</option>
+              ) : null}
+              {months.map((month) => (
+                <option key={month} value={month}>
+                  {monthLabel(month)}
+                </option>
+              ))}
+            </SelectNative>
+            {rows.length === 0 ? (
+              <Button type="button" variant="outline" disabled>
+                <FileText aria-hidden="true" data-icon="inline-start" />
+                Export report
+              </Button>
+            ) : (
+              <Button asChild variant="outline">
+                <Link href={`/report?month=${period.month}`}>
+                  <FileText aria-hidden="true" data-icon="inline-start" />
+                  Export report
+                </Link>
+              </Button>
+            )}
           </>
         }
       />
 
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         {/* KPI row */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
           {loading ? (
@@ -283,7 +307,7 @@ function OrgDashboard() {
                 tone={
                   (anomalies.data?.data.length ?? 0) > 0 ? "warning" : "default"
                 }
-                hint={`${topAnomalies.filter((a) => a.anomaly_score >= 0.65).length} high severity`}
+                hint={`${topAnomalies.filter((a) => a.anomaly_score >= HIGH_SEVERITY_THRESHOLD).length} high severity`}
               />
               <StatCard
                 label="Active SIMs"
@@ -363,7 +387,7 @@ function OrgDashboard() {
             title="Anomalies needing review"
             className="xl:col-span-2"
             actionHref={{ label: "View all", href: "/analytics/anomalies" }}
-            bodyClassName="px-0 pb-0"
+            bodyClassName="overflow-x-auto px-0 pb-0"
           >
             {anomalies.isLoading ? (
               <div className="flex flex-col gap-2 px-4 pb-4">
@@ -617,7 +641,7 @@ function EmployeeDashboard() {
     return (
       <>
         <PageHeader title="Your usage" />
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <ErrorBanner error={myUsage.error} />
         </div>
       </>
@@ -636,7 +660,7 @@ function EmployeeDashboard() {
           </Badge>
         }
       />
-      <div className="flex flex-col gap-4 p-6">
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {myUsage.isLoading ? (
             Array.from({ length: 3 }).map((_, i) => (

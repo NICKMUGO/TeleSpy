@@ -73,18 +73,24 @@ export default function InvoicesPage() {
       {
         accessorKey: "total_cost",
         header: "Spent",
-        cell: (c) => <span className="font-mono">{kes(c.getValue<number>())}</span>,
+        cell: (c) => (
+          <span className="font-mono">{kes(c.getValue<number>())}</span>
+        ),
       },
       {
         accessorKey: "limit_kshs",
         header: "Limit",
-        cell: (c) => <span className="font-mono">{kes(c.getValue<number>())}</span>,
+        cell: (c) => (
+          <span className="font-mono">{kes(c.getValue<number>())}</span>
+        ),
       },
       {
         accessorKey: "overage_kshs",
         header: "Invoiced (over by)",
         cell: (c) => (
-          <span className="text-destructive font-mono font-medium">{kes(c.getValue<number>())}</span>
+          <span className="text-destructive font-mono font-medium">
+            {kes(c.getValue<number>())}
+          </span>
         ),
       },
     ],
@@ -97,10 +103,15 @@ export default function InvoicesPage() {
         title="Invoices"
         description="Employees whose call costs went over their monthly limit, each invoiced for the amount over. Anyone within their limit is not invoiced."
       />
-      <div className="px-6 pt-4">
+      <div className="px-4 pt-4 sm:px-6">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline" className="w-fit" disabled={availableMonths.length === 0}>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-fit"
+              disabled={availableMonths.length === 0}
+            >
               <Wallet aria-hidden="true" />
               {month ? monthLabel(month) : "No months with data"}
             </Button>
@@ -130,7 +141,11 @@ export default function InvoicesPage() {
         searchPlaceholder="Search employees…"
         emptyIcon={Wallet}
         emptyTitle="Nobody to invoice"
-        emptyDescription={month ? `Everyone stayed within their limit in ${monthLabel(month)}.` : "Run ML/training/billing.py to generate usage data first."}
+        emptyDescription={
+          month
+            ? `Everyone stayed within their limit in ${monthLabel(month)}.`
+            : "Run ML/training/billing.py to generate usage data first."
+        }
         getRowId={(row) => row.employee_id}
         toolbarEnd={
           isAdmin ? (

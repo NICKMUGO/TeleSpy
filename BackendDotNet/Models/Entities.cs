@@ -83,13 +83,16 @@ public class Employee
 {
     public string EmployeeId { get; set; } = Guid.NewGuid().ToString();
     public string? DepartmentId { get; set; }
-    // Nullable: a self-registered Employee (POST /auth/register) has no
-    // staff_number/department yet — HR/Admin assigns those later.
+    // Nullable: an Admin can create the record first and assign the
+    // staff_number/department later.
     public string? StaffNumber { get; set; }
     public string FullName { get; set; } = "";
-    // Permanent 3-digit PBX extension, e.g. "083" — independent of whichever
-    // SIM is currently allocated (that has its own separate MsisdnPbx).
-    // Nullable/unique like StaffNumber: assigned once, stays fixed.
+    // The 3-digit PBX extension this person answers on, e.g. "370" — the
+    // last three digits of their company number (see
+    // BillingSettings.CompanyNumberPrefix). It follows the SIM: whoever a
+    // SIM is allocated to holds that SIM's extension, and it moves with the
+    // SIM when an Admin hands the line to someone else (AllocationService).
+    // Nullable/unique like StaffNumber.
     public string? ExtensionCode { get; set; }
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
 
@@ -143,6 +146,11 @@ public class Employee
                 ? Security.DecryptValue(allocation.Sim.MsisdnPbxEnc)
                 : null;
             outDict["sim_id"] = allocation.SimId;
+            // The line's full number is Admin-only, as on SimCard.ToDict.
+            if (viewerRole == TeleSpy.Role.Admin && allocation.Sim is not null)
+            {
+                outDict["msisdn"] = Security.DecryptValue(allocation.Sim.MsisdnEnc);
+            }
         }
 
         if (canViewCost)
@@ -346,6 +354,11 @@ public class BillingSettings
     public double FixedMonthlyChargeKes { get; set; } = BillingConstants.DefaultFixedMonthlyChargeKes;
     public double ExciseRatePct { get; set; } = BillingConstants.DefaultExciseRatePct;
     public double VatRatePct { get; set; } = BillingConstants.DefaultVatRatePct;
+    // The company's standard number format: every staff line is this prefix
+    // followed by the 3-digit extension, e.g. "0703083" + "370" =
+    // 0703083370. Not a billing figure, but this row is the organisation's
+    // one settings record. Admin-editable via PATCH /settings/number-format.
+    public string CompanyNumberPrefix { get; set; } = BillingConstants.DefaultCompanyNumberPrefix;
     public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
 
     /// <summary>Excise is charged on the amount, then VAT on amount + excise
@@ -353,6 +366,9 @@ public class BillingSettings
     public double TaxMultiplier() => (1 + ExciseRatePct / 100.0) * (1 + VatRatePct / 100.0);
 
     public double FixedMonthlyChargeWithTaxKes() => Math.Round(FixedMonthlyChargeKes * TaxMultiplier(), 2);
+
+    /// <summary>The company number for an extension under the current format.</summary>
+    public string CompanyNumberFor(string extension) => CompanyNumberPrefix + extension;
 
     public Dictionary<string, object?> ToDict() => new()
     {
@@ -428,6 +444,8 @@ public class SimCard
         return Allocations.FirstOrDefault(a => a.IsActiveAt(now));
     }
 
+    public string? Extension() => MsisdnPbxEnc is { Length: > 0 } ? Security.DecryptValue(MsisdnPbxEnc) : null;
+
     public bool IsAvailableForAllocation() => LifecycleState == "active" && GetCurrentAllocation() is null;
 
     public Dictionary<string, object?> ToDict(User viewer, ISet<string>? include = null)
@@ -441,6 +459,11 @@ public class SimCard
             ["plan_id"] = PlanId,
             ["lifecycle_state"] = LifecycleState,
             ["employee_id"] = current?.EmployeeId,
+            // The holder's name, when the allocation's Employee was loaded
+            // — so a list of SIMs can say who has each one without a
+            // second lookup the viewer may not be allowed to make (a
+            // Manager's employee list covers only their own department).
+            ["employee_name"] = current?.Employee?.FullName,
             ["created_at"] = CreatedAt.ToString("o"),
         };
         if (include.Contains("allocations"))
@@ -451,7 +474,7 @@ public class SimCard
         {
             outDict["iccid"] = Security.DecryptValue(IccidEnc);
             outDict["msisdn"] = Security.DecryptValue(MsisdnEnc);
-            outDict["extension"] = MsisdnPbxEnc is { Length: > 0 } ? Security.DecryptValue(MsisdnPbxEnc) : null;
+            outDict["extension"] = Extension();
         }
         else
         {

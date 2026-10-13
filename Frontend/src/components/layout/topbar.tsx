@@ -22,12 +22,17 @@ export function Topbar({
   onOpenTutorial,
 }: TopbarProps) {
   return (
-    <header className="border-border flex h-14 shrink-0 items-center gap-3 border-b px-4">
+    <header className="border-border flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
       <SidebarTrigger />
-      <Separator orientation="vertical" className="h-5" />
-      <Breadcrumbs />
+      <Separator
+        orientation="vertical"
+        className="h-5 data-vertical:self-center"
+      />
+      <div className="min-w-0 flex-1">
+        <Breadcrumbs />
+      </div>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <Button
           variant="outline"
           size="sm"
