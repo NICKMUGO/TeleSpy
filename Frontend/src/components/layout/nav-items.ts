@@ -1,6 +1,5 @@
 import {
   Activity,
-  BookOpen,
   Building2,
   FileText,
   FingerprintPattern,
@@ -101,7 +100,6 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     items: [
-      { title: "Spend ledger", href: "/ledger", icon: BookOpen },
       {
         title: "Invoices",
         href: "/invoices",

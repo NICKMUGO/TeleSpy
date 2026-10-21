@@ -127,6 +127,7 @@ export default function IngestionPage() {
           {/* Upload */}
           <SectionCard
             title="Upload a CDR batch"
+            tourId="ingestion-upload"
             description="orig, dest, duration_sec, date — plus optional orig_time and charge"
             className="lg:col-span-2"
           >

@@ -15,6 +15,7 @@ export function SectionCard({
   children,
   className,
   bodyClassName,
+  tourId,
 }: {
   title: string;
   description?: string;
@@ -23,9 +24,12 @@ export function SectionCard({
   children: ReactNode;
   className?: string;
   bodyClassName?: string;
+  /** Spotlight anchor for the guided tour (TutorialContent.cs Target). */
+  tourId?: string;
 }) {
   return (
     <section
+      data-tour={tourId}
       className={cn(
         "border-border-subtle bg-card flex flex-col overflow-hidden rounded-xl border",
         className,

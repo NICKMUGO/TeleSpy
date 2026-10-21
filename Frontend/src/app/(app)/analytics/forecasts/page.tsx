@@ -144,7 +144,10 @@ export default function ForecastsPage() {
                 hint="Monthly ceiling for the whole department"
               />
             </div>
-            <div className="border-border h-80 w-full rounded-lg border p-4">
+            <div
+              data-tour="forecasts-chart"
+              className="border-border h-80 w-full rounded-lg border p-4"
+            >
               <SpendChart
                 data={chartData}
                 budgetCeiling={forecast.data.data.budget_ceiling}

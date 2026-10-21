@@ -12,15 +12,23 @@ import type {
   DepartmentsOverview,
   DirectoryEntry,
   Employee,
+  HandoverFields,
   InternationalCallRate,
   LocalCallRateSettings,
   MonthlyReport,
   NumberFormat,
   OverLimitEntry,
   Reconciliation,
+  RemovalReason,
   RoleRecord,
   SimCard,
+  Ticket,
+  TicketAccess,
+  TicketCategory,
+  TicketStats,
+  TicketStatus,
   TutorialProgress,
+  UnassignedLineUsage,
   UsageEvent,
   UsageMonth,
   UsageProfile,
@@ -50,22 +58,35 @@ async function fetchAllPages<T>(path: string): Promise<ApiEnvelope<T[]>> {
 }
 
 // --- Employees --------------------------------------------------------
+/** Create/update also name anyone stepped down to Employee because this
+ * person became their department's Manager (one Manager per department). */
+type EmployeeSaved = ApiEnvelope<Employee> & {
+  replaced_managers?: string[];
+  /** True when this save made someone else Admin: the caller is now an
+   * Employee and their session has been ended. */
+  admin_handed_over?: boolean;
+};
+
 export const employeesApi = {
   list: () => fetchAllPages<Employee>("/employees"),
   get: (id: string) => apiRequest<ApiEnvelope<Employee>>(`/employees/${id}`),
-  create: (body: {
-    email: string;
-    role: string;
-    full_name: string;
-    department_id?: string;
-    staff_number?: string;
-    extension?: string;
-  }) =>
-    apiRequest<ApiEnvelope<Employee>>("/employees", { method: "POST", body }),
+  create: (
+    body: {
+      email: string;
+      role: string;
+      full_name: string;
+      department_id?: string;
+      staff_number?: string;
+      extension?: string;
+    } & HandoverFields,
+  ) => apiRequest<EmployeeSaved>("/employees", { method: "POST", body }),
   update: (
     id: string,
     body: Partial<{
       full_name: string;
+      /** The sign-in email. Changing it ends their session and tells the
+       * old address. */
+      email: string;
       department_id: string;
       staff_number: string;
       role: string;
@@ -73,14 +94,39 @@ export const employeesApi = {
       /** The extension this employee answers on; `null` gives their line
        * up. A code a SIM carries brings that SIM with it. */
       extension_code: string | null;
-    }>,
+    }> &
+      HandoverFields,
   ) =>
-    apiRequest<ApiEnvelope<Employee>>(`/employees/${id}`, {
+    apiRequest<EmployeeSaved>(`/employees/${id}`, {
       method: "PATCH",
       body,
     }),
   remove: (id: string) =>
     apiRequest<ApiEnvelope<null>>(`/employees/${id}`, { method: "DELETE" }),
+  /** They left the company: line back to the pool, login off, history
+   * kept. Needs the step-up (see authApi.stepUp). */
+  removeLeaver: (
+    id: string,
+    body: {
+      removal_reason: RemovalReason;
+      confirm_name: string;
+      password: string;
+      code: string;
+    },
+  ) =>
+    apiRequest<ApiEnvelope<Employee>>(`/employees/${id}/remove`, {
+      method: "POST",
+      body,
+    }),
+};
+
+// --- Step-up confirmation (Admin) ------------------------------------
+export const stepUpApi = {
+  /** Emails the signed-in Admin a one-time code for a sensitive action. */
+  requestCode: () =>
+    apiRequest<ApiEnvelope<{ expires_minutes: number }>>("/auth/step-up", {
+      method: "POST",
+    }),
 };
 
 // --- Directory (name + extension lookup, every role) ---------------------
@@ -112,6 +158,7 @@ export const departmentsApi = {
       name: string;
       cost_centre_code: string;
       budget_ceiling: number;
+      handles_customer_service: boolean;
     }>,
   ) =>
     apiRequest<ApiEnvelope<Department>>(`/departments/${id}`, {
@@ -151,11 +198,13 @@ export const simsApi = {
     }>,
   ) =>
     apiRequest<ApiEnvelope<SimCard>>(`/sims/${id}`, { method: "PATCH", body }),
-  allocate: (id: string, employeeId: string) =>
+  allocate: (id: string, employeeId: string, handover?: HandoverFields) =>
     apiRequest<ApiEnvelope<unknown>>(`/sims/${id}/allocate`, {
       method: "POST",
-      body: { employee_id: employeeId },
+      body: { employee_id: employeeId, ...handover },
     }),
+  unassignedUsage: () =>
+    apiRequest<ApiEnvelope<UnassignedLineUsage[]>>("/sims/unassigned-usage"),
   unassign: (id: string) =>
     apiRequest<ApiEnvelope<unknown>>(`/sims/${id}/unassign`, {
       method: "POST",
@@ -263,11 +312,13 @@ export const usageApi = {
     limit?: number;
   }) => apiRequest<ApiEnvelope<UsageEvent[]>>("/usage", { query: params }),
   months: () => apiRequest<ApiEnvelope<UsageMonth[]>>("/usage/months"),
-  mine: (params?: { page?: number; limit?: number }) =>
+  mine: (params?: { month?: string; page?: number; limit?: number }) =>
     apiRequest<
       ApiEnvelope<{
         usage: UsageEvent[];
         cost_summaries: UsageSummary[];
+        /** Every month the company has costs for, newest first. */
+        billed_months: string[];
         current_allocation: unknown;
         current_sim: SimCard | null;
         usage_profile_cluster: string | null;
@@ -320,8 +371,14 @@ export const rolesApi = {
 
 // --- Audit --------------------------------------------------------
 export const auditApi = {
-  list: (params?: { page?: number; limit?: number }) =>
-    apiRequest<ApiEnvelope<AuditLogEntry[]>>("/audit", { query: params }),
+  /** Newest first. `from` (inclusive) and `to` (exclusive) are ISO
+   * instants bounding when the action happened. */
+  list: (params?: {
+    page?: number;
+    limit?: number;
+    from?: string;
+    to?: string;
+  }) => apiRequest<ApiEnvelope<AuditLogEntry[]>>("/audit", { query: params }),
 };
 
 // --- Settings (self-service) --------------------------------------------------------
@@ -377,4 +434,83 @@ export const invoicesApi = {
     apiRequest<
       ApiEnvelope<{ month: string | null; sent: number; over_limit: number }>
     >("/invoices/send-monthly", { method: "POST", body: { month } }),
+  /** Emails the HR manager the employees over their limit in `month`. */
+  reportToHr: (month?: string) =>
+    apiRequest<
+      ApiEnvelope<{ month: string; over_limit: number; recipients: number }>
+    >("/invoices/report-to-hr", { method: "POST", body: { month } }),
+};
+
+// --- Customer service tickets --------------------------------------------
+export type TicketScope = "mine" | "desk" | "team" | "all";
+
+export const ticketsApi = {
+  me: () => apiRequest<ApiEnvelope<TicketAccess>>("/tickets/me"),
+  list: (scope: TicketScope, status?: TicketStatus) =>
+    apiRequest<ApiEnvelope<Ticket[]>>("/tickets", {
+      query: { scope, status },
+    }),
+  get: (id: string) => apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}`),
+  stats: (month?: string) =>
+    apiRequest<ApiEnvelope<TicketStats>>("/tickets/stats", {
+      query: { month },
+    }),
+  create: (body: {
+    subject: string;
+    description: string;
+    customer_name: string;
+    customer_phone?: string;
+    customer_email?: string;
+    booking_reference?: string;
+    category_id: string;
+    department_id?: string;
+  }) =>
+    apiRequest<ApiEnvelope<Ticket> & { message?: string }>("/tickets", {
+      method: "POST",
+      body,
+    }),
+  claim: (id: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/claim`, {
+      method: "POST",
+    }),
+  addNote: (id: string, body: string) =>
+    apiRequest<ApiEnvelope<{ ticket_id: string }>>(`/tickets/${id}/notes`, {
+      method: "POST",
+      body: { body },
+    }),
+  resolve: (id: string, resolutionNote: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/resolve`, {
+      method: "POST",
+      body: { resolution_note: resolutionNote },
+    }),
+  returnToDesk: (id: string, reason: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/return`, {
+      method: "POST",
+      body: { reason },
+    }),
+  resend: (
+    id: string,
+    body: { category_id?: string; department_id?: string; note?: string },
+  ) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/resend`, {
+      method: "POST",
+      body,
+    }),
+  categories: (includeInactive = false) =>
+    apiRequest<ApiEnvelope<TicketCategory[]>>("/tickets/categories", {
+      query: includeInactive ? { all: "true" } : undefined,
+    }),
+  createCategory: (body: { name: string; department_id: string }) =>
+    apiRequest<ApiEnvelope<TicketCategory>>("/tickets/categories", {
+      method: "POST",
+      body,
+    }),
+  updateCategory: (
+    id: string,
+    body: Partial<{ name: string; department_id: string; is_active: boolean }>,
+  ) =>
+    apiRequest<ApiEnvelope<TicketCategory>>(`/tickets/categories/${id}`, {
+      method: "PATCH",
+      body,
+    }),
 };

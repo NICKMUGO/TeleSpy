@@ -22,10 +22,14 @@ import {
   reportsApi,
   rolesApi,
   simsApi,
+  stepUpApi,
   telcoPlansApi,
+  ticketsApi,
   tutorialApi,
   usageApi,
+  type TicketScope,
 } from "@/lib/api/resources";
+import type { HandoverFields, TicketStatus } from "@/lib/api/types";
 
 // One hook per read, one mutation per write — thin wrappers so screens
 // never import lib/api/resources.ts directly and every cache key lives in
@@ -39,6 +43,7 @@ export const queryKeys = {
   departmentsOverview: (month?: string) =>
     ["departments", "overview", month] as const,
   sims: ["sims"] as const,
+  unassignedUsage: ["sims", "unassigned-usage"] as const,
   telcoPlans: ["telco-plans"] as const,
   usage: (params?: Record<string, unknown>) => ["usage", params] as const,
   usageMonths: ["usage", "months"] as const,
@@ -52,12 +57,20 @@ export const queryKeys = {
   reconciliation: ["reconciliation"] as const,
   overLimit: (month?: string) => ["budgets", "over-limit", month] as const,
   roles: ["roles"] as const,
-  audit: ["audit"] as const,
+  audit: (params?: Record<string, unknown>) => ["audit", params] as const,
   tutorial: ["tutorial", "progress"] as const,
   localCallRate: ["call-rates", "local"] as const,
   internationalCallRates: ["call-rates", "international"] as const,
   numberFormat: ["settings", "number-format"] as const,
   monthlyReport: (month?: string) => ["reports", "monthly", month] as const,
+  tickets: ["tickets"] as const,
+  ticketAccess: ["tickets", "me"] as const,
+  ticketList: (scope: TicketScope, status?: TicketStatus) =>
+    ["tickets", "list", scope, status] as const,
+  ticket: (id: string) => ["tickets", "detail", id] as const,
+  ticketStats: (month?: string) => ["tickets", "stats", month] as const,
+  ticketCategories: (includeInactive: boolean) =>
+    ["tickets", "categories", includeInactive] as const,
 };
 
 /** Who holds which line shows up on three screens — the employee list, the
@@ -98,7 +111,36 @@ export function useUpdateEmployee() {
       id: string;
       body: Parameters<typeof employeesApi.update>[1];
     }) => employeesApi.update(id, body),
-    onSuccess: () => invalidateLineHolders(queryClient),
+    onSettled: () => invalidateLineHolders(queryClient),
+  });
+}
+
+/** Removes an employee who left the company (step-up required). */
+export function useRemoveEmployee() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: Parameters<typeof employeesApi.removeLeaver>[1];
+    }) => employeesApi.removeLeaver(id, body),
+    onSettled: () => invalidateLineHolders(queryClient),
+  });
+}
+
+/** Emails the signed-in Admin a step-up code. */
+export function useRequestStepUpCode() {
+  return useMutation({ mutationFn: stepUpApi.requestCode });
+}
+
+/** Spend on lines nobody held — Admin only. */
+export function useUnassignedUsage(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.unassignedUsage,
+    queryFn: simsApi.unassignedUsage,
+    enabled,
   });
 }
 
@@ -106,7 +148,7 @@ export function useCreateEmployee() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: employeesApi.create,
-    onSuccess: () => invalidateLineHolders(queryClient),
+    onSettled: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -143,8 +185,11 @@ export function useUpdateDepartment() {
       id: string;
       body: Parameters<typeof departmentsApi.update>[1];
     }) => departmentsApi.update(id, body),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.departments }),
+    // A rename or the desk switch also changes the ticket desk/queues.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.departments });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tickets });
+    },
   });
 }
 
@@ -165,11 +210,13 @@ export function useAllocateSim() {
     mutationFn: ({
       simId,
       employeeId,
+      handover,
     }: {
       simId: string;
       employeeId: string;
-    }) => simsApi.allocate(simId, employeeId),
-    onSuccess: () => invalidateLineHolders(queryClient),
+      handover?: HandoverFields;
+    }) => simsApi.allocate(simId, employeeId, handover),
+    onSettled: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -177,7 +224,7 @@ export function useUnassignSim() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (simId: string) => simsApi.unassign(simId),
-    onSuccess: () => invalidateLineHolders(queryClient),
+    onSettled: () => invalidateLineHolders(queryClient),
   });
 }
 
@@ -190,17 +237,21 @@ export function useCreateSim() {
   });
 }
 
-export function useUsage(params?: {
-  classification?: string;
-  extension?: string;
-  search?: string;
-  month?: string;
-  page?: number;
-  limit?: number;
-}) {
+export function useUsage(
+  params?: {
+    classification?: string;
+    extension?: string;
+    search?: string;
+    month?: string;
+    page?: number;
+    limit?: number;
+  },
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: queryKeys.usage(params),
     queryFn: () => usageApi.list(params),
+    enabled: options?.enabled ?? true,
     // Keep the current page on screen while the next one loads, instead of
     // dropping back to the loading skeleton on every page change.
     placeholderData: keepPreviousData,
@@ -214,10 +265,13 @@ export function useUsageMonths() {
   });
 }
 
-export function useMyUsage() {
+/** `month` ("YYYY-MM") narrows the returned calls to that month; cost
+ * summaries always cover every month. */
+export function useMyUsage(month?: string) {
   return useQuery({
-    queryKey: queryKeys.myUsage,
-    queryFn: () => usageApi.mine(),
+    queryKey: [...queryKeys.myUsage, month ?? "latest"],
+    queryFn: () => usageApi.mine(month ? { month } : undefined),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -380,10 +434,11 @@ export function useUpdateInternationalCallRate() {
   });
 }
 
-export function useAuditLog() {
+export function useAuditLog(params?: Parameters<typeof auditApi.list>[0]) {
   return useQuery({
-    queryKey: queryKeys.audit,
-    queryFn: () => auditApi.list(),
+    queryKey: queryKeys.audit(params),
+    queryFn: () => auditApi.list(params),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -405,6 +460,10 @@ export function useIngestCdr() {
 
 export function useSendMonthlyInvoices() {
   return useMutation({ mutationFn: invoicesApi.sendMonthly });
+}
+
+export function useReportOverLimitToHr() {
+  return useMutation({ mutationFn: invoicesApi.reportToHr });
 }
 
 export function useTutorialProgress() {
@@ -445,4 +504,120 @@ export function useRestartTutorial() {
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.tutorial }),
   });
+}
+
+// --- Customer service tickets --------------------------------------------
+
+/** What the ticket desk means for the signed-in person: whether they work
+ * the desk, and whether their department gets a team queue. */
+export function useTicketAccess() {
+  return useQuery({
+    queryKey: queryKeys.ticketAccess,
+    queryFn: ticketsApi.me,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useTickets(
+  scope: TicketScope,
+  status?: TicketStatus,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.ticketList(scope, status),
+    queryFn: () => ticketsApi.list(scope, status),
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+export function useTicket(id: string) {
+  return useQuery({
+    queryKey: queryKeys.ticket(id),
+    queryFn: () => ticketsApi.get(id),
+    enabled: !!id,
+  });
+}
+
+export function useTicketStats(month?: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.ticketStats(month),
+    queryFn: () => ticketsApi.stats(month),
+    placeholderData: keepPreviousData,
+    enabled,
+  });
+}
+
+export function useTicketCategories(includeInactive = false) {
+  return useQuery({
+    queryKey: queryKeys.ticketCategories(includeInactive),
+    queryFn: () => ticketsApi.categories(includeInactive),
+  });
+}
+
+/** Every ticket action changes lists, counts and the detail view at once,
+ * so each one refreshes everything ticket-shaped. */
+function useTicketMutation<TArgs, TResult>(
+  mutationFn: (args: TArgs) => Promise<TResult>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.tickets }),
+  });
+}
+
+export function useCreateTicket() {
+  return useTicketMutation(ticketsApi.create);
+}
+
+export function useClaimTicket() {
+  return useTicketMutation((id: string) => ticketsApi.claim(id));
+}
+
+export function useAddTicketNote() {
+  return useTicketMutation(({ id, body }: { id: string; body: string }) =>
+    ticketsApi.addNote(id, body),
+  );
+}
+
+export function useResolveTicket() {
+  return useTicketMutation(({ id, note }: { id: string; note: string }) =>
+    ticketsApi.resolve(id, note),
+  );
+}
+
+export function useReturnTicket() {
+  return useTicketMutation(({ id, reason }: { id: string; reason: string }) =>
+    ticketsApi.returnToDesk(id, reason),
+  );
+}
+
+export function useResendTicket() {
+  return useTicketMutation(
+    ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: Parameters<typeof ticketsApi.resend>[1];
+    }) => ticketsApi.resend(id, body),
+  );
+}
+
+export function useCreateTicketCategory() {
+  return useTicketMutation(ticketsApi.createCategory);
+}
+
+export function useUpdateTicketCategory() {
+  return useTicketMutation(
+    ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: Parameters<typeof ticketsApi.updateCategory>[1];
+    }) => ticketsApi.updateCategory(id, body),
+  );
 }

@@ -1,7 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Search, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { SectionCard } from "@/components/data/section-card";
@@ -35,6 +41,15 @@ import type { AnomalyFlag } from "@/lib/api/types";
 type StatusFilter = "open" | "resolved" | "all";
 type SeverityFilter = "all" | Severity;
 
+// The table shows at most this many flags at once, highest score first.
+const PAGE_SIZE = 15;
+
+/** A flagged call's length in minutes, e.g. "12.5 min". */
+function minutes(value: number | undefined) {
+  if (value === undefined) return "—";
+  return `${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })} min`;
+}
+
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 // Computed once at module load, matching the CALENDAR_MONTH pattern in the
 // dashboard page — Date.now() may not be called during render itself.
@@ -46,6 +61,7 @@ export default function AnomaliesPage() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openFlag, setOpenFlag] = useState<AnomalyFlag | null>(null);
+  const [page, setPage] = useState(1);
 
   const anomalies = useAnomalies(
     status === "all" ? undefined : status === "resolved",
@@ -110,6 +126,14 @@ export default function AnomaliesPage() {
       .sort((a, b) => b.anomaly_score - a.anomaly_score);
   }, [all, severity, query]);
 
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  // A filter can shrink the list under the current page.
+  const currentPage = Math.min(page, pages);
+  const visibleRows = useMemo(
+    () => rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [rows, currentPage],
+  );
+
   const stats = useMemo(() => {
     const open = all.filter((flag) => !flag.resolved);
     return {
@@ -147,11 +171,16 @@ export default function AnomaliesPage() {
     });
   }
 
+  // "Select all" covers the flags on screen.
+  const allVisibleSelected =
+    visibleRows.length > 0 &&
+    visibleRows.every((flag) => selected.has(flag.id));
+
   function toggleAll() {
-    setSelected((current) =>
-      current.size === rows.length
+    setSelected(
+      allVisibleSelected
         ? new Set()
-        : new Set(rows.map((flag) => flag.id)),
+        : new Set(visibleRows.map((flag) => flag.id)),
     );
   }
 
@@ -200,6 +229,7 @@ export default function AnomaliesPage() {
                   "Department",
                   "Extension",
                   "Destination",
+                  "Duration (min)",
                   "Occurred",
                   "Status",
                 ],
@@ -210,6 +240,7 @@ export default function AnomaliesPage() {
                   departmentOf(flag.employee?.id) ?? "",
                   flag.event?.msisdn_pbx ?? "",
                   flag.event?.destination ?? "",
+                  flag.event ? flag.event.duration_minutes.toFixed(1) : "",
                   flag.event?.occured_at ?? "",
                   flag.resolved ? "resolved" : "open",
                 ]),
@@ -249,7 +280,11 @@ export default function AnomaliesPage() {
           )}
         </div>
 
-        <SectionCard title="Flagged usage" bodyClassName="px-0 pb-0">
+        <SectionCard
+          title="Flagged usage"
+          bodyClassName="px-0 pb-0"
+          tourId="anomalies-flagged"
+        >
           {/* Filters */}
           <div className="border-border-subtle flex flex-wrap items-end gap-3 border-y px-4 py-3">
             <div className="relative min-w-52 flex-1">
@@ -263,7 +298,10 @@ export default function AnomaliesPage() {
               <Input
                 id="anomaly-search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search employee, extension or destination"
                 className="h-9 ps-8"
               />
@@ -275,9 +313,10 @@ export default function AnomaliesPage() {
               <SelectNative
                 id="anomaly-severity"
                 value={severity}
-                onChange={(event) =>
-                  setSeverity(event.target.value as SeverityFilter)
-                }
+                onChange={(event) => {
+                  setSeverity(event.target.value as SeverityFilter);
+                  setPage(1);
+                }}
                 className="w-36"
               >
                 <option value="all">All severities</option>
@@ -296,6 +335,7 @@ export default function AnomaliesPage() {
                 onChange={(event) => {
                   setStatus(event.target.value as StatusFilter);
                   setSelected(new Set());
+                  setPage(1);
                 }}
                 className="w-32"
               >
@@ -363,9 +403,7 @@ export default function AnomaliesPage() {
                       {canResolve ? (
                         <th scope="col" className="w-10 ps-4">
                           <Checkbox
-                            checked={
-                              rows.length > 0 && selected.size === rows.length
-                            }
+                            checked={allVisibleSelected}
                             onCheckedChange={toggleAll}
                             aria-label="Select all anomalies"
                           />
@@ -376,12 +414,13 @@ export default function AnomaliesPage() {
                       <Th>Department</Th>
                       <Th>Extension</Th>
                       <Th>Destination</Th>
+                      <Th align="end">Duration</Th>
                       <Th align="end">Score</Th>
                       <Th>Status</Th>
                     </tr>
                   </thead>
                   <tbody className="divide-border-subtle divide-y">
-                    {rows.map((flag) => (
+                    {visibleRows.map((flag) => (
                       <tr
                         key={flag.id}
                         className={cn(
@@ -419,6 +458,9 @@ export default function AnomaliesPage() {
                         <td className="font-tabular px-4 py-2.5 text-xs">
                           {flag.event?.destination ?? "—"}
                         </td>
+                        <td className="font-tabular px-4 py-2.5 text-end text-xs whitespace-nowrap">
+                          {minutes(flag.event?.duration_minutes)}
+                        </td>
                         <td className="font-tabular px-4 py-2.5 text-end">
                           {flag.anomaly_score.toFixed(2)}
                         </td>
@@ -436,9 +478,40 @@ export default function AnomaliesPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="text-muted-foreground border-border-subtle border-t px-4 py-2.5 text-xs">
-                Showing {rows.length} of {all.length} anomalies
-              </p>
+              <div className="border-border-subtle flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2">
+                <p className="text-muted-foreground text-xs" aria-live="polite">
+                  Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+                  {(currentPage - 1) * PAGE_SIZE + visibleRows.length} of{" "}
+                  {rows.length} anomalies, highest score first
+                </p>
+                {pages > 1 ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={currentPage <= 1}
+                      onClick={() => setPage(currentPage - 1)}
+                    >
+                      <ChevronLeft aria-hidden="true" />
+                      Previous
+                    </Button>
+                    <span className="text-xs tabular-nums">
+                      Page {currentPage} of {pages}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={currentPage >= pages}
+                      onClick={() => setPage(currentPage + 1)}
+                    >
+                      Next
+                      <ChevronRight aria-hidden="true" />
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             </>
           )}
         </SectionCard>

@@ -41,6 +41,19 @@
   --text-4xl--line-height: 2.5rem;
 
   --radius: 0.5rem;
+
+  /* Guided-tour spotlight: a ring that breathes outward from the
+   * highlighted element. Collapses under reduced motion like all motion. */
+  --animate-tour-pulse: tour-pulse 1.8s ease-out infinite;
+  @keyframes tour-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 55%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 14px transparent;
+    }
+  }
 }
 
 @theme inline {
@@ -264,6 +277,13 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Guided-tour dim layer. Plain :root, not @theme: it is only read from an
+ * inline style, which Tailwind can't see, so a theme variable would be
+ * tree-shaken out of the build. */
+:root {
+  --tour-scrim: oklch(0 0 0 / 0.6);
 }
 
 /* The printable report's chart colours: the light-mode --chart-1…5, fixed

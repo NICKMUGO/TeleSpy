@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Send, Wallet } from "lucide-react";
+import { Send, UsersRound, Wallet } from "lucide-react";
 import type { LegacyColumnDef as ColumnDef } from "@tanstack/react-table/legacy";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
@@ -17,6 +17,7 @@ import { ApiError } from "@/lib/api/client";
 import type { OverLimitEntry } from "@/lib/api/types";
 import {
   useOverLimit,
+  useReportOverLimitToHr,
   useSendMonthlyInvoices,
   useUsageSummary,
 } from "@/lib/api/hooks";
@@ -49,6 +50,7 @@ export default function InvoicesPage() {
 
   const overLimit = useOverLimit(month ?? undefined);
   const sendInvoices = useSendMonthlyInvoices();
+  const reportToHr = useReportOverLimitToHr();
   const isAdmin = useSession((state) => state.user?.role) === "Admin";
   const invoiced = overLimit.data?.data ?? [];
   const totalOver = invoiced.reduce((sum, row) => sum + row.overage_kshs, 0);
@@ -63,6 +65,20 @@ export default function InvoicesPage() {
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Couldn't send invoices.",
+      );
+    }
+  }
+
+  async function handleReportToHr() {
+    if (!month) return;
+    try {
+      const response = await reportToHr.mutateAsync(month);
+      toast.success(response.message ?? "Emailed the HR manager.");
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "Couldn't email the HR manager.",
       );
     }
   }
@@ -149,15 +165,36 @@ export default function InvoicesPage() {
         getRowId={(row) => row.employee_id}
         toolbarEnd={
           isAdmin ? (
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSend}
-              disabled={sendInvoices.isPending}
-            >
-              <Send aria-hidden="true" />
-              {sendInvoices.isPending ? "Sending…" : "Email these invoices"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleReportToHr}
+                disabled={
+                  reportToHr.isPending || !month || invoiced.length === 0
+                }
+                title={
+                  invoiced.length === 0
+                    ? "Nobody is over their limit this month."
+                    : undefined
+                }
+              >
+                <UsersRound aria-hidden="true" />
+                {reportToHr.isPending
+                  ? "Emailing…"
+                  : "Email list to HR manager"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSend}
+                disabled={sendInvoices.isPending}
+              >
+                <Send aria-hidden="true" />
+                {sendInvoices.isPending ? "Sending…" : "Email these invoices"}
+              </Button>
+            </div>
           ) : undefined
         }
       />

@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Pencil, UserPlus, Users } from "lucide-react";
+import { Pencil, UserMinus, UserPlus, Users } from "lucide-react";
 import type { LegacyColumnDef as ColumnDef } from "@tanstack/react-table/legacy";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/data/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmployeeFormDialog } from "@/features/employees/employee-form-dialog";
+import { RemoveEmployeeDialog } from "@/features/employees/remove-employee-dialog";
 import type { Employee } from "@/lib/api/types";
 import { useDepartments, useEmployees, useSims } from "@/lib/api/hooks";
 import { useSession } from "@/lib/auth/session-store";
@@ -19,8 +20,9 @@ export default function EmployeesPage() {
   // Only an Admin may add an employee or change one (POST/PATCH
   // /employees) — including who holds which extension.
   const isAdmin = useSession((state) => state.user?.role) === "Admin";
-  // Which dialog is open: adding someone, or finding someone to edit.
-  const [dialog, setDialog] = useState<"add" | "edit" | null>(null);
+  // Which dialog is open: adding someone, finding someone to edit, or
+  // removing someone who left.
+  const [dialog, setDialog] = useState<"add" | "edit" | "remove" | null>(null);
 
   const deptNameById = useMemo(
     () => new Map((departments.data?.data ?? []).map((d) => [d.id, d.name])),
@@ -92,12 +94,24 @@ export default function EmployeesPage() {
               <Button
                 type="button"
                 variant="outline"
+                onClick={() => setDialog("remove")}
+              >
+                <UserMinus aria-hidden="true" />
+                Remove (left company)
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => setDialog("edit")}
               >
                 <Pencil aria-hidden="true" />
                 Edit employee
               </Button>
-              <Button type="button" onClick={() => setDialog("add")}>
+              <Button
+                type="button"
+                data-tour="employees-add"
+                onClick={() => setDialog("add")}
+              >
                 <UserPlus aria-hidden="true" />
                 Add employee
               </Button>
@@ -106,6 +120,7 @@ export default function EmployeesPage() {
         }
       />
       <DataTable
+        tourId="employees-table"
         columns={columns}
         data={employees.data?.data}
         isLoading={employees.isLoading}
@@ -117,7 +132,14 @@ export default function EmployeesPage() {
         emptyDescription="Employees appear here once an Admin adds them."
         getRowId={(row) => row.id}
       />
-      {dialog ? (
+      {dialog === "remove" ? (
+        <RemoveEmployeeDialog
+          employees={employees.data?.data ?? []}
+          departments={departments.data?.data ?? []}
+          sims={sims.data?.data ?? []}
+          onClose={() => setDialog(null)}
+        />
+      ) : dialog ? (
         <EmployeeFormDialog
           key={dialog}
           mode={dialog}

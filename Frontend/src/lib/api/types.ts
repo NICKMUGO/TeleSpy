@@ -24,6 +24,8 @@ export interface Department {
   name: string;
   cost_centre_code: string | null;
   budget_ceiling: number | null;
+  /** Its people work the customer service ticket desk. */
+  handles_customer_service: boolean;
 }
 
 /** One department's row on the departments dashboard
@@ -93,6 +95,9 @@ export interface Employee {
   /** Full number of the line this employee holds — Admin only. */
   msisdn?: string;
   total_cost_kes?: number; // current month — Admin/self/own-manager only
+  /** Set once they've left the company; removed employees are never listed. */
+  removed_at?: string | null;
+  removal_reason?: RemovalReason | null;
 }
 
 /** One line of the company phone directory (GET /directory) — visible to
@@ -240,6 +245,8 @@ export interface ReconciliationMonth {
   calls_list_cost_kes: number;
   discount_kes: number;
   calls_cost_kes: number;
+  /** Part of calls_cost_kes made on lines nobody held — billed to no one. */
+  unassigned_lines_cost_kes: number;
   fixed_charge_kes: number;
   /** Null for a month with an invoice entered but no call costs yet. */
   rebuilt_total_kes: number | null;
@@ -247,6 +254,32 @@ export interface ReconciliationMonth {
   note: string | null;
   difference_kes: number | null;
   difference_pct: number | null;
+}
+
+/** GET /sims/unassigned-usage — spend on a line nobody held (a pool SIM
+ * still in use), per extension per month, from the billing run. */
+export interface UnassignedLineUsage {
+  id: string;
+  extension_code: string;
+  month: string;
+  total_cost_kes: number;
+  list_cost_kes: number;
+  calls: number;
+  updated_at: string;
+}
+
+/** Why someone left — Employee.removal_reason. */
+export type RemovalReason =
+  "resigned" | "terminated" | "contract_ended" | "retired" | "other";
+
+/** Sent when a line someone holds goes to another person: the holder
+ * either swaps lines with them, or left the company and is removed — which
+ * needs a reason and the Admin's step-up (password + emailed code). */
+export interface HandoverFields {
+  displaced_holder?: "swap" | "remove";
+  removal_reason?: RemovalReason;
+  password?: string;
+  code?: string;
 }
 
 export interface Reconciliation {
@@ -380,6 +413,8 @@ export interface TutorialStep {
   title: string;
   body: string;
   href: string;
+  /** data-tour="…" anchor to spotlight on `href`; null = no spotlight. */
+  target: string | null;
 }
 
 export interface TutorialProgress {
@@ -411,4 +446,80 @@ export interface ApiErrorBody {
   path?: string;
   method?: string;
   timestamp?: string;
+}
+
+// --- Customer service tickets ---------------------------------------------
+
+export type TicketStatus = "open" | "in_progress" | "returned" | "resolved";
+
+export interface TicketCategory {
+  id: string;
+  name: string;
+  department_id: string;
+  department_name: string | null;
+  is_active: boolean;
+}
+
+export interface TicketEvent {
+  id: string;
+  kind: "raised" | "claimed" | "note" | "returned" | "resent" | "resolved";
+  body: string | null;
+  actor_name: string | null;
+  created_at: string;
+}
+
+export interface Ticket {
+  id: string;
+  /** "TKT-000042" */
+  number: string;
+  subject: string;
+  description: string;
+  customer_name: string;
+  customer_phone: string | null;
+  customer_email: string | null;
+  booking_reference: string | null;
+  category_id: string;
+  category_name: string | null;
+  department_id: string;
+  department_name: string | null;
+  status: TicketStatus;
+  raised_by_id: string;
+  raised_by_name: string | null;
+  claimed_by_id: string | null;
+  claimed_by_name: string | null;
+  claimed_at: string | null;
+  resolved_by_name: string | null;
+  resolved_at: string | null;
+  resolution_note: string | null;
+  return_count: number;
+  created_at: string;
+  updated_at: string;
+  /** Only on GET /tickets/{id}. */
+  events?: TicketEvent[];
+}
+
+/** GET /tickets/me — what the ticket desk means for the caller. */
+export interface TicketAccess {
+  on_desk: boolean;
+  desk_manager: boolean;
+  is_admin: boolean;
+  department_id: string | null;
+  department_name: string | null;
+  /** Their department is sent tickets, so they get the team queue. */
+  handles_tickets: boolean;
+}
+
+export interface TicketAgentStats {
+  user_id: string;
+  name: string;
+  raised: number;
+  /** Successful escalations: tickets they raised that were resolved. */
+  resolved: number;
+  returned: number;
+  open: number;
+}
+
+export interface TicketStats {
+  month: string;
+  agents: TicketAgentStats[];
 }

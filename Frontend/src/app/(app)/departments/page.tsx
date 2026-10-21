@@ -312,7 +312,10 @@ export default function DepartmentsPage() {
           )}
 
           {/* KPI row */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div
+            data-tour="departments-kpis"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+          >
             {loading || !data ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-24 w-full rounded-xl" />
@@ -369,6 +372,7 @@ export default function DepartmentsPage() {
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <SectionCard
               title="Spend against budget ceiling"
+              tourId="departments-ceiling"
               description={`${month ? monthLabel(month) : ""} — highest share of ceiling first`}
             >
               {loading ? (

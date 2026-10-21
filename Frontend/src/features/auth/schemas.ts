@@ -27,3 +27,24 @@ export const forgotPasswordSchema = z.object({
 });
 
 export type ForgotPasswordValues = z.infer<typeof forgotPasswordSchema>;
+
+// Mirrors BackendDotNet's Validators.RequireStrongPassword, so the common
+// mistakes are caught before the token is spent on a round trip. The
+// backend stays the authority (it also rejects reuse of recent passwords).
+export const resetPasswordSchema = z
+  .object({
+    newPassword: z
+      .string()
+      .min(8, "Use at least 8 characters.")
+      .regex(/[A-Z]/, "Include an uppercase letter.")
+      .regex(/[a-z]/, "Include a lowercase letter.")
+      .regex(/\d/, "Include a digit.")
+      .regex(/[^A-Za-z0-9]/, "Include a symbol."),
+    confirmPassword: z.string().min(1, "Re-enter the new password."),
+  })
+  .refine((values) => values.newPassword === values.confirmPassword, {
+    message: "The passwords don't match.",
+    path: ["confirmPassword"],
+  });
+
+export type ResetPasswordValues = z.infer<typeof resetPasswordSchema>;

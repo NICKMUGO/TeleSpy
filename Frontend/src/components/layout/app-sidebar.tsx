@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Headset, Inbox } from "lucide-react";
 import { BrandMark } from "@/components/brand/brand-lockup";
 import {
   Sidebar,
@@ -15,16 +16,55 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import { NAV_SECTIONS, isNavItemVisible } from "@/components/layout/nav-items";
+import {
+  NAV_SECTIONS,
+  isNavItemVisible,
+  type NavSection,
+} from "@/components/layout/nav-items";
+import { useTicketAccess } from "@/lib/api/hooks";
 import { useSession } from "@/lib/auth/session-store";
 
-function isItemActive(pathname: string, href: string) {
+function matches(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** Active unless a more specific link also matches — /tickets/team is
+ * Team tickets, not Ticket desk too. */
+function isItemActive(pathname: string, href: string, allHrefs: string[]) {
+  return (
+    matches(pathname, href) &&
+    !allHrefs.some(
+      (other) => other.length > href.length && matches(pathname, other),
+    )
+  );
 }
 
 export function AppSidebar() {
   const pathname = usePathname();
   const role = useSession((state) => state.user?.role) ?? "Employee";
+  const ticketAccess = useTicketAccess().data?.data;
+
+  // Customer service tickets depend on the department, not the role, so
+  // this section is built from GET /tickets/me rather than NAV_SECTIONS.
+  const ticketItems = [
+    ...(ticketAccess?.on_desk || ticketAccess?.is_admin
+      ? [{ title: "Ticket desk", href: "/tickets", icon: Headset }]
+      : []),
+    ...(ticketAccess?.handles_tickets
+      ? [{ title: "Team tickets", href: "/tickets/team", icon: Inbox }]
+      : []),
+  ];
+  const sections: NavSection[] =
+    ticketItems.length > 0
+      ? [
+          NAV_SECTIONS[0],
+          { title: "Customer service", items: ticketItems },
+          ...NAV_SECTIONS.slice(1),
+        ]
+      : NAV_SECTIONS;
+  const allHrefs = sections.flatMap((section) =>
+    section.items.map((item) => item.href),
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -45,7 +85,7 @@ export function AppSidebar() {
         </SidebarHeader>
 
         <SidebarContent>
-          {NAV_SECTIONS.map((section, index) => {
+          {sections.map((section, index) => {
             const visibleItems = section.items.filter((item) =>
               isNavItemVisible(item, role),
             );
@@ -59,7 +99,11 @@ export function AppSidebar() {
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {visibleItems.map((item) => {
-                      const active = isItemActive(pathname, item.href);
+                      const active = isItemActive(
+                        pathname,
+                        item.href,
+                        allHrefs,
+                      );
                       return (
                         <SidebarMenuItem key={item.href}>
                           <SidebarMenuButton
@@ -67,7 +111,7 @@ export function AppSidebar() {
                             isActive={active}
                             tooltip={item.title}
                           >
-                            <Link href={item.href}>
+                            <Link href={item.href} data-tour-nav={item.href}>
                               <item.icon aria-hidden="true" />
                               <span>{item.title}</span>
                             </Link>

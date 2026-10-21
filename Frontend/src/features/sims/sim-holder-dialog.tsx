@@ -2,6 +2,10 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import {
+  ErrorDialog,
+  type ErrorDialogContent,
+} from "@/components/feedback/error-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,15 +17,31 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
+import {
+  DisplacedHolderChoice,
+  EMPTY_REMOVAL,
+  handoverFields,
+  removalComplete,
+  type RemovalState,
+} from "@/features/employees/handover-fields";
 import { ApiError } from "@/lib/api/client";
+import {
+  describeLine,
+  hasLine,
+  lineRuleError,
+  stepUpError,
+} from "@/lib/api/line-rules";
 import type { Employee, SimCard } from "@/lib/api/types";
 import { useAllocateSim, useUnassignSim } from "@/lib/api/hooks";
 
 const NOBODY = "";
 
-/** Changes who holds a SIM — Admin only. The extension goes with the SIM,
- * so this is how a line is handed over when someone leaves: pick the
- * colleague taking it, or "Nobody" to put it back in the pool. */
+/** Changes who holds a SIM — Admin only. The extension goes with the SIM.
+ * A free spare moves whoever takes it onto it, and their old line goes to
+ * the pool (confirmed first). A held SIM asks what happens to its holder:
+ * they swap lines with the new person (a change of position), or they
+ * left the company and are removed — with a reason and the Admin's
+ * step-up. "Nobody" puts the line back in the pool. */
 export function SimHolderDialog({
   sim,
   employees,
@@ -35,6 +55,15 @@ export function SimHolderDialog({
   const unassign = useUnassignSim();
   const pending = allocate.isPending || unassign.isPending;
   const [employeeId, setEmployeeId] = useState(sim.employee_id ?? NOBODY);
+  const [choice, setChoice] = useState<"swap" | "remove" | null>(null);
+  const [removal, setRemoval] = useState<RemovalState>(EMPTY_REMOVAL);
+  const [confirmingRelease, setConfirmingRelease] = useState(false);
+  const [ruleError, setRuleError] = useState<ErrorDialogContent | null>(null);
+  const [retryError, setRetryError] = useState<ErrorDialogContent | null>(null);
+
+  const held = Boolean(sim.employee_id);
+  const holderName = sim.employee_name ?? "The current holder";
+  const line = describeLine(sim.extension, sim.msisdn);
 
   const options = useMemo(
     () =>
@@ -44,36 +73,83 @@ export function SimHolderDialog({
     [employees, sim.employee_id],
   );
   const chosen = options.find((e) => e.id === employeeId);
-  const line = sim.extension ? `extension ${sim.extension}` : "this SIM";
   const unchanged = employeeId === (sim.employee_id ?? NOBODY);
+  const moverLine =
+    chosen && hasLine(chosen)
+      ? describeLine(chosen.extension ?? chosen.extension_code, chosen.msisdn)
+      : null;
+  const needsChoice = held && Boolean(chosen) && !unchanged;
+  const ready =
+    !unchanged &&
+    (!needsChoice ||
+      choice === "swap" ||
+      (choice === "remove" && removalComplete(removal)));
 
-  let note = "";
+  function pick(id: string) {
+    setEmployeeId(id);
+    // A swap only makes sense with someone who has a line.
+    const next = employees.find((e) => e.id === id);
+    if (choice === "swap" && !(next && hasLine(next))) setChoice(null);
+  }
+
+  let note = held
+    ? "Give it to a new hire replacing someone who left, or swap it with a colleague changing position."
+    : "A free spare: whoever takes it gives up any line they have now.";
   if (!unchanged) {
     if (!chosen) {
-      note = `${sim.employee_name ?? "The current holder"} gives up ${line}; it stays free until it's given to someone.`;
-    } else {
-      note = sim.employee_id
-        ? `${line.charAt(0).toUpperCase()}${line.slice(1)} moves from ${sim.employee_name ?? "the current holder"} to ${chosen.full_name}.`
+      note = `${holderName} gives up ${line}; it stays free until it's given to someone. Any calls on it are reported to HR and the Admins.`;
+    } else if (!held) {
+      note = moverLine
+        ? `${chosen.full_name} moves to ${line}; their ${moverLine} goes back to the pool.`
         : `${chosen.full_name} gets ${line}.`;
-      if (chosen.extension_code && chosen.extension_code !== sim.extension) {
-        note += ` Their current extension ${chosen.extension_code} becomes free.`;
-      }
+    } else {
+      note = `${chosen.full_name} takes over ${line}.`;
     }
   }
 
-  async function handleSubmit(event: FormEvent) {
+  function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (unchanged) return;
+    if (!ready) return;
+    if (!held && moverLine) {
+      setConfirmingRelease(true);
+      return;
+    }
+    void save();
+  }
+
+  async function save() {
+    setConfirmingRelease(false);
     try {
       if (employeeId === NOBODY) {
         await unassign.mutateAsync(sim.id);
         toast.success("SIM unassigned.");
       } else {
-        await allocate.mutateAsync({ simId: sim.id, employeeId });
-        toast.success(`SIM given to ${chosen?.full_name ?? "the employee"}.`);
+        await allocate.mutateAsync({
+          simId: sim.id,
+          employeeId,
+          handover: needsChoice ? handoverFields(choice, removal) : undefined,
+        });
+        toast.success(
+          !needsChoice
+            ? `SIM given to ${chosen?.full_name ?? "the employee"}.`
+            : choice === "swap"
+              ? `${chosen?.full_name} and ${holderName} swapped lines.`
+              : `${chosen?.full_name} now holds ${line}; ${holderName} was removed and HR was emailed.`,
+        );
       }
       onClose();
     } catch (error) {
+      const retry = stepUpError(error);
+      if (retry) {
+        setRemoval((r) => ({ ...r, code: "" }));
+        setRetryError(retry);
+        return;
+      }
+      const popup = lineRuleError(error);
+      if (popup) {
+        setRuleError(popup);
+        return;
+      }
       toast.error(
         error instanceof ApiError
           ? error.message
@@ -86,16 +162,12 @@ export function SimHolderDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>
-            {sim.employee_id ? "Change holder" : "Assign SIM"}
-          </DialogTitle>
+          <DialogTitle>{held ? "Change holder" : "Assign SIM"}</DialogTitle>
           <DialogDescription>
             {[
               sim.msisdn,
               sim.extension ? `extension ${sim.extension}` : null,
-              sim.employee_id
-                ? `held by ${sim.employee_name ?? "an employee"}`
-                : "not allocated",
+              held ? `held by ${sim.employee_name ?? "an employee"}` : "free",
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -107,7 +179,7 @@ export function SimHolderDialog({
             <SelectNative
               id="sim-holder"
               value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
+              onChange={(e) => pick(e.target.value)}
               aria-describedby="sim-holder-note"
             >
               <option value={NOBODY}>Nobody — unallocated</option>
@@ -119,20 +191,79 @@ export function SimHolderDialog({
               ))}
             </SelectNative>
             <p id="sim-holder-note" className="text-muted-foreground text-xs">
-              {note ||
-                "The extension and company number stay with the SIM and go to whoever holds it."}
+              {note}
             </p>
           </div>
+
+          {needsChoice && chosen ? (
+            <DisplacedHolderChoice
+              idPrefix="sim-holder"
+              holderName={holderName}
+              moverName={chosen.full_name}
+              moverLine={moverLine}
+              choice={choice}
+              onChoice={setChoice}
+              removal={removal}
+              onRemoval={setRemoval}
+            />
+          ) : null}
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || unchanged}>
-              {pending ? "Saving…" : "Save"}
+            <Button
+              type="submit"
+              variant={
+                needsChoice && choice === "remove" ? "destructive" : "default"
+              }
+              disabled={pending || !ready}
+            >
+              {pending
+                ? "Saving…"
+                : needsChoice && choice === "remove"
+                  ? `Remove ${holderName} and save`
+                  : "Save"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
+
+      <Dialog open={confirmingRelease} onOpenChange={setConfirmingRelease}>
+        <DialogContent role="alertdialog" className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {chosen?.full_name ?? "This employee"} already has a line
+            </DialogTitle>
+            <DialogDescription>
+              A person can hold only one extension and company number. Moving
+              them to {line} releases their {moverLine}, which goes back to the
+              pool.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmingRelease(false)}
+            >
+              Keep their current line
+            </Button>
+            <Button type="button" onClick={() => void save()}>
+              Release it and continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ErrorDialog error={retryError} onClose={() => setRetryError(null)} />
+      <ErrorDialog
+        error={ruleError}
+        onClose={() => {
+          setRuleError(null);
+          onClose();
+        }}
+      />
     </Dialog>
   );
 }

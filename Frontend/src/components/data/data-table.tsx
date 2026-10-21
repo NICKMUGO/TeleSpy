@@ -43,6 +43,8 @@ interface DataTableProps<TData extends object> {
   /** Rendered under the table, e.g. page controls. */
   footer?: ReactNode;
   getRowId?: (row: TData) => string;
+  /** Spotlight anchor for the guided tour (TutorialContent.cs Target). */
+  tourId?: string;
 }
 
 /** One table implementation for every screen (employees, SIMs, usage,
@@ -64,6 +66,7 @@ export function DataTable<TData extends object>({
   toolbarEnd,
   footer,
   getRowId,
+  tourId,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = useState<{ id: string; desc: boolean }[]>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -110,7 +113,7 @@ export function DataTable<TData extends object>({
   }
 
   return (
-    <div className="flex flex-col gap-3 p-4 sm:p-6">
+    <div data-tour={tourId} className="flex flex-col gap-3 p-4 sm:p-6">
       {searchable || toolbarEnd ? (
         <div className="flex flex-wrap items-center gap-2">
           {searchable ? (

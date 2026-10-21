@@ -119,6 +119,7 @@ export default function SimsPage() {
         description="Every SIM card, its company number and extension, who holds it, and its lifecycle state."
       />
       <DataTable
+        tourId="sims-table"
         columns={columns}
         data={sims.data?.data}
         isLoading={sims.isLoading}

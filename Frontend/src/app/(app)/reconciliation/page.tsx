@@ -11,7 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { useReconciliation, useSetMonthlyInvoice } from "@/lib/api/hooks";
+import {
+  useReconciliation,
+  useSetMonthlyInvoice,
+  useUnassignedUsage,
+} from "@/lib/api/hooks";
 import type { ReconciliationMonth } from "@/lib/api/types";
 import { monthLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -156,7 +160,15 @@ export default function ReconciliationPage() {
                       </th>
                       <Money value={row.calls_list_cost_kes} />
                       <Money value={-row.discount_kes} />
-                      <Money value={row.calls_cost_kes} />
+                      <td className="px-4 py-2.5 text-right font-mono whitespace-nowrap tabular-nums">
+                        {kesExact(row.calls_cost_kes)}
+                        {row.unassigned_lines_cost_kes > 0 ? (
+                          <span className="text-destructive block text-xs">
+                            incl. {kesExact(row.unassigned_lines_cost_kes)} on
+                            unassigned lines
+                          </span>
+                        ) : null}
+                      </td>
                       <Money
                         value={
                           row.rebuilt_total_kes === null
@@ -197,6 +209,8 @@ export default function ReconciliationPage() {
               </table>
             </div>
 
+            <UnassignedLines />
+
             <div className="text-muted-foreground flex flex-col gap-2 text-sm">
               <p>
                 Each row is the month the calls were made in. The telco&rsquo;s
@@ -225,6 +239,70 @@ export default function ReconciliationPage() {
         )}
       </div>
     </>
+  );
+}
+
+/** Spend on lines nobody held — a SIM in the pool that someone kept
+ * using. It's on the telco's bill (and in the rebuilt bill above) but
+ * billed to no employee, so it's listed here to be chased up. */
+function UnassignedLines() {
+  const usage = useUnassignedUsage();
+  const rows = usage.data?.data ?? [];
+  if (rows.length === 0) return null;
+  return (
+    <section
+      aria-labelledby="unassigned-lines-heading"
+      className="border-destructive/40 flex flex-col gap-3 rounded-lg border p-4"
+    >
+      <div>
+        <h2 id="unassigned-lines-heading" className="font-semibold">
+          Calls on unassigned lines
+        </h2>
+        <p className="text-muted-foreground text-sm">
+          These lines had no holder but were still used. Find out who has the
+          SIM and give it to them under SIM cards — until then nobody is billed
+          for this spend.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <caption className="sr-only">Spend on unassigned lines</caption>
+          <thead>
+            <tr className="border-border border-b">
+              {["Month", "Extension", "Calls", "Cost"].map((heading, i) => (
+                <th
+                  key={heading}
+                  scope="col"
+                  className={cn(
+                    "text-muted-foreground py-2 pr-4 font-medium",
+                    i < 2 ? "text-left" : "text-right",
+                  )}
+                >
+                  {heading}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.id}
+                className="border-border border-b last:border-b-0"
+              >
+                <td className="py-2 pr-4">{monthLabel(row.month)}</td>
+                <td className="py-2 pr-4 font-mono">{row.extension_code}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {row.calls.toLocaleString("en-KE")}
+                </td>
+                <td className="py-2 pr-4 text-right font-mono tabular-nums">
+                  {kesExact(row.total_cost_kes)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

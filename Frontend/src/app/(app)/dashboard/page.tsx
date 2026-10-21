@@ -24,9 +24,11 @@ import {
   useMyUsage,
   useOverLimit,
   useSims,
+  useTicketAccess,
   useUsage,
   useUsageSummary,
 } from "@/lib/api/hooks";
+import { TicketDesk } from "@/features/tickets/ticket-desk";
 import { HIGH_SEVERITY_THRESHOLD } from "@/lib/anomaly-severity";
 import { useSession } from "@/lib/auth/session-store";
 import {
@@ -43,7 +45,20 @@ const UNKNOWN_DEPARTMENT = "unknown";
 
 export default function DashboardPage() {
   const user = useSession((state) => state.user);
+  const ticketAccess = useTicketAccess();
   const isSelfService = user?.role === "Employee";
+
+  // The customer service desk signs in to its ticket desk, not the telecom
+  // dashboard. Wait for that answer rather than flash the wrong view.
+  if (ticketAccess.isLoading) {
+    return (
+      <div className="flex flex-col gap-4 p-4 sm:p-6">
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+  if (ticketAccess.data?.data.on_desk) return <TicketDesk />;
 
   return isSelfService ? <EmployeeDashboard /> : <OrgDashboard />;
 }
@@ -272,7 +287,10 @@ function OrgDashboard() {
 
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         {/* KPI row */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <div
+          data-tour="dashboard-kpis"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+        >
           {loading ? (
             Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-24 w-full rounded-xl" />
@@ -532,7 +550,7 @@ function SpendingLimitSection({
       ) : limit === null || !latest ? (
         <EmptyHint>
           {limit === null
-            ? "Your call costs are still recorded in your spend ledger."
+            ? "You have no monthly limit, so you're never invoiced for calls."
             : "No monthly totals yet."}
         </EmptyHint>
       ) : (
@@ -630,12 +648,32 @@ function EmptyHint({ children }: { children: React.ReactNode }) {
 
 function EmployeeDashboard() {
   const user = useSession((state) => state.user);
-  const myUsage = useMyUsage();
-  const summaries = myUsage.data?.data.cost_summaries ?? [];
-  const period = activePeriod(summaries);
-  const currentSummary = summaries.find((s) => s.month === period.month);
+  // Null until the employee picks a month — the view opens on their latest.
+  const [chosenMonth, setChosenMonth] = useState<string | null>(null);
+  const myUsage = useMyUsage(chosenMonth ?? undefined);
+  const summaries = useMemo(
+    () => myUsage.data?.data.cost_summaries ?? [],
+    [myUsage.data],
+  );
+  // Every month the company has been billed for, plus any of the
+  // employee's own, newest first — a month they made no calls in is still
+  // pickable and simply shows KES 0.
+  const billedMonths = myUsage.data?.data.billed_months;
+  const months = useMemo(
+    () =>
+      [...new Set([...(billedMonths ?? []), ...summaries.map((s) => s.month)])]
+        .sort()
+        .reverse(),
+    [billedMonths, summaries],
+  );
+  const month =
+    chosenMonth && months.includes(chosenMonth)
+      ? chosenMonth
+      : (months[0] ?? activePeriod(summaries).month);
+  const currentSummary = summaries.find((s) => s.month === month);
   const limit = myUsage.data?.data.limit_kshs ?? null;
   const recentEvents = myUsage.data?.data.usage.slice(0, 6) ?? [];
+  const callCount = myUsage.data?.meta?.total;
 
   if (myUsage.error) {
     return (
@@ -654,14 +692,31 @@ function EmployeeDashboard() {
         title={`Welcome back${user?.full_name ? `, ${user.full_name.split(" ")[0]}` : ""}`}
         description="Your telecom usage and spend at a glance."
         actions={
-          <Badge variant="outline" className="h-8 gap-1.5 px-2.5">
-            <CalendarDays aria-hidden="true" />
-            {monthLabel(period.month)}
-          </Badge>
+          months.length > 1 ? (
+            <SelectNative
+              aria-label="Month"
+              value={month}
+              onChange={(e) => setChosenMonth(e.target.value)}
+            >
+              {months.map((m) => (
+                <option key={m} value={m}>
+                  {monthLabel(m)}
+                </option>
+              ))}
+            </SelectNative>
+          ) : (
+            <Badge variant="outline" className="h-8 gap-1.5 px-2.5">
+              <CalendarDays aria-hidden="true" />
+              {monthLabel(month)}
+            </Badge>
+          )
         }
       />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div
+          data-tour="dashboard-kpis"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+        >
           {myUsage.isLoading ? (
             Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-24 w-full rounded-xl" />
@@ -669,7 +724,7 @@ function EmployeeDashboard() {
           ) : (
             <>
               <StatCard
-                label={`Spend — ${monthLabel(period.month)}`}
+                label={`Spend — ${monthLabel(month)}`}
                 value={kes(currentSummary?.total_cost ?? 0)}
                 hint={limit ? `${kes(limit)} limit` : "No limit set"}
                 tone={
@@ -706,8 +761,12 @@ function EmployeeDashboard() {
         />
 
         <SectionCard
-          title="Recent calls"
-          actionHref={{ label: "View spend ledger", href: "/ledger" }}
+          title={chosenMonth ? `Calls in ${monthLabel(month)}` : "Recent calls"}
+          description={
+            chosenMonth && callCount !== undefined
+              ? `Latest ${Math.min(recentEvents.length, callCount)} of ${callCount}`
+              : undefined
+          }
           bodyClassName="px-0 pb-0"
         >
           {myUsage.isLoading ? (

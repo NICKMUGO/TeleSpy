@@ -66,3 +66,15 @@ export async function forgotPassword(email: string) {
     unauthenticated: true,
   });
 }
+
+// Consumes the one-time token from the emailed link — the same link serves
+// a forgotten password and a brand-new account's first password (see
+// EmployeesController.Create, which issues it on creation). 400
+// invalid_reset_token when expired/used; 422 for a weak or reused password.
+export async function resetPassword(token: string, newPassword: string) {
+  return apiRequest<ApiEnvelope<null>>("/auth/reset-password", {
+    method: "POST",
+    body: { token, new_password: newPassword },
+    unauthenticated: true,
+  });
+}

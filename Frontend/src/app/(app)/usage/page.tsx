@@ -15,7 +15,7 @@ import {
 import { SelectNative } from "@/components/ui/select-native";
 import type { UsageEvent } from "@/lib/api/types";
 import { useUsage, useUsageMonths } from "@/lib/api/hooks";
-import { callDuration, monthLabel } from "@/lib/format";
+import { callDuration, monthKey, monthLabel } from "@/lib/format";
 
 const CLASSIFICATION_TONE: Record<string, "secondary" | "outline" | "default"> =
   {
@@ -29,8 +29,10 @@ const CLASSIFICATION_TONE: Record<string, "secondary" | "outline" | "default"> =
 const PAGE_SIZES = [25, 50, 100];
 
 export default function UsagePage() {
-  // "" = every month.
-  const [month, setMonth] = useState("");
+  // One month at a time, never every month at once — only months the CDR
+  // records actually cover (up to this month). Until one is picked, it's
+  // the latest of them.
+  const [pickedMonth, setPickedMonth] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
   // The search runs on the server, across every call rather than just the
@@ -47,16 +49,32 @@ export default function UsagePage() {
   }, [search]);
 
   const months = useUsageMonths();
-  const usage = useUsage({
-    month: month || undefined,
-    search: appliedSearch || undefined,
-    page,
-    limit,
-  });
+  const currentMonth = monthKey(new Date());
+  const monthOptions = useMemo(() => {
+    const counts = new Map(
+      (months.data?.data ?? [])
+        .filter((m) => m.month <= currentMonth)
+        .map((m) => [m.month, m.count]),
+    );
+    return [...counts.entries()]
+      .map(([key, count]) => ({ month: key, count }))
+      .sort((a, b) => b.month.localeCompare(a.month));
+  }, [months.data, currentMonth]);
+  const month = pickedMonth ?? monthOptions[0]?.month ?? currentMonth;
+
+  const usage = useUsage(
+    {
+      month,
+      search: appliedSearch || undefined,
+      page,
+      limit,
+    },
+    // Wait for the month list, so the first request is already one month.
+    { enabled: !months.isLoading },
+  );
 
   const total = usage.data?.meta?.total ?? 0;
   const pages = Math.max(1, usage.data?.meta?.pages ?? 1);
-  const allMonthsTotal = months.data?.data.reduce((sum, m) => sum + m.count, 0);
   const firstRow = total === 0 ? 0 : (page - 1) * limit + 1;
   const lastRow = Math.min(page * limit, total);
 
@@ -110,26 +128,25 @@ export default function UsagePage() {
         title="Usage events"
         description="Every answered call placed from an extension, most recent first. Duration runs from pickup to hang-up."
       />
-      <div className="flex flex-wrap items-end gap-3 px-4 pt-4 sm:px-6">
+      <div
+        data-tour="usage-filters"
+        className="flex flex-wrap items-end gap-3 px-4 pt-4 sm:px-6"
+      >
         <label className="flex w-full flex-col gap-1 text-sm sm:w-auto">
           <span className="text-muted-foreground">Month</span>
           <SelectNative
             className="sm:min-w-48"
             value={month}
             onChange={(e) => {
-              setMonth(e.target.value);
+              setPickedMonth(e.target.value);
               setPage(1);
             }}
           >
-            <option value="">
-              All months
-              {allMonthsTotal === undefined
-                ? ""
-                : ` (${allMonthsTotal.toLocaleString("en-KE")})`}
-            </option>
-            {months.data?.data.map((m) => (
+            {monthOptions.map((m) => (
               <option key={m.month} value={m.month}>
-                {monthLabel(m.month)} ({m.count.toLocaleString("en-KE")})
+                {monthLabel(m.month)}
+                {m.month === currentMonth ? " — this month" : ""} (
+                {m.count.toLocaleString("en-KE")})
               </option>
             ))}
           </SelectNative>
@@ -159,8 +176,8 @@ export default function UsagePage() {
         }
         emptyDescription={
           appliedSearch
-            ? `Nothing has an extension or destination containing "${appliedSearch}"${month ? ` in ${monthLabel(month)}` : ""}.`
-            : "Events appear here once CDR data has been ingested."
+            ? `Nothing has an extension or destination containing "${appliedSearch}" in ${monthLabel(month)}.`
+            : `No calls in ${monthLabel(month)}. Pick another month, or ingest CDR data.`
         }
         getRowId={(row) => row.id}
         footer={
