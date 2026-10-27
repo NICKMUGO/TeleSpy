@@ -229,7 +229,6 @@ export default function DepartmentsPage() {
     <>
       <PageHeader
         title="Departments"
-        description="Every department's call spend side by side: against its budget ceiling, against last month and against each other. Spend is after the contract discount."
         actions={
           <SelectNative
             aria-label="Month"
@@ -314,7 +313,7 @@ export default function DepartmentsPage() {
           {/* KPI row */}
           <div
             data-tour="departments-kpis"
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+            className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4"
           >
             {loading || !data ? (
               Array.from({ length: 4 }).map((_, i) => (

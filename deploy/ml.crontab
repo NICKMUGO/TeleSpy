@@ -1,0 +1,24 @@
+# TeleSpy ML batch jobs — install on the production VPS with:
+#     crontab deploy/ml.crontab
+# Assumes the compose project lives in /opt/telespy and the server clock is
+# set to Nairobi time (sudo timedatectl set-timezone Africa/Nairobi).
+# flock -n skips a run if the previous one of the same job is still going.
+#
+# CDR ingestion (avaya_cdr_listener / cucm_sftp_fetch / generic_sftp_fetch)
+# and CSV preprocessing are deliberately not scheduled yet — they come in
+# once the live Avaya/CUCM feed is wired up.
+#
+# min hour dom month dow
+
+# Billing — monthly, 1st of the month at 01:00 (writes usage_summaries,
+# which forecasting reads, so it runs first).
+0 1 1 * *      cd /opt/telespy && flock -n /tmp/telespy-billing.lock docker compose run --rm ml python training/billing.py >> /var/log/telespy/billing.log 2>&1
+
+# Anomaly detection — every 24 hours at 02:00.
+0 2 * * *      cd /opt/telespy && flock -n /tmp/telespy-anomaly.lock docker compose run --rm ml python training/anomaly_detection.py >> /var/log/telespy/anomaly.log 2>&1
+
+# Usage profiling — every 3 months (1 Jan/Apr/Jul/Oct) at 03:00.
+0 3 1 1,4,7,10 *  cd /opt/telespy && flock -n /tmp/telespy-profiling.lock docker compose run --rm ml python training/usage_profiling.py >> /var/log/telespy/profiling.log 2>&1
+
+# Forecasting — every 3 months (1 Jan/Apr/Jul/Oct) at 04:00, after billing.
+0 4 1 1,4,7,10 *  cd /opt/telespy && flock -n /tmp/telespy-forecast.lock docker compose run --rm ml python training/forecasting.py >> /var/log/telespy/forecast.log 2>&1

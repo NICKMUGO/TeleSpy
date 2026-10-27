@@ -15,6 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  useClosingDialog,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,20 +54,24 @@ export function RemoveEmployeeDialog({
   sims: SimCard[];
   onClose: () => void;
 }) {
+  const dialog = useClosingDialog(onClose);
   const ownEmployeeId = useSession((state) => state.user?.employee_id);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = employees.find((e) => e.id === selectedId) ?? null;
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+    <Dialog open={dialog.open} onOpenChange={dialog.onOpenChange}>
+      <DialogContent
+        onExitComplete={dialog.onExitComplete}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+      >
         {selected ? (
           <RemoveForm
             key={selected.id}
             employee={selected}
             sims={sims}
             onBack={() => setSelectedId(null)}
-            onClose={onClose}
+            onClose={dialog.close}
           />
         ) : (
           <EmployeePicker

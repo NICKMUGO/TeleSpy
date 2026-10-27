@@ -74,10 +74,7 @@ export default function ForecastsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Spend forecasts"
-        description="Each department's total monthly call spend — every employee in it added together — and the projection for next month."
-      />
+      <PageHeader title="Spend forecasts" />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -112,7 +109,7 @@ export default function ForecastsPage() {
           />
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               <StatCard
                 label={
                   detail?.forecast

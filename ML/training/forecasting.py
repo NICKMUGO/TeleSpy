@@ -4,9 +4,9 @@ standalone batch job.
 
 Forecasts next-period spend per department from its usage_summaries
 history and upserts a forecast_results row keyed by (department_id,
-period). Monthly totals only change once a month, so this is meant to run
-monthly via cron/systemd timer — running it more often than the
-usage_summaries data actually changes just repeats the same forecast.
+period). Spend trends shift slowly, so this runs every 3 months via cron
+(deploy/ml.crontab) — running it more often than the usage_summaries
+data actually changes just repeats the same forecast.
 
 Run standalone:
     python forecasting.py

@@ -20,7 +20,9 @@ export function InternationalRatesTable() {
       {
         accessorKey: "country_code",
         header: "Country code",
-        cell: (c) => <span className="font-mono">+{c.getValue<string>()}</span>,
+        cell: (c) => (
+          <span className="font-tabular">+{c.getValue<string>()}</span>
+        ),
       },
       {
         accessorKey: "country_name",

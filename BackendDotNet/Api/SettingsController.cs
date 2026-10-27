@@ -2,6 +2,7 @@
 // employee's own usage view (GET /me/usage) — plus the one company-wide
 // setting kept here, the standard number format (/settings/number-format,
 // Admin only).
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -115,11 +116,25 @@ public class MyUsageController(TeleSpyDbContext db, IViewerContext viewerContext
 
         var allocationIds = employee.Allocations.Select(a => a.AllocationId).ToList();
         var query = db.UsageEvents.Where(e => e.AllocationId != null && allocationIds.Contains(e.AllocationId));
+        // ?month=YYYY-MM — only calls made in that calendar month, so the
+        // employee can look back at an earlier month. Anything that isn't a
+        // month is ignored, as on /usage.
+        if (DateTime.TryParseExact(Request.Query["month"].ToString(), "yyyy-MM", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var monthStart))
+        {
+            var monthEnd = monthStart.AddMonths(1);
+            query = query.Where(e => e.OccuredAt >= monthStart && e.OccuredAt < monthEnd);
+        }
         var total = await query.CountAsync();
         var rows = await query.OrderByDescending(e => e.OccuredAt).Skip((page - 1) * limit).Take(limit).ToListAsync();
 
         var currentAllocation = employee.GetActiveAllocation();
         var profile = await db.UsageProfiles.FirstOrDefaultAsync(p => p.EmployeeId == employee.EmployeeId);
+        // Every month the company has been billed for, newest first, so the
+        // employee can pick any of them, including months they made no
+        // calls in (their spend there is simply 0).
+        var billedMonths = await db.UsageSummaries.Select(s => s.Month).Distinct()
+            .OrderByDescending(m => m).ToListAsync();
 
         return Ok(new
         {
@@ -127,6 +142,7 @@ public class MyUsageController(TeleSpyDbContext db, IViewerContext viewerContext
             {
                 usage = rows.Select(r => r.ToDict()).ToList(),
                 cost_summaries = employee.UsageSummaries.Select(s => s.ToDict()).ToList(),
+                billed_months = billedMonths,
                 limit_kshs = viewer.Role?.CallLimitKshs,
                 current_allocation = currentAllocation?.ToDict(),
                 current_sim = currentAllocation?.Sim?.ToDict(viewer),
@@ -163,7 +179,7 @@ public class NumberFormatController(TeleSpyDbContext db, IAuditService audit) : 
         ["prefix"] = settings.CompanyNumberPrefix,
         ["extension_digits"] = 3,
         ["example"] = settings.CompanyNumberFor("370"),
-        ["updated_at"] = settings.UpdatedAt.ToString("o"),
+        ["updated_at"] = UtcTime.Iso(settings.UpdatedAt),
     };
 
     [HttpGet("/settings/number-format")]

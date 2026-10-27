@@ -561,6 +561,13 @@ def run(backend: Backend) -> int:
     extension_code never appears as an origin in the dataset are left
     untouched. Returns the number of usage_summaries rows written/updated.
 
+    An extension nobody holds any more is still billed somewhere, never
+    dropped: to whoever's usage_summaries row already carries that
+    extension for that month (the person who held it then — e.g. someone
+    since removed), else to unassigned_line_usage — a line in the pool that
+    was still being used. Those rows are rebuilt from scratch every run,
+    and GET /reconciliation counts them into the month's bill.
+
     Only rows whose `orig` is a bare 3-digit PBX extension are ever billed
     to an employee — the organization only bears the cost of calls its own
     staff dialled out. A small number of chargeable rows in the raw
@@ -588,13 +595,19 @@ def run(backend: Backend) -> int:
     # Sum computed_cost, grouped by (originating extension, month) — one
     # total per employee per month.
     by_origin = dataset.groupby(["orig", "month"])[["computed_cost", "list_cost"]].sum()
+    calls_by_origin = dataset.groupby(["orig", "month"]).size()
 
     # Fetch every employee that currently has an extension_code assigned.
     employees = backend.execute(
-        "SELECT employee_id, extension_code FROM employees WHERE extension_code IS NOT NULL"
+        "SELECT employee_id, extension_code FROM employees "
+        "WHERE extension_code IS NOT NULL AND removed_at IS NULL"
     ).fetchall()
     # Build an extension_code -> employee_id lookup dict.
     employee_by_extension = {extension_code: employee_id for employee_id, extension_code in employees}
+
+    # Full recompute of pool-line spend, like everything else here.
+    backend.execute("DELETE FROM unassigned_line_usage")
+    unassigned_total = 0.0
 
     written = 0
     # Iterate every (extension, month) group and its summed cost.
@@ -603,11 +616,29 @@ def run(backend: Backend) -> int:
             continue  # not a 3-digit PBX extension — never billed to an employee
         # Look up which employee (if any) currently owns this extension.
         employee_id = employee_by_extension.get(extension_code)
-        if employee_id is None:
-            continue
         # Round the summed costs to 2 decimal places.
         total_cost = round(float(totals["computed_cost"]), 2)
         list_cost = round(float(totals["list_cost"]), 2)
+        if employee_id is None:
+            # Nobody holds it now: keep it with whoever held it that month...
+            previous = backend.execute(
+                "SELECT employee_id FROM usage_summaries WHERE extension_code = ? AND month = ?",
+                (extension_code, month),
+            ).fetchone()
+            if previous:
+                employee_id = previous[0]
+            else:
+                # ...or, if nobody did, it's a pool line that was used.
+                if total_cost > 0 or list_cost > 0:
+                    backend.execute(
+                        """INSERT INTO unassigned_line_usage
+                           (usage_id, extension_code, month, total_cost, list_cost, calls, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (new_id(), extension_code, month, total_cost, list_cost,
+                         int(calls_by_origin[(extension_code, month)]), now_str()),
+                    )
+                    unassigned_total += total_cost
+                continue
         # Check whether a usage_summaries row already exists for this
         # employee+month.
         existing = backend.execute(
@@ -630,6 +661,9 @@ def run(backend: Backend) -> int:
                 (new_id(), employee_id, month, total_cost, list_cost, extension_code, now_str()),
             )
         written += 1
+    if unassigned_total > 0:
+        print(f"[{backend.name}] Billing: {round(unassigned_total, 2)} KES on lines nobody held "
+              f"— recorded in unassigned_line_usage.")
     # Persist all the inserts/updates made in this loop.
     backend.commit()
     return written

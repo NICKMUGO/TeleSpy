@@ -6,6 +6,7 @@
 // SQLAlchemy's db.JSON type gives Flask across SQLite/Postgres.
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using TeleSpy.Core;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
@@ -30,9 +31,13 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<AnomalyFlag> AnomalyFlags => Set<AnomalyFlag>();
     public DbSet<UsageProfile> UsageProfiles => Set<UsageProfile>();
     public DbSet<UsageSummary> UsageSummaries => Set<UsageSummary>();
+    public DbSet<UnassignedLineUsage> UnassignedLineUsages => Set<UnassignedLineUsage>();
     public DbSet<MonthlyInvoice> MonthlyInvoices => Set<MonthlyInvoice>();
     public DbSet<ForecastResult> ForecastResults => Set<ForecastResult>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
+    public DbSet<Ticket> Tickets => Set<Ticket>();
+    public DbSet<TicketEvent> TicketEvents => Set<TicketEvent>();
 
     // All DateTime values in this app are naive UTC wall-clock (see
     // Core/Time.cs's Clock.UtcNow(), Kind=Unspecified) — mirroring
@@ -45,6 +50,12 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
         configurationBuilder.Properties<DateTime>().HaveColumnType("timestamp without time zone");
         configurationBuilder.Properties<DateTime?>().HaveColumnType("timestamp without time zone");
     }
+
+    /// <summary>Encrypts on write, decrypts on read. EF skips converters for
+    /// null, so optional fields stay null rather than an encrypted empty.</summary>
+    private static ValueConverter<string, string> EncryptedText() => new(
+        v => FieldEncryption.Encrypt(v),
+        v => FieldEncryption.Decrypt(v));
 
     private static ValueConverter<List<string>, string> StringListConverter() => new(
         v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
@@ -89,6 +100,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.CostCentreCode).HasColumnName("cost_centre_code").HasMaxLength(40);
             e.HasIndex(x => x.CostCentreCode).IsUnique();
             e.Property(x => x.BudgetCeiling).HasColumnName("budget_ceiling");
+            e.Property(x => x.HandlesCustomerService).HasColumnName("handles_customer_service");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.HasMany(x => x.Employees).WithOne(x => x.Department).HasForeignKey(x => x.DepartmentId);
             e.HasMany(x => x.ForecastResults).WithOne(x => x.Department).HasForeignKey(x => x.DepartmentId);
@@ -106,6 +118,8 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.ExtensionCode).HasColumnName("extension_code").HasMaxLength(3);
             e.HasIndex(x => x.ExtensionCode).IsUnique();
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.RemovedAt).HasColumnName("removed_at");
+            e.Property(x => x.RemovalReason).HasColumnName("removal_reason").HasMaxLength(32);
             e.HasOne(x => x.User).WithOne(x => x.Employee).HasForeignKey<User>(x => x.EmployeeId);
             e.HasMany(x => x.Allocations).WithOne(x => x.Employee).HasForeignKey(x => x.EmployeeId);
             e.HasOne(x => x.UsageProfile).WithOne(x => x.Employee).HasForeignKey<UsageProfile>(x => x.EmployeeId);
@@ -123,6 +137,11 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasIndex(x => x.Email).IsUnique();
             e.Property(x => x.PasswordHash).HasColumnName("password_hash").HasMaxLength(128).IsRequired();
             e.Property(x => x.RoleId).HasColumnName("role_id").HasMaxLength(20).IsRequired();
+            // Exactly one Admin: handing the role over (EmployeesController)
+            // demotes the old Admin before writing the new one, and this
+            // makes a second Admin impossible even under a race.
+            e.HasIndex(x => x.RoleId, "IX_users_role_id");
+            e.HasIndex(x => x.RoleId, "UX_users_single_admin").IsUnique().HasFilter("role_id = 'admin'");
             e.Property(x => x.IsActive).HasColumnName("is_active");
             e.Property(x => x.MustChangePassword).HasColumnName("must_change_password");
             e.Property(x => x.FailedLoginAttempts).HasColumnName("failed_login_attempts");
@@ -170,6 +189,77 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.AcceptedDpaNotice).HasColumnName("accepted_dpa_notice").IsRequired();
             e.Property(x => x.DpaPolicyVersion).HasColumnName("dpa_policy_version").HasMaxLength(20).IsRequired();
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
+
+        modelBuilder.Entity<TicketCategory>(e =>
+        {
+            e.ToTable("ticket_categories");
+            e.HasKey(x => x.CategoryId);
+            e.Property(x => x.CategoryId).HasColumnName("category_id").HasMaxLength(36);
+            e.Property(x => x.Name).HasColumnName("name").HasMaxLength(80).IsRequired();
+            e.HasIndex(x => x.Name).IsUnique();
+            e.Property(x => x.DepartmentId).HasColumnName("department_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.IsActive).HasColumnName("is_active");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Ticket>(e =>
+        {
+            e.ToTable("tickets");
+            e.HasKey(x => x.TicketId);
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36);
+            e.Property(x => x.Number).HasColumnName("number").UseIdentityByDefaultColumn();
+            e.HasIndex(x => x.Number).IsUnique();
+            e.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(160).IsRequired();
+            e.Property(x => x.Description).HasColumnName("description").HasMaxLength(4000).IsRequired();
+            // Customer personal data is encrypted at rest (Core/FieldEncryption.cs).
+            // The converter does it on every write/read, so the rest of the
+            // code sees plain values; it also means these columns can't be
+            // searched or sorted in SQL. Lengths fit the ciphertext, not the
+            // plaintext (the API caps those).
+            e.Property(x => x.CustomerName).HasColumnName("customer_name").HasMaxLength(1024)
+                .HasConversion(EncryptedText());
+            e.Property(x => x.CustomerPhone).HasColumnName("customer_phone").HasMaxLength(1024)
+                .HasConversion(EncryptedText());
+            e.Property(x => x.CustomerEmail).HasColumnName("customer_email").HasMaxLength(1024)
+                .HasConversion(EncryptedText());
+            e.Property(x => x.BookingReference).HasColumnName("booking_reference").HasMaxLength(1024)
+                .HasConversion(EncryptedText());
+            e.Property(x => x.CategoryId).HasColumnName("category_id").HasMaxLength(36);
+            e.Property(x => x.CustomReason).HasColumnName("custom_reason").HasMaxLength(80);
+            e.Property(x => x.DepartmentId).HasColumnName("department_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => new { x.DepartmentId, x.Status });
+            e.Property(x => x.Status).HasColumnName("status").HasMaxLength(20).IsRequired();
+            e.Property(x => x.RaisedByUserId).HasColumnName("raised_by_user_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => x.RaisedByUserId);
+            e.Property(x => x.ClaimedByUserId).HasColumnName("claimed_by_user_id").HasMaxLength(36);
+            e.Property(x => x.ClaimedAt).HasColumnName("claimed_at");
+            e.Property(x => x.ResolvedByUserId).HasColumnName("resolved_by_user_id").HasMaxLength(36);
+            e.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
+            e.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(4000);
+            e.Property(x => x.ReturnCount).HasColumnName("return_count");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.RaisedBy).WithMany().HasForeignKey(x => x.RaisedByUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.ResolvedBy).WithMany().HasForeignKey(x => x.ResolvedByUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasMany(x => x.Events).WithOne().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketEvent>(e =>
+        {
+            e.ToTable("ticket_events");
+            e.HasKey(x => x.EventId);
+            e.Property(x => x.EventId).HasColumnName("event_id").HasMaxLength(36);
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.ActorUserId).HasColumnName("actor_user_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(20).IsRequired();
+            e.Property(x => x.Body).HasColumnName("body").HasMaxLength(4000);
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasOne(x => x.Actor).WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TutorialProgress>(e =>
@@ -268,6 +358,14 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.EmployeeId).HasColumnName("employee_id").HasMaxLength(36).IsRequired();
             e.Property(x => x.StartAt).HasColumnName("start_at").IsRequired();
             e.Property(x => x.EndAt).HasColumnName("end_at");
+            // A person holds one line at a time and a line has one holder:
+            // at most one open (end_at IS NULL) allocation per employee and
+            // per SIM. AllocationService closes the old ones first; these
+            // make the database refuse anything that doesn't.
+            e.HasIndex(x => x.EmployeeId);
+            e.HasIndex(x => x.SimId);
+            e.HasIndex(x => x.EmployeeId, "UX_sim_allocations_open_employee").IsUnique().HasFilter("end_at IS NULL");
+            e.HasIndex(x => x.SimId, "UX_sim_allocations_open_sim").IsUnique().HasFilter("end_at IS NULL");
             e.HasMany(x => x.UsageEvents).WithOne(x => x.Allocation).HasForeignKey(x => x.AllocationId);
         });
 
@@ -331,6 +429,20 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.TotalCost).HasColumnName("total_cost");
             e.Property(x => x.ListCost).HasColumnName("list_cost").HasDefaultValue(0.0);
             e.Property(x => x.ExtensionCode).HasColumnName("extension_code").HasMaxLength(3);
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        });
+
+        modelBuilder.Entity<UnassignedLineUsage>(e =>
+        {
+            e.ToTable("unassigned_line_usage");
+            e.HasKey(x => x.UsageId);
+            e.Property(x => x.UsageId).HasColumnName("usage_id").HasMaxLength(36);
+            e.Property(x => x.ExtensionCode).HasColumnName("extension_code").HasMaxLength(3).IsRequired();
+            e.Property(x => x.Month).HasColumnName("month").HasMaxLength(7).IsRequired();
+            e.HasIndex(x => new { x.ExtensionCode, x.Month }).IsUnique().HasDatabaseName("uq_unassigned_line_usage_extension_month");
+            e.Property(x => x.TotalCost).HasColumnName("total_cost");
+            e.Property(x => x.ListCost).HasColumnName("list_cost");
+            e.Property(x => x.Calls).HasColumnName("calls");
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 

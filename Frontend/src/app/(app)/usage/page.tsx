@@ -124,10 +124,7 @@ export default function UsagePage() {
 
   return (
     <>
-      <PageHeader
-        title="Usage events"
-        description="Every answered call placed from an extension, most recent first. Duration runs from pickup to hang-up."
-      />
+      <PageHeader title="Usage events" />
       <div
         data-tour="usage-filters"
         className="flex flex-wrap items-end gap-3 px-4 pt-4 sm:px-6"

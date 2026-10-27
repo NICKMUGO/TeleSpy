@@ -90,21 +90,21 @@ export default function InvoicesPage() {
         accessorKey: "total_cost",
         header: "Spent",
         cell: (c) => (
-          <span className="font-mono">{kes(c.getValue<number>())}</span>
+          <span className="font-tabular">{kes(c.getValue<number>())}</span>
         ),
       },
       {
         accessorKey: "limit_kshs",
         header: "Limit",
         cell: (c) => (
-          <span className="font-mono">{kes(c.getValue<number>())}</span>
+          <span className="font-tabular">{kes(c.getValue<number>())}</span>
         ),
       },
       {
         accessorKey: "overage_kshs",
         header: "Invoiced (over by)",
         cell: (c) => (
-          <span className="text-destructive font-mono font-medium">
+          <span className="text-destructive font-tabular font-medium">
             {kes(c.getValue<number>())}
           </span>
         ),
@@ -115,10 +115,7 @@ export default function InvoicesPage() {
 
   return (
     <>
-      <PageHeader
-        title="Invoices"
-        description="Employees whose call costs went over their monthly limit, each invoiced for the amount over. Anyone within their limit is not invoiced."
-      />
+      <PageHeader title="Invoices" />
       <div className="px-4 pt-4 sm:px-6">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

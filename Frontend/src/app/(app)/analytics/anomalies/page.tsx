@@ -213,7 +213,6 @@ export default function AnomaliesPage() {
     <>
       <PageHeader
         title="Anomalies"
-        description="Usage flagged by the Isolation Forest model for review."
         actions={
           <Button
             type="button"
@@ -253,7 +252,7 @@ export default function AnomaliesPage() {
       />
 
       <div className="flex flex-col gap-4 p-4 sm:p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {anomalies.isLoading ? (
             Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-24 w-full rounded-xl" />
@@ -397,7 +396,7 @@ export default function AnomaliesPage() {
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table data-stack className="w-full text-sm">
                   <thead>
                     <tr className="text-muted-foreground border-border-subtle border-b text-[0.6875rem] tracking-wide uppercase">
                       {canResolve ? (

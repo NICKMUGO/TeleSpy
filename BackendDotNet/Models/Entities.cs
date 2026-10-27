@@ -48,6 +48,9 @@ public class Department
     public string Name { get; set; } = "";
     public string? CostCentreCode { get; set; }
     public double? BudgetCeiling { get; set; }
+    /// <summary>Its people work the customer service ticket desk: they
+    /// raise tickets for other departments to handle.</summary>
+    public bool HandlesCustomerService { get; set; }
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
 
     public List<Employee> Employees { get; set; } = [];
@@ -65,6 +68,7 @@ public class Department
             ["name"] = Name,
             ["cost_centre_code"] = CostCentreCode,
             ["budget_ceiling"] = BudgetCeiling,
+            ["handles_customer_service"] = HandlesCustomerService,
         };
         if (include.Contains("employees"))
         {
@@ -95,6 +99,13 @@ public class Employee
     // Nullable/unique like StaffNumber.
     public string? ExtensionCode { get; set; }
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+    // Set when this person leaves the company (EmployeeRemoval): their
+    // line goes back to the pool or to their replacement, their login is
+    // disabled and they drop out of every list — but the row stays, so
+    // their past calls, bills and invoices still add up.
+    public DateTime? RemovedAt { get; set; }
+    // Why they left — one of EmployeeRemoval.Reasons.
+    public string? RemovalReason { get; set; }
 
     public Department? Department { get; set; }
     public User? User { get; set; }
@@ -123,6 +134,8 @@ public class Employee
             ["full_name"] = FullName,
             ["department_id"] = DepartmentId,
             ["extension_code"] = ExtensionCode,
+            ["removed_at"] = UtcTime.Iso(RemovedAt),
+            ["removal_reason"] = RemovalReason,
         };
         if (User is not null)
         {
@@ -388,7 +401,7 @@ public class BillingSettings
         ["peak_start_hour"] = PeakStartHour,
         ["peak_end_hour"] = PeakEndHour,
         ["default_international_rate_kes"] = DefaultInternationalRateKes,
-        ["updated_at"] = UpdatedAt.ToString("o"),
+        ["updated_at"] = UtcTime.Iso(UpdatedAt),
     };
 }
 
@@ -410,7 +423,7 @@ public class InternationalCallRate
         ["country_code"] = CountryCode,
         ["country_name"] = CountryName,
         ["rate_kes_per_minute"] = RateKesPerMinute,
-        ["updated_at"] = UpdatedAt.ToString("o"),
+        ["updated_at"] = UtcTime.Iso(UpdatedAt),
     };
 }
 
@@ -464,7 +477,7 @@ public class SimCard
             // second lookup the viewer may not be allowed to make (a
             // Manager's employee list covers only their own department).
             ["employee_name"] = current?.Employee?.FullName,
-            ["created_at"] = CreatedAt.ToString("o"),
+            ["created_at"] = UtcTime.Iso(CreatedAt),
         };
         if (include.Contains("allocations"))
         {
@@ -512,8 +525,8 @@ public class SimAllocation
             ["id"] = AllocationId,
             ["sim_id"] = SimId,
             ["employee_id"] = EmployeeId,
-            ["start_at"] = StartAt.ToString("o"),
-            ["end_at"] = EndAt?.ToString("o"),
+            ["start_at"] = UtcTime.Iso(StartAt),
+            ["end_at"] = UtcTime.Iso(EndAt),
         };
         if (include.Contains("usage_events"))
         {
@@ -564,6 +577,9 @@ public class UsageEvent
         ["allocation_id"] = AllocationId,
         ["msisdn_pbx"] = MsisdnPbx,
         ["destination"] = Destination,
+        // A CDR call time is the phone system's local (Nairobi) clock, not
+        // UTC like the app's own timestamps, so it is deliberately sent
+        // without a UTC marker — the browser shows it as recorded.
         ["occured_at"] = OccuredAt.ToString("o"),
         ["duration_minutes"] = DurationMinutes,
         ["computed_cost"] = ComputedCost,
@@ -600,7 +616,7 @@ public class AnomalyFlag
         ["anomaly_score"] = AnomalyScore,
         ["contributing_features"] = ContributingFeatures,
         ["resolved"] = ResolvedAt is not null,
-        ["resolved_at"] = ResolvedAt?.ToString("o"),
+        ["resolved_at"] = UtcTime.Iso(ResolvedAt),
     };
 }
 
@@ -619,6 +635,32 @@ public class UsageProfile
         ["id"] = ProfileId,
         ["employee_id"] = EmployeeId,
         ["cluster_label"] = ClusterLabel,
+    };
+}
+
+/// <summary>Spend on an extension nobody held — a line in the pool that was
+/// still being used. Written by ML/training/billing.py next to
+/// usage_summaries, per extension per month, so that spend is reported
+/// and reconciled instead of being billed to no one.</summary>
+public class UnassignedLineUsage
+{
+    public string UsageId { get; set; } = Guid.NewGuid().ToString();
+    public string ExtensionCode { get; set; } = "";
+    public string Month { get; set; } = ""; // "YYYY-MM"
+    public double TotalCost { get; set; }
+    public double ListCost { get; set; }
+    public int Calls { get; set; }
+    public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = UsageId,
+        ["extension_code"] = ExtensionCode,
+        ["month"] = Month,
+        ["total_cost_kes"] = TotalCost,
+        ["list_cost_kes"] = ListCost,
+        ["calls"] = Calls,
+        ["updated_at"] = UtcTime.Iso(UpdatedAt),
     };
 }
 
@@ -654,7 +696,7 @@ public class UsageSummary
         ["total_cost"] = TotalCost,
         ["list_cost"] = ListCost,
         ["extension_code"] = ExtensionCode,
-        ["updated_at"] = UpdatedAt.ToString("o"),
+        ["updated_at"] = UtcTime.Iso(UpdatedAt),
     };
 }
 
@@ -717,6 +759,153 @@ public class AuditLog
         ["resource"] = Resource,
         ["resource_id"] = ResourceId,
         ["meta"] = Meta,
-        ["occured_at"] = OccuredAt.ToString("o"),
+        ["occured_at"] = UtcTime.Iso(OccuredAt),
+    };
+}
+
+// --- Customer service tickets -------------------------------------------
+// A ticket is raised by hand by someone on the customer service desk when a
+// customer's issue needs another department (a rebooking, a flight
+// problem, a refund). Calls themselves never create tickets.
+
+public static class TicketStatus
+{
+    /// <summary>In the handling department's queue, nobody on it yet.</summary>
+    public const string Open = "open";
+    /// <summary>Claimed by someone in the handling department.</summary>
+    public const string InProgress = "in_progress";
+    /// <summary>Sent back to the desk (wrong department, missing details);
+    /// the agent fixes it and sends it again.</summary>
+    public const string Returned = "returned";
+    /// <summary>Closed with a resolution note: a successful escalation for
+    /// the agent who raised it.</summary>
+    public const string Resolved = "resolved";
+
+    public static readonly string[] All = [Open, InProgress, Returned, Resolved];
+}
+
+/// <summary>What a ticket is about, and the department that handles it by
+/// default. Admin-managed in Settings.</summary>
+public class TicketCategory
+{
+    public string CategoryId { get; set; } = Guid.NewGuid().ToString();
+    public string Name { get; set; } = "";
+    public string DepartmentId { get; set; } = "";
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+
+    public Department? Department { get; set; }
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = CategoryId,
+        ["name"] = Name,
+        ["department_id"] = DepartmentId,
+        ["department_name"] = Department?.Name,
+        ["is_active"] = IsActive,
+    };
+}
+
+public class Ticket
+{
+    public string TicketId { get; set; } = Guid.NewGuid().ToString();
+    /// <summary>Human-facing sequence number, shown as TKT-000042.</summary>
+    public int Number { get; set; }
+    public string Subject { get; set; } = "";
+    public string Description { get; set; } = "";
+    /// <summary>Null when the ticket isn't for a customer — anyone outside
+    /// the customer service desk can raise an internal ticket too.</summary>
+    public string? CustomerName { get; set; }
+    public string? CustomerPhone { get; set; }
+    public string? CustomerEmail { get; set; }
+    /// <summary>The airline booking reference (PNR), if the issue has one.</summary>
+    public string? BookingReference { get; set; }
+    /// <summary>One of the quick categories, or null when the raiser wrote
+    /// their own reason (CustomReason) and picked the department themselves.</summary>
+    public string? CategoryId { get; set; }
+    public string? CustomReason { get; set; }
+    public string DepartmentId { get; set; } = "";
+    public string Status { get; set; } = TicketStatus.Open;
+
+    public string RaisedByUserId { get; set; } = "";
+    public string? ClaimedByUserId { get; set; }
+    public DateTime? ClaimedAt { get; set; }
+    public string? ResolvedByUserId { get; set; }
+    public DateTime? ResolvedAt { get; set; }
+    public string? ResolutionNote { get; set; }
+    /// <summary>How many times it came back to the desk — a resolved ticket
+    /// is still a success, this just shows how cleanly it went.</summary>
+    public int ReturnCount { get; set; }
+
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+    public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    public TicketCategory? Category { get; set; }
+    public Department? Department { get; set; }
+    public User? RaisedBy { get; set; }
+    public User? ClaimedBy { get; set; }
+    public User? ResolvedBy { get; set; }
+    public List<TicketEvent> Events { get; set; } = [];
+
+    public static string FormatNumber(int number) => $"TKT-{number:D6}";
+
+    public Dictionary<string, object?> ToDict(bool includeEvents = false)
+    {
+        var outDict = new Dictionary<string, object?>
+        {
+            ["id"] = TicketId,
+            ["number"] = FormatNumber(Number),
+            ["subject"] = Subject,
+            ["description"] = Description,
+            ["customer_name"] = CustomerName,
+            ["customer_phone"] = CustomerPhone,
+            ["customer_email"] = CustomerEmail,
+            ["booking_reference"] = BookingReference,
+            ["category_id"] = CategoryId,
+            ["category_name"] = Category?.Name ?? CustomReason,
+            ["custom_reason"] = CustomReason,
+            ["department_id"] = DepartmentId,
+            ["department_name"] = Department?.Name,
+            ["status"] = Status,
+            ["raised_by_id"] = RaisedByUserId,
+            ["raised_by_name"] = RaisedBy?.Employee?.FullName ?? RaisedBy?.Email,
+            ["claimed_by_id"] = ClaimedByUserId,
+            ["claimed_by_name"] = ClaimedBy?.Employee?.FullName ?? ClaimedBy?.Email,
+            ["claimed_at"] = UtcTime.Iso(ClaimedAt),
+            ["resolved_by_name"] = ResolvedBy?.Employee?.FullName ?? ResolvedBy?.Email,
+            ["resolved_at"] = UtcTime.Iso(ResolvedAt),
+            ["resolution_note"] = ResolutionNote,
+            ["return_count"] = ReturnCount,
+            ["created_at"] = UtcTime.Iso(CreatedAt),
+            ["updated_at"] = UtcTime.Iso(UpdatedAt),
+        };
+        if (includeEvents)
+        {
+            outDict["events"] = Events.OrderBy(e => e.CreatedAt).Select(e => e.ToDict()).ToList();
+        }
+        return outDict;
+    }
+}
+
+/// <summary>One line of a ticket's history: raised, assigned, claimed, a
+/// note, returned, sent again, resolved.</summary>
+public class TicketEvent
+{
+    public string EventId { get; set; } = Guid.NewGuid().ToString();
+    public string TicketId { get; set; } = "";
+    public string ActorUserId { get; set; } = "";
+    public string Kind { get; set; } = "";
+    public string? Body { get; set; }
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+
+    public User? Actor { get; set; }
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = EventId,
+        ["kind"] = Kind,
+        ["body"] = Body,
+        ["actor_name"] = Actor?.Employee?.FullName ?? Actor?.Email,
+        ["created_at"] = UtcTime.Iso(CreatedAt),
     };
 }

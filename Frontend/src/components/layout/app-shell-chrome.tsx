@@ -1,5 +1,7 @@
 "use client";
 
+import { MobileTabBar } from "@/components/layout/mobile-tab-bar";
+import { StackedTableLabels } from "@/components/layout/stacked-table-labels";
 import { useEffect, useState, type ReactNode } from "react";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { DisplaySettingsDialog } from "@/components/layout/display-settings-dialog";
@@ -75,10 +77,12 @@ export function AppShellChrome({ children }: { children: ReactNode }) {
       <main
         id="main-content"
         tabIndex={-1}
-        className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col focus-visible:ring-2 focus-visible:outline-none"
+        className="focus-visible:ring-ring flex min-w-0 flex-1 flex-col focus-visible:ring-2 focus-visible:outline-none max-md:pb-[calc(3.5rem+env(safe-area-inset-bottom))]"
       >
         {children}
       </main>
+      <MobileTabBar />
+      <StackedTableLabels />
 
       <CommandPalette
         open={commandOpen}

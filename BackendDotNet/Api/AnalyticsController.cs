@@ -211,7 +211,7 @@ public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerConte
     public async Task<IActionResult> Profiles()
     {
         var viewer = await viewerContext.LoadedUserAsync();
-        var query = db.Employees.AsQueryable();
+        var query = db.Employees.Where(e => e.RemovedAt == null);
         if (viewer!.Role!.RoleName == TeleSpy.Role.Manager)
         {
             var deptId = viewerContext.ViewerDepartmentId(viewer);

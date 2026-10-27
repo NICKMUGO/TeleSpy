@@ -18,6 +18,12 @@ public interface ICacheService
     Task SetOtpAsync(string userId, string otpHash, int ttlSeconds);
     Task<string?> GetOtpHashAsync(string userId);
     Task ConsumeOtpAsync(string userId);
+    // Step-up codes re-confirm a signed-in Admin before a sensitive action
+    // (removing an employee). Kept apart from the sign-in OTP so one can
+    // never be spent as the other.
+    Task SetStepUpCodeAsync(string userId, string codeHash, int ttlSeconds);
+    Task<string?> GetStepUpCodeHashAsync(string userId);
+    Task ConsumeStepUpCodeAsync(string userId);
     Task SetActiveSessionAsync(string userId, string sessionId, string? device, long ttlSeconds);
     Task<ActiveSessionInfo?> GetActiveSessionAsync(string userId);
     Task ClearActiveSessionAsync(string userId);
@@ -28,6 +34,7 @@ public class CacheService : ICacheService
     private const string JtiPrefix = "telespy:revoked_jti:";
     private const string OtpPrefix = "telespy:mfa_otp:";
     private const string ActiveSessionPrefix = "telespy:active_session:";
+    private const string StepUpPrefix = "telespy:step_up_code:";
 
     private readonly Lazy<ConnectionMultiplexer> _connection = new(() => ConnectionMultiplexer.Connect(ParseRedisUrl(Config.RedisUrl)));
 
@@ -76,6 +83,13 @@ public class CacheService : ICacheService
     public async Task<string?> GetOtpHashAsync(string userId) => await Db().StringGetAsync($"{OtpPrefix}{userId}");
 
     public Task ConsumeOtpAsync(string userId) => Db().KeyDeleteAsync($"{OtpPrefix}{userId}");
+
+    public Task SetStepUpCodeAsync(string userId, string codeHash, int ttlSeconds) =>
+        Db().StringSetAsync($"{StepUpPrefix}{userId}", codeHash, TimeSpan.FromSeconds(ttlSeconds));
+
+    public async Task<string?> GetStepUpCodeHashAsync(string userId) => await Db().StringGetAsync($"{StepUpPrefix}{userId}");
+
+    public Task ConsumeStepUpCodeAsync(string userId) => Db().KeyDeleteAsync($"{StepUpPrefix}{userId}");
 
     /// <summary>One active session per user, enforced here: overwriting this
     /// key is what "signs out" every device/tab that was on the previous

@@ -51,7 +51,7 @@ export function InternationalRateRow({
   if (!editing) {
     return (
       <div className="flex items-center gap-2">
-        <span className="font-mono">
+        <span className="font-tabular">
           KES{" "}
           {rate.rate_kes_per_minute.toLocaleString("en-KE", {
             minimumFractionDigits: 2,

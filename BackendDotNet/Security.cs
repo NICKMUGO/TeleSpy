@@ -1,12 +1,8 @@
-// Encryption, password hashing/bank, and secure random generation — mirrors
-// Backend/security.py's design (not its exact byte format, since these are
-// two independent backends that never need to decrypt each other's
-// ciphertext): authenticated symmetric encryption (AES-256-CBC + HMAC-SHA256,
-// encrypt-then-MAC — .NET has no built-in Fernet, so this hand-rolls the same
-// "reversible ciphertext + separate one-way blind-index fingerprint" pattern
-// using only System.Security.Cryptography, no extra package) plus a
-// deterministic HMAC-SHA256 blind index for equality lookups on encrypted
-// columns.
+// Encryption, password hashing/bank, and secure random generation:
+// authenticated, crypto-agile field encryption (Core/FieldEncryption.cs —
+// AES-256-GCM for new values, versioned so algorithm and key can change)
+// plus a deterministic HMAC-SHA256 blind index for equality lookups on
+// encrypted columns.
 //
 // FieldEncryptionKey and BlindIndexKey must be two *different* secrets (see
 // .env.example) so compromising one doesn't help with the other.
@@ -29,65 +25,14 @@ public class DecryptionError : Exception
 
 public static class Security
 {
-    private static byte[] DeriveKey(string secret, string purpose) =>
-        HKDF.DeriveKey(HashAlgorithmName.SHA256, Encoding.UTF8.GetBytes(secret), outputLength: 32,
-            info: Encoding.UTF8.GetBytes(purpose));
+    // Reversible field encryption lives in Core/FieldEncryption.cs, which is
+    // crypto-agile (versioned ciphertexts, pluggable algorithms, key
+    // rotation). These two keep the original call sites unchanged.
+    public static string? EncryptValue(string? plaintext) =>
+        string.IsNullOrEmpty(plaintext) ? null : FieldEncryption.Encrypt(plaintext);
 
-    private static byte[] EncKey() => DeriveKey(Config.FieldEncryptionKey, "telespy:field-encryption:aes");
-    private static byte[] MacKey() => DeriveKey(Config.FieldEncryptionKey, "telespy:field-encryption:hmac");
-
-    public static string? EncryptValue(string? plaintext)
-    {
-        if (string.IsNullOrEmpty(plaintext)) return null;
-
-        using var aes = Aes.Create();
-        aes.Key = EncKey();
-        aes.GenerateIV();
-        using var encryptor = aes.CreateEncryptor();
-        var plainBytes = Encoding.UTF8.GetBytes(plaintext);
-        var cipherBytes = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
-
-        byte[] ivAndCipher = [.. aes.IV, .. cipherBytes];
-        var mac = HMACSHA256.HashData(MacKey(), ivAndCipher);
-        return Convert.ToBase64String([.. ivAndCipher, .. mac]);
-    }
-
-    public static string? DecryptValue(string? ciphertext)
-    {
-        if (string.IsNullOrEmpty(ciphertext)) return null;
-
-        try
-        {
-            var token = Convert.FromBase64String(ciphertext);
-            if (token.Length < 16 + 32) throw new DecryptionError("Could not decrypt stored value.");
-
-            var iv = token[..16];
-            var mac = token[^32..];
-            var cipherBytes = token[16..^32];
-
-            byte[] ivAndCipher = [.. iv, .. cipherBytes];
-            var expectedMac = HMACSHA256.HashData(MacKey(), ivAndCipher);
-            if (!CryptographicOperations.FixedTimeEquals(mac, expectedMac))
-            {
-                throw new DecryptionError("Could not decrypt stored value.");
-            }
-
-            using var aes = Aes.Create();
-            aes.Key = EncKey();
-            aes.IV = iv;
-            using var decryptor = aes.CreateDecryptor();
-            var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
-            return Encoding.UTF8.GetString(plainBytes);
-        }
-        catch (DecryptionError)
-        {
-            throw;
-        }
-        catch (Exception exc)
-        {
-            throw new DecryptionError("Could not decrypt stored value.", exc);
-        }
-    }
+    public static string? DecryptValue(string? ciphertext) =>
+        string.IsNullOrEmpty(ciphertext) ? null : FieldEncryption.Decrypt(ciphertext);
 
     public static string? BlindIndex(string? value)
     {

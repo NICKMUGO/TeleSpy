@@ -282,6 +282,10 @@ namespace TeleSpy.Migrations
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<bool>("HandlesCustomerService")
+                        .HasColumnType("boolean")
+                        .HasColumnName("handles_customer_service");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -325,6 +329,15 @@ namespace TeleSpy.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)")
                         .HasColumnName("full_name");
+
+                    b.Property<string>("RemovalReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("removal_reason");
+
+                    b.Property<DateTime?>("RemovedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("removed_at");
 
                     b.Property<string>("StaffNumber")
                         .HasMaxLength(32)
@@ -579,6 +592,14 @@ namespace TeleSpy.Migrations
 
                     b.HasIndex("SimId");
 
+                    b.HasIndex(new[] { "EmployeeId" }, "UX_sim_allocations_open_employee")
+                        .IsUnique()
+                        .HasFilter("end_at IS NULL");
+
+                    b.HasIndex(new[] { "SimId" }, "UX_sim_allocations_open_sim")
+                        .IsUnique()
+                        .HasFilter("end_at IS NULL");
+
                     b.ToTable("sim_allocations", (string)null);
                 });
 
@@ -704,6 +725,213 @@ namespace TeleSpy.Migrations
                     b.ToTable("telco_plans", (string)null);
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.Ticket", b =>
+                {
+                    b.Property<string>("TicketId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ticket_id");
+
+                    b.Property<string>("BookingReference")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("booking_reference");
+
+                    b.Property<string>("CategoryId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("category_id");
+
+                    b.Property<DateTime?>("ClaimedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<string>("ClaimedByUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("claimed_by_user_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CustomReason")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("custom_reason");
+
+                    b.Property<string>("CustomerEmail")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("customer_email");
+
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("customer_name");
+
+                    b.Property<string>("CustomerPhone")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("customer_phone");
+
+                    b.Property<string>("DepartmentId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("department_id");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("description");
+
+                    b.Property<int>("Number")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("number");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Number"));
+
+                    b.Property<string>("RaisedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("raised_by_user_id");
+
+                    b.Property<string>("ResolutionNote")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("resolution_note");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<string>("ResolvedByUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("resolved_by_user_id");
+
+                    b.Property<int>("ReturnCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("return_count");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)")
+                        .HasColumnName("subject");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("TicketId");
+
+                    b.HasIndex("CategoryId");
+
+                    b.HasIndex("ClaimedByUserId");
+
+                    b.HasIndex("Number")
+                        .IsUnique();
+
+                    b.HasIndex("RaisedByUserId");
+
+                    b.HasIndex("ResolvedByUserId");
+
+                    b.HasIndex("DepartmentId", "Status");
+
+                    b.ToTable("tickets", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.TicketCategory", b =>
+                {
+                    b.Property<string>("CategoryId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("category_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DepartmentId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("department_id");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("name");
+
+                    b.HasKey("CategoryId");
+
+                    b.HasIndex("DepartmentId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("ticket_categories", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.TicketEvent", b =>
+                {
+                    b.Property<string>("EventId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("ActorUserId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<string>("Body")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("TicketId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ticket_id");
+
+                    b.HasKey("EventId");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("ticket_events", (string)null);
+                });
+
             modelBuilder.Entity("TeleSpy.Models.TutorialProgress", b =>
                 {
                     b.Property<string>("Id")
@@ -736,6 +964,50 @@ namespace TeleSpy.Migrations
                         .IsUnique();
 
                     b.ToTable("tutorial_progress", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.UnassignedLineUsage", b =>
+                {
+                    b.Property<string>("UsageId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("usage_id");
+
+                    b.Property<int>("Calls")
+                        .HasColumnType("integer")
+                        .HasColumnName("calls");
+
+                    b.Property<string>("ExtensionCode")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("extension_code");
+
+                    b.Property<double>("ListCost")
+                        .HasColumnType("double precision")
+                        .HasColumnName("list_cost");
+
+                    b.Property<string>("Month")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("month");
+
+                    b.Property<double>("TotalCost")
+                        .HasColumnType("double precision")
+                        .HasColumnName("total_cost");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("UsageId");
+
+                    b.HasIndex("ExtensionCode", "Month")
+                        .IsUnique()
+                        .HasDatabaseName("uq_unassigned_line_usage_extension_month");
+
+                    b.ToTable("unassigned_line_usage", (string)null);
                 });
 
             modelBuilder.Entity("TeleSpy.Models.UsageEvent", b =>
@@ -951,7 +1223,11 @@ namespace TeleSpy.Migrations
                     b.HasIndex("EmployeeId")
                         .IsUnique();
 
-                    b.HasIndex("RoleId");
+                    b.HasIndex(new[] { "RoleId" }, "IX_users_role_id");
+
+                    b.HasIndex(new[] { "RoleId" }, "UX_users_single_admin")
+                        .IsUnique()
+                        .HasFilter("role_id = 'admin'");
 
                     b.ToTable("users", (string)null);
                 });
@@ -1033,6 +1309,74 @@ namespace TeleSpy.Migrations
                         .HasForeignKey("PlanId");
 
                     b.Navigation("Plan");
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.Ticket", b =>
+                {
+                    b.HasOne("TeleSpy.Models.TicketCategory", "Category")
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeleSpy.Models.User", "ClaimedBy")
+                        .WithMany()
+                        .HasForeignKey("ClaimedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeleSpy.Models.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.User", "RaisedBy")
+                        .WithMany()
+                        .HasForeignKey("RaisedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.User", "ResolvedBy")
+                        .WithMany()
+                        .HasForeignKey("ResolvedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Category");
+
+                    b.Navigation("ClaimedBy");
+
+                    b.Navigation("Department");
+
+                    b.Navigation("RaisedBy");
+
+                    b.Navigation("ResolvedBy");
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.TicketCategory", b =>
+                {
+                    b.HasOne("TeleSpy.Models.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Department");
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.TicketEvent", b =>
+                {
+                    b.HasOne("TeleSpy.Models.User", "Actor")
+                        .WithMany()
+                        .HasForeignKey("ActorUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.Ticket", null)
+                        .WithMany("Events")
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Actor");
                 });
 
             modelBuilder.Entity("TeleSpy.Models.UsageEvent", b =>
@@ -1121,6 +1465,11 @@ namespace TeleSpy.Migrations
             modelBuilder.Entity("TeleSpy.Models.TelcoPlan", b =>
                 {
                     b.Navigation("Sims");
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.Ticket", b =>
+                {
+                    b.Navigation("Events");
                 });
 
             modelBuilder.Entity("TeleSpy.Models.UsageEvent", b =>

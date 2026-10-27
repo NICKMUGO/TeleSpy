@@ -86,10 +86,7 @@ export default function ProfilesPage() {
 
   return (
     <>
-      <PageHeader
-        title="Usage profiles"
-        description="Employees grouped by calling behaviour — KMeans clustering into high, moderate and low usage."
-      />
+      <PageHeader title="Usage profiles" />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div className="flex flex-wrap items-center gap-3">
           <InputGroup className="w-full sm:w-80">

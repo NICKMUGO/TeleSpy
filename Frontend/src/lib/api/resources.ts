@@ -24,6 +24,7 @@ import type {
   SimCard,
   Ticket,
   TicketAccess,
+  TicketAssignee,
   TicketCategory,
   TicketStats,
   TicketStatus,
@@ -458,12 +459,17 @@ export const ticketsApi = {
   create: (body: {
     subject: string;
     description: string;
-    customer_name: string;
+    customer_name?: string;
     customer_phone?: string;
     customer_email?: string;
     booking_reference?: string;
-    category_id: string;
+    /** A quick category, or leave it out and give custom_reason plus
+     * department_id. */
+    category_id?: string;
+    custom_reason?: string;
     department_id?: string;
+    /** One person in the department; left out, the whole department. */
+    assigned_to_user_id?: string;
   }) =>
     apiRequest<ApiEnvelope<Ticket> & { message?: string }>("/tickets", {
       method: "POST",
@@ -490,11 +496,20 @@ export const ticketsApi = {
     }),
   resend: (
     id: string,
-    body: { category_id?: string; department_id?: string; note?: string },
+    body: {
+      category_id?: string;
+      custom_reason?: string;
+      department_id?: string;
+      note?: string;
+    },
   ) =>
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/resend`, {
       method: "POST",
       body,
+    }),
+  assignees: (departmentId: string) =>
+    apiRequest<ApiEnvelope<TicketAssignee[]>>("/tickets/assignees", {
+      query: { department_id: departmentId },
     }),
   categories: (includeInactive = false) =>
     apiRequest<ApiEnvelope<TicketCategory[]>>("/tickets/categories", {

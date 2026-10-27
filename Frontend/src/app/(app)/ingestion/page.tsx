@@ -117,10 +117,7 @@ export default function IngestionPage() {
 
   return (
     <>
-      <PageHeader
-        title="CDR upload"
-        description="Upload carrier CDR batches and track ingestion status."
-      />
+      <PageHeader title="CDR upload" />
 
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -345,7 +342,7 @@ export default function IngestionPage() {
             </div>
           ) : batches.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table data-stack className="w-full text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-border-subtle border-y text-[0.6875rem] tracking-wide uppercase">
                     <Th>Batch</Th>

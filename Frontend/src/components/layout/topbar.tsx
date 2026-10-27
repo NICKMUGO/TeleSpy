@@ -22,11 +22,14 @@ export function Topbar({
   onOpenTutorial,
 }: TopbarProps) {
   return (
-    <header className="border-border flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
-      <SidebarTrigger />
+    // Pinned and frosted, like an iOS navigation bar: content scrolls
+    // under it and shows through as a soft blur.
+    <header className="border-border-subtle bg-background/70 sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b px-3 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
+      {/* Phones use the tab bar's "More" instead. */}
+      <SidebarTrigger className="max-md:hidden" />
       <Separator
         orientation="vertical"
-        className="h-5 data-vertical:self-center"
+        className="h-5 data-vertical:self-center max-md:hidden"
       />
       <div className="min-w-0 flex-1">
         <Breadcrumbs />

@@ -250,7 +250,6 @@ function OrgDashboard() {
     <>
       <PageHeader
         title="Dashboard"
-        description="A role-aware landing view summarising spend, anomalies and SIM activity."
         actions={
           <>
             <SelectNative
@@ -289,7 +288,7 @@ function OrgDashboard() {
         {/* KPI row */}
         <div
           data-tour="dashboard-kpis"
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+          className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5"
         >
           {loading ? (
             Array.from({ length: 5 }).map((_, i) => (
@@ -413,7 +412,7 @@ function OrgDashboard() {
                 <Skeleton className="h-8 w-full" />
               </div>
             ) : topAnomalies.length > 0 ? (
-              <table className="w-full text-sm">
+              <table data-stack className="w-full text-sm">
                 <thead>
                   <tr className="text-muted-foreground border-border-subtle border-y text-[0.6875rem] tracking-wide uppercase">
                     <th
@@ -575,7 +574,7 @@ function SpendingLimitSection({
             ) : null}
           </p>
           <div className="border-border-subtle overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
+            <table data-stack className="w-full text-sm">
               <caption className="sr-only">
                 Your call costs against your limit, by month
               </caption>
@@ -690,7 +689,6 @@ function EmployeeDashboard() {
     <>
       <PageHeader
         title={`Welcome back${user?.full_name ? `, ${user.full_name.split(" ")[0]}` : ""}`}
-        description="Your telecom usage and spend at a glance."
         actions={
           months.length > 1 ? (
             <SelectNative
@@ -715,7 +713,7 @@ function EmployeeDashboard() {
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div
           data-tour="dashboard-kpis"
-          className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+          className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4"
         >
           {myUsage.isLoading ? (
             Array.from({ length: 3 }).map((_, i) => (

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { AppProviders } from "@/components/providers/app-providers";
@@ -22,6 +22,12 @@ const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   display: "swap",
 });
+
+// viewport-fit=cover lets the tab bar and bottom sheets reach the screen's
+// rounded edge on iPhones, padded by env(safe-area-inset-bottom).
+export const viewport: Viewport = {
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   title: "TeleSpy",

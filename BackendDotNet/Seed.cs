@@ -17,6 +17,15 @@
 // Python's Faker): departments, telco plans, people's names, staff numbers,
 // email addresses, and each SIM's ICCID.
 //
+// No real person and no known password is seeded. Every seeded account is a
+// placeholder: an unroutable @telespy.local address and a random password
+// nobody is told, so none of them can sign in. The first extension dealt to
+// each department is that department's placeholder Manager; creating a real
+// Manager for the department in the app makes the placeholder an Employee.
+// The Admin isn't seeded either — the API creates the first one on boot from
+// BOOTSTRAP_ADMIN_EMAIL (see AdminBootstrap), and that Admin creates the
+// real accounts.
+//
 // Idempotent: skips entirely if any Department already exists, so re-running
 // this after real data has accumulated is a no-op rather than a
 // duplicate-data hazard.
@@ -37,19 +46,9 @@ public static class Seed
 {
     private const int SeedValue = 20260912;
 
-    // Every seeded account uses one of these two passwords, so the demo has
-    // known, working credentials out of the box (MustChangePassword=false).
-    // The Admin, the DemoManagerDepartment manager and one Employee in that
-    // same department use real mailboxes so their MFA OTP / password-reset
-    // mail actually arrives when SMTP is configured — one working demo
-    // login per role; every other seeded account stays on an unroutable
-    // @telespy.local (or Bogus) address.
-    public const string AdminEmail = "nickmugo2@gmail.com";
-    public const string AdminPassword = "Admin@12345!";
-    public const string DemoPassword = "Passw0rd@1";
-    public const string DemoManagerDepartment = "ENG";
-    public const string DemoManagerEmail = "nicknjuru13@gmail.com";
-    public const string DemoEmployeeEmail = "nick.njuru@strathmore.edu";
+    // Placeholder accounts' addresses: never a deliverable domain, so a
+    // seeded database can't email anyone real.
+    private const string PlaceholderEmailDomain = "telespy.local";
 
     // Monthly call-spend ceilings, sized from the dataset: each
     // department's spend in its one full month (after the contract
@@ -97,7 +96,9 @@ public static class Seed
 
         if (await db.Departments.AnyAsync())
         {
-            Console.WriteLine("Seed data already present (a Department row exists) — skipping.");
+            // Already seeded: never reseed over real edits, only add the
+            // dataset extensions that have no one on them yet.
+            await TopUpMissingExtensionsAsync(db, faker);
             return;
         }
 
@@ -123,11 +124,12 @@ public static class Seed
             $"{datasetCalls.Count - fromExtension.Count} inbound/other and " +
             $"{fromExtension.Count - calls.Count} unanswered (zero duration) skipped.");
 
-        // Every extension that places a call in the dataset. Shuffled
-        // (deterministically) so departments don't end up as contiguous
-        // number ranges.
+        // Every extension that places a call in the dataset — answered or
+        // not, so a line whose calls all went unanswered still has its
+        // holder (with nothing billed). Shuffled (deterministically) so
+        // departments don't end up as contiguous number ranges.
         var extensions = faker.Random.Shuffle(
-            calls.Select(c => c.Orig)
+            fromExtension.Select(c => c.Orig)
                 .Distinct()
                 .Order(StringComparer.Ordinal)
                 .ToList()).ToList();
@@ -139,7 +141,7 @@ public static class Seed
 
         // Allocations start before the dataset's first call, so every call
         // falls inside its extension's allocation (SimAllocation.IsActiveAt).
-        var allocationStart = calls.Min(c => c.OccuredAt).Date.AddDays(-1);
+        var allocationStart = fromExtension.Min(c => c.OccuredAt).Date.AddDays(-1);
 
         var departments = new List<Department>();
         foreach (var (name, code, budget) in Departments)
@@ -159,21 +161,13 @@ public static class Seed
         }
         await db.SaveChangesAsync();
 
-        // --- Admin (no department, no SIM — matches how RoleBootstrap
-        // treats Admin as having no personal cost ceiling either). ----------
-        var adminEmployee = new Employee { FullName = "System Administrator", StaffNumber = "ADM-0001" };
-        db.Employees.Add(adminEmployee);
-        await db.SaveChangesAsync();
-        await MakeUserAsync(db, adminEmployee, AdminEmail, Role.Admin, AdminPassword);
-
         // --- One Employee + SIM + allocation per dataset extension, dealt
         // round-robin across the departments. The first extension dealt to
-        // each department is its Manager. ----------------------------------
-        var usedEmails = new HashSet<string> { DemoEmployeeEmail };
-        var demoEmployeeSeeded = false;
-        // Employee names are unique (see EmployeeNames) — the Admin's is
-        // already taken.
-        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { adminEmployee.FullName };
+        // each department is its (placeholder) Manager. --------------------
+        // Names and emails are unique — including against an Admin the API
+        // may already have bootstrapped.
+        var usedEmails = (await db.Users.Select(u => u.Email).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedNames = (await db.Employees.Select(e => e.FullName).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var allocationByExtension = new Dictionary<string, string>();
         for (var index = 0; index < extensions.Count; index++)
         {
@@ -191,18 +185,8 @@ public static class Seed
             db.Employees.Add(employee);
             await db.SaveChangesAsync();
 
-            string email;
-            if (!isManager && !demoEmployeeSeeded && code == DemoManagerDepartment)
-            {
-                // The first Employee dealt to the demo department — so the
-                // demo Manager is this person's own manager.
-                email = DemoEmployeeEmail;
-                demoEmployeeSeeded = true;
-            }
-            else if (!isManager) email = UniqueEmail(faker, usedEmails);
-            else if (code == DemoManagerDepartment) email = DemoManagerEmail;
-            else email = $"{code.ToLowerInvariant()}.manager@telespy.local";
-            await MakeUserAsync(db, employee, email, isManager ? Role.Manager : Role.Employee, DemoPassword);
+            var email = UniqueEmail(isManager ? $"{code}.manager" : employee.FullName, usedEmails);
+            await MakePlaceholderUserAsync(db, employee, email, isManager ? Role.Manager : Role.Employee);
 
             var sim = MakeSim(index, extension);
             sim.PlanId = faker.PickRandom(plans).PlanId;
@@ -234,14 +218,90 @@ public static class Seed
         await db.SaveChangesAsync();
 
         Console.WriteLine($"Seeded {Departments.Length} departments, {plans.Count} telco plans, " +
-            $"{extensions.Count} Manager/Employee accounts (+1 Admin) — one per calling extension in the dataset.");
+            $"{extensions.Count} placeholder Manager/Employee accounts — one per calling extension in the dataset.");
         Console.WriteLine($"Seeded {calls.Count} usage events from the dataset, each attributed to the employee who placed it, " +
             $"{calls.Min(c => c.OccuredAt):yyyy-MM-dd} to {calls.Max(c => c.OccuredAt):yyyy-MM-dd}.");
-        Console.WriteLine($"Admin login:    {AdminEmail} / {AdminPassword}");
-        Console.WriteLine($"Manager login:  {DemoManagerEmail} / {DemoPassword}");
-        Console.WriteLine($"Employee login: {DemoEmployeeEmail} / {DemoPassword}");
-        Console.WriteLine($"All other seeded accounts share the password: {DemoPassword}");
-        Console.WriteLine("(MFA OTP codes are logged to the console when MAIL_SUPPRESS_SEND=true.)");
+        Console.WriteLine($"Seeded accounts are placeholders (@{PlaceholderEmailDomain}, no usable password) — none can sign in.");
+        Console.WriteLine("Start the API with BOOTSTRAP_ADMIN_EMAIL set in .env to create the first Admin, then add real people from Employees.");
+    }
+
+    /// <summary>For a database seeded before every calling extension got a
+    /// holder: adds a placeholder Employee + SIM + allocation for each
+    /// dataset extension that no employee has and no SIM carries, into the
+    /// department with the fewest people. Nothing existing is changed.
+    /// Only unanswered calls come from these lines, so they get no usage
+    /// events — they show up with nothing billed.</summary>
+    private static async Task TopUpMissingExtensionsAsync(TeleSpyDbContext db, Faker faker)
+    {
+        var datasetPath = ResolveDatasetPath();
+        var fromExtension = LoadDataset(datasetPath)
+            .Where(c => CallClassification.ClassifyNumber(c.Orig) == Constants.CallClassInternal)
+            .ToList();
+        var held = (await db.Employees.Where(e => e.ExtensionCode != null)
+            .Select(e => e.ExtensionCode!).ToListAsync()).ToHashSet();
+        var carriedHashes = (await db.SimCards.Where(s => s.MsisdnPbxHash != null)
+            .Select(s => s.MsisdnPbxHash!).ToListAsync()).ToHashSet();
+        var missing = fromExtension.Select(c => c.Orig).Distinct().Order(StringComparer.Ordinal)
+            .Where(x => !held.Contains(x) && !carriedHashes.Contains(Security.BlindIndex(x)!))
+            .ToList();
+        if (missing.Count == 0)
+        {
+            Console.WriteLine("Seed data already present, and every calling extension in the dataset has a holder — nothing to add.");
+            return;
+        }
+
+        var departments = await db.Departments.ToListAsync();
+        var headcount = await db.Employees.Where(e => e.RemovedAt == null)
+            .GroupBy(e => e.DepartmentId).Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(g => g.Key ?? "", g => g.Count);
+        var staffNumbers = (await db.Employees.Where(e => e.StaffNumber != null)
+            .Select(e => e.StaffNumber!).ToListAsync()).ToHashSet();
+        var iccidHashes = (await db.SimCards.Select(s => s.IccidHash).ToListAsync()).ToHashSet();
+        var planIds = await db.TelcoPlans.Select(p => p.PlanId).ToListAsync();
+        var usedEmails = (await db.Users.Select(u => u.Email).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedNames = (await db.Employees.Select(e => e.FullName).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allocationStart = fromExtension.Min(c => c.OccuredAt).Date.AddDays(-1);
+        var simIndex = await db.SimCards.CountAsync();
+
+        foreach (var extension in missing)
+        {
+            var dept = departments.MinBy(d => headcount.GetValueOrDefault(d.DepartmentId))!;
+            headcount[dept.DepartmentId] = headcount.GetValueOrDefault(dept.DepartmentId) + 1;
+            var code = dept.CostCentreCode!;
+            var number = 1;
+            while (staffNumbers.Contains($"{code}-{number:D3}")) number++;
+            var staffNumber = $"{code}-{number:D3}";
+            staffNumbers.Add(staffNumber);
+
+            var employee = new Employee
+            {
+                DepartmentId = dept.DepartmentId, FullName = UniqueName(faker, usedNames),
+                StaffNumber = staffNumber, ExtensionCode = extension,
+            };
+            db.Employees.Add(employee);
+            await db.SaveChangesAsync();
+            await MakePlaceholderUserAsync(db, employee, UniqueEmail(employee.FullName, usedEmails), Role.Employee);
+
+            SimCard sim;
+            do { sim = MakeSim(simIndex++, extension); } while (iccidHashes.Contains(sim.IccidHash));
+            iccidHashes.Add(sim.IccidHash);
+            if (planIds.Count > 0) sim.PlanId = faker.PickRandom(planIds);
+            db.SimCards.Add(sim);
+            await db.SaveChangesAsync();
+            db.SimAllocations.Add(new SimAllocation { SimId = sim.SimId, EmployeeId = employee.EmployeeId, StartAt = allocationStart });
+            await db.SaveChangesAsync();
+            Console.WriteLine($"Added extension {extension}: {employee.FullName} ({staffNumber}, {dept.Name}).");
+        }
+
+        db.AuditLogs.Add(new AuditLog
+        {
+            Action = "system_seed_topped_up",
+            Resource = "database",
+            Meta = new Dictionary<string, object?> { ["extensions"] = missing, ["dataset"] = Path.GetFileName(datasetPath) },
+            OccuredAt = Clock.UtcNow(),
+        });
+        await db.SaveChangesAsync();
+        Console.WriteLine($"Added {missing.Count} placeholder employee(s) for dataset extensions that had no holder.");
     }
 
     /// <summary>CDR_DATASET_PATH if set, otherwise the first
@@ -321,13 +381,18 @@ public static class Seed
         return name;
     }
 
-    private static string UniqueEmail(Faker faker, HashSet<string> used)
+    /// <summary>"Jane O'Neil" -> jane.oneil@telespy.local (then
+    /// jane.oneil2@…, … if taken).</summary>
+    private static string UniqueEmail(string basis, HashSet<string> used)
     {
-        string email;
-        do
-        {
-            email = faker.Internet.Email();
-        } while (!used.Add(email));
+        var words = basis.ToLowerInvariant()
+            .Split([' ', '.', '-'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => new string(w.Where(char.IsAsciiLetterOrDigit).ToArray()))
+            .Where(w => w.Length > 0);
+        var local = string.Join('.', words);
+        if (local.Length == 0) local = "user";
+        var email = $"{local}@{PlaceholderEmailDomain}";
+        for (var n = 2; !used.Add(email); n++) email = $"{local}{n}@{PlaceholderEmailDomain}";
         return email;
     }
 
@@ -349,14 +414,17 @@ public static class Seed
         };
     }
 
-    private static async Task<User> MakeUserAsync(TeleSpyDbContext db, Employee employee, string email, string role, string password)
+    /// <summary>A login nobody can use: a random password that is never
+    /// shown (as EmployeesController.Post does before emailing a link).
+    /// The account exists so the person has a role — Manager or Employee.</summary>
+    private static async Task<User> MakePlaceholderUserAsync(TeleSpyDbContext db, Employee employee, string email, string role)
     {
         var user = new User
         {
             EmployeeId = employee.EmployeeId, Email = email, RoleId = Constants.RoleSlugs[role],
-            IsActive = true, MustChangePassword = false,
+            IsActive = true, MustChangePassword = true,
         };
-        user.SetPassword(password);
+        user.SetPassword(Security.GenerateResetToken());
         db.Users.Add(user);
         await db.SaveChangesAsync();
         db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });

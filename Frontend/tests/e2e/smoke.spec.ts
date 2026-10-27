@@ -14,10 +14,14 @@ test("root redirects to the dashboard with no automatic a11y violations", async 
   expect(results.violations).toEqual([]);
 });
 
-test("login page has no automatic a11y violations", async ({ page }) => {
-  await page.goto("/login");
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+test.describe("signed out", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
 
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(results.violations).toEqual([]);
+  test("login page has no automatic a11y violations", async ({ page }) => {
+    await page.goto("/login");
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
+  });
 });

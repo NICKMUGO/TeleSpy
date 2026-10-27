@@ -462,7 +462,14 @@ export interface TicketCategory {
 
 export interface TicketEvent {
   id: string;
-  kind: "raised" | "claimed" | "note" | "returned" | "resent" | "resolved";
+  kind:
+    | "raised"
+    | "assigned"
+    | "claimed"
+    | "note"
+    | "returned"
+    | "resent"
+    | "resolved";
   body: string | null;
   actor_name: string | null;
   created_at: string;
@@ -474,12 +481,16 @@ export interface Ticket {
   number: string;
   subject: string;
   description: string;
-  customer_name: string;
+  /** Null on an internal ticket (not for a customer). */
+  customer_name: string | null;
   customer_phone: string | null;
   customer_email: string | null;
   booking_reference: string | null;
-  category_id: string;
+  /** Null when the raiser wrote their own reason (custom_reason). */
+  category_id: string | null;
+  /** The category's name, or the custom reason. */
   category_name: string | null;
+  custom_reason: string | null;
   department_id: string;
   department_name: string | null;
   status: TicketStatus;
@@ -507,6 +518,12 @@ export interface TicketAccess {
   department_name: string | null;
   /** Their department is sent tickets, so they get the team queue. */
   handles_tickets: boolean;
+}
+
+/** GET /tickets/assignees — someone a ticket can be sent to directly. */
+export interface TicketAssignee {
+  user_id: string;
+  name: string;
 }
 
 export interface TicketAgentStats {

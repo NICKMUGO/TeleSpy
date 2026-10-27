@@ -2,6 +2,7 @@
 
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { IconBadge } from "@/components/data/icon-badge";
 
 interface ErrorStateProps {
   title?: string;
@@ -17,9 +18,9 @@ export function ErrorState({
   return (
     <div
       role="alert"
-      className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center"
+      className="animate-rise flex flex-1 flex-col items-center justify-center gap-4 px-6 py-16 text-center"
     >
-      <TriangleAlert aria-hidden="true" className="text-destructive size-8" />
+      <IconBadge icon={TriangleAlert} tone="destructive" />
       <div>
         <h2 className="text-lg font-semibold">{title}</h2>
         <p className="text-muted-foreground mt-1 max-w-md text-sm">

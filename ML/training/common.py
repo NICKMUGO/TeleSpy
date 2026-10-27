@@ -1,7 +1,7 @@
 # Shared helpers for the ML batch jobs — used by anomaly_detection.py,
 # usage_profiling.py, and forecasting.py (each independently runnable, so
-# each can sit on its own schedule: e.g. anomaly detection every 24 hours,
-# forecasting monthly, usage profiling every 6 months).
+# each can sit on its own schedule: anomaly detection every 24 hours,
+# forecasting and usage profiling every 3 months — see deploy/ml.crontab).
 #
 # Mirrors BackendDotNet/Core/Time.cs: naive UTC timestamps, and the shared
 # UUID primary-key format the backend uses. Every function elsewhere in

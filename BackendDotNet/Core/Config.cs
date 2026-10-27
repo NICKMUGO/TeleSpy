@@ -39,6 +39,22 @@ public static class Config
     public static string FieldEncryptionKey { get; } = Environment.GetEnvironmentVariable("FIELD_ENCRYPTION_KEY") ?? "";
     public static string BlindIndexKey { get; } = Environment.GetEnvironmentVariable("BLIND_INDEX_KEY") ?? "";
 
+    // Crypto agility for FieldEncryption (Core/FieldEncryption.cs): which
+    // algorithm new values use, the id stamped on values made with
+    // FIELD_ENCRYPTION_KEY, and retired keys kept only to read older values
+    // ("k0=secret;k-old=secret") until `--reencrypt` has moved everything on.
+    public static string FieldEncryptionAlgorithm { get; } =
+        Environment.GetEnvironmentVariable("FIELD_ENCRYPTION_ALGORITHM") is { Length: > 0 } alg ? alg : "aesgcm";
+    public static string FieldEncryptionKeyId { get; } =
+        Environment.GetEnvironmentVariable("FIELD_ENCRYPTION_KEY_ID") is { Length: > 0 } id ? id : "k1";
+    public static IReadOnlyList<(string Id, string Secret)> FieldEncryptionOldKeys { get; } =
+        (Environment.GetEnvironmentVariable("FIELD_ENCRYPTION_OLD_KEYS") ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(pair => pair.Split('=', 2))
+            .Where(pair => pair.Length == 2 && pair[0].Length > 0 && pair[1].Length > 0)
+            .Select(pair => (pair[0], pair[1]))
+            .ToList();
+
     // --- CORS ----------------------------------------------------------------
     public static List<string> FrontendOrigins { get; } = ToList("FRONTEND_ORIGINS", "http://localhost:3000");
 
@@ -55,6 +71,11 @@ public static class Config
     public static string DpaKePolicyVersion { get; } = Environment.GetEnvironmentVariable("DPA_KE_POLICY_VERSION") ?? "2026-01";
     public static int PasswordResetTokenExpiresMinutes { get; } = ToInt("PASSWORD_RESET_TOKEN_EXPIRES_MINUTES", "30");
     public static int MfaOtpExpiresMinutes { get; } = ToInt("MFA_OTP_EXPIRES_MINUTES", "5");
+
+    // --- First Admin (see AdminBootstrap) ---------------------------------------
+    // Only read while no active Admin exists; ignored from then on.
+    public static string? BootstrapAdminEmail { get; } = Environment.GetEnvironmentVariable("BOOTSTRAP_ADMIN_EMAIL");
+    public static string BootstrapAdminName { get; } = Environment.GetEnvironmentVariable("BOOTSTRAP_ADMIN_NAME") ?? "System Administrator";
 
     /// <summary>Fail fast on missing secrets instead of limping along insecurely.</summary>
     public static void Validate()

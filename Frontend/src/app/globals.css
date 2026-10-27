@@ -40,7 +40,28 @@
   --text-4xl: 2.25rem;
   --text-4xl--line-height: 2.5rem;
 
-  --radius: 0.5rem;
+  /* Rounder, iOS-like corners: cards and dialogs land at ~1rem
+   * (radius-xl), buttons and inputs at ~0.6rem (radius-md). */
+  --radius: 0.75rem;
+
+  /* iOS motion: the curve UIKit sheets settle with — fast start, long soft
+   * landing, no bounce. Every open/press/enter animation uses it. */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Layers instead of outlines: white panels lifted off the grey page by a
+   * soft two-part shadow (a tight contact edge and a wide ambient blur). */
+  --shadow-panel:
+    0 0 0 0.5px oklch(0 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.04),
+    0 4px 16px oklch(0 0 0 / 0.04);
+
+  /* Entrances: content rises a few pixels into place. */
+  --animate-rise: rise 0.35s var(--ease-spring) both;
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
 
   /* Guided-tour spotlight: a ring that breathes outward from the
    * highlighted element. Collapses under reduced motion like all motion. */
@@ -70,7 +91,10 @@
   --color-severity-high: var(--severity-high);
   --color-severity-medium: var(--severity-medium);
   --color-severity-low: var(--severity-low);
-  --font-sans: var(--font-inter);
+  /* San Francisco on Apple devices (Safari, then Chrome's alias), Inter
+   * everywhere else. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, var(--font-inter), system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -119,7 +143,8 @@
 }
 
 :root {
-  --background: var(--color-kq-white);
+  /* The iOS grouped background (#f2f2f7): panels sit on it in white. */
+  --background: oklch(0.965 0.004 286);
   --foreground: var(--color-kq-black);
   --card: var(--color-kq-white);
   --card-foreground: var(--color-kq-black);
@@ -149,13 +174,13 @@
   --chart-3: oklch(0.5 0.18 300);
   --chart-4: oklch(0.6 0.12 195);
   --chart-5: oklch(0.4 0 0);
-  --sidebar: oklch(0.98 0 0);
+  --sidebar: oklch(0.985 0.002 286);
   --sidebar-foreground: var(--color-kq-black);
   --sidebar-primary: var(--color-kq-red);
   --sidebar-primary-foreground: var(--color-kq-white);
-  --sidebar-accent: oklch(0.95 0 0);
+  --sidebar-accent: oklch(0.94 0.004 286);
   --sidebar-accent-foreground: var(--color-kq-black);
-  --sidebar-border: oklch(0.62 0 0);
+  --sidebar-border: oklch(0.9 0.004 286);
   --sidebar-ring: oklch(0.5 0 0);
   --brand-wash: oklch(0.975 0.012 25);
   --brand-wash-foreground: var(--color-kq-black);
@@ -171,19 +196,20 @@
 }
 
 .dark {
-  --background: oklch(0.16 0.005 260);
+  /* iOS dark: true black page (#000), panels #1c1c1e, raised #2c2c2e. */
+  --background: oklch(0 0 0);
   --foreground: oklch(0.96 0 0);
-  --card: oklch(0.2 0.005 260);
+  --card: oklch(0.218 0.004 286);
   --card-foreground: oklch(0.96 0 0);
-  --popover: oklch(0.2 0.005 260);
+  --popover: oklch(0.285 0.005 286);
   --popover-foreground: oklch(0.96 0 0);
   --primary: var(--color-kq-red-dark);
   --primary-foreground: oklch(0.145 0 0);
-  --secondary: oklch(0.27 0.005 260);
+  --secondary: oklch(0.285 0.005 286);
   --secondary-foreground: oklch(0.96 0 0);
-  --muted: oklch(0.27 0.005 260);
+  --muted: oklch(0.285 0.005 286);
   --muted-foreground: oklch(0.68 0 0);
-  --accent: oklch(0.27 0.005 260);
+  --accent: oklch(0.285 0.005 286);
   --accent-foreground: oklch(0.96 0 0);
   --destructive: var(--color-kq-red-dark);
   --destructive-foreground: oklch(0.145 0 0);
@@ -209,11 +235,11 @@
   --chart-3: oklch(0.6 0.17 300);
   --chart-4: oklch(0.63 0.115 195);
   --chart-5: oklch(0.72 0 0);
-  --sidebar: oklch(0.14 0.005 260);
+  --sidebar: oklch(0.17 0.004 286);
   --sidebar-foreground: oklch(0.96 0 0);
   --sidebar-primary: var(--color-kq-red-dark);
   --sidebar-primary-foreground: oklch(0.145 0 0);
-  --sidebar-accent: oklch(0.24 0.005 260);
+  --sidebar-accent: oklch(0.285 0.005 286);
   --sidebar-accent-foreground: oklch(0.96 0 0);
   --sidebar-border: oklch(1 0 0 / 15%);
   --sidebar-ring: oklch(0.65 0 0);
@@ -224,6 +250,8 @@
   --severity-medium: oklch(0.76 0.15 75);
   --severity-low: oklch(0.7 0 0);
   --border-subtle: oklch(1 0 0 / 10%);
+  /* Shadows don't read on black; panels separate by lightness instead. */
+  --shadow-panel: 0 0 0 0.5px oklch(1 0 0 / 0.06);
 }
 
 :root {
@@ -248,10 +276,16 @@
   html {
     @apply font-sans;
   }
+  /* One line weight for every icon — a touch lighter than Lucide's 2,
+   * close to SF Symbols' regular weight. */
+  svg.lucide {
+    stroke-width: 1.75;
+  }
   /* Numerals that must align or be compared — MSISDNs, ICCIDs, KES amounts,
-   * durations, data volumes, timestamps — are always tabular and monospaced. */
+   * durations, data volumes, timestamps — use the text font with tabular
+   * (equal-width) digits, the way iOS shows figures: columns still line up,
+   * without a code-font look. */
   .font-tabular {
-    @apply font-mono;
     font-variant-numeric: tabular-nums;
   }
 
@@ -314,5 +348,71 @@
   }
   .report-page:last-child {
     break-after: auto;
+  }
+}
+
+/* Phones: a table marked data-stack shows each row as a card — the first
+ * cell as its title, every other cell as "Column … value" (labels come from
+ * StackedTableLabels). Unlayered, so it wins over the cells' utilities. */
+@media (max-width: 639px) {
+  table[data-stack] thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  table[data-stack],
+  table[data-stack] tbody,
+  table[data-stack] tr {
+    display: block;
+    width: 100%;
+  }
+  table[data-stack] tbody tr {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  table[data-stack] tbody tr:last-child {
+    border-bottom: 0;
+  }
+  table[data-stack] td,
+  table[data-stack] tbody th {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    max-width: none;
+    padding: 0.125rem 0;
+    text-align: end;
+    white-space: normal;
+  }
+  table[data-stack] td::before,
+  table[data-stack] tbody th::before {
+    content: attr(data-label);
+    color: var(--muted-foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    font-weight: 400;
+    text-align: start;
+  }
+  /* The row's title: its first cell, larger, no label. */
+  table[data-stack] tbody tr > :first-child {
+    justify-content: flex-start;
+    padding-bottom: 0.25rem;
+    font-size: var(--text-base);
+    font-weight: 600;
+    text-align: start;
+  }
+  table[data-stack] tbody tr > :first-child::before {
+    content: none;
+  }
+  /* A cell spanning the whole row (an empty or expanded row) stays as is. */
+  table[data-stack] td[colspan] {
+    display: block;
+    text-align: start;
+  }
+  table[data-stack] td[colspan]::before {
+    content: none;
   }
 }

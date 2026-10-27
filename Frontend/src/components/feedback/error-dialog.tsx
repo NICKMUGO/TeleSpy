@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,10 @@ export function ErrorDialog({
   error: ErrorDialogContent | null;
   onClose: () => void;
 }) {
+  // Keeps showing the last error while the popup animates shut.
+  const [shown, setShown] = useState(error);
+  if (error && error !== shown) setShown(error);
+
   return (
     <Dialog open={error !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent role="alertdialog" className="sm:max-w-md">
@@ -36,12 +41,12 @@ export function ErrorDialog({
               aria-hidden="true"
               className="text-destructive size-5 shrink-0"
             />
-            {error?.title}
+            {shown?.title}
           </DialogTitle>
-          <DialogDescription>{error?.message}</DialogDescription>
+          <DialogDescription>{shown?.message}</DialogDescription>
         </DialogHeader>
-        {error?.hint ? (
-          <p className="text-muted-foreground text-sm">{error.hint}</p>
+        {shown?.hint ? (
+          <p className="text-muted-foreground text-sm">{shown.hint}</p>
         ) : null}
         <DialogFooter>
           <Button autoFocus onClick={onClose}>

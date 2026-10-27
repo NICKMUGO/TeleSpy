@@ -148,7 +148,6 @@ function CategoryRow({
         <Switch
           id={`${prefix}-active`}
           checked={category.is_active}
-          disabled={update.isPending}
           onCheckedChange={(checked) => void save({ is_active: checked })}
         />
         <Label htmlFor={`${prefix}-active`} className="text-sm font-normal">

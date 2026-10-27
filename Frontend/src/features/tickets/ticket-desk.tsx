@@ -18,7 +18,8 @@ import { useSession } from "@/lib/auth/session-store";
 import { monthKey, monthLabel } from "@/lib/format";
 
 /** The customer service desk's home: raise a ticket, see what came back,
- * follow everything raised, and the escalation score for the month. */
+ * follow everything raised, and the escalation score for the month. Anyone
+ * else gets the same page as "My tickets", without the desk's scores. */
 export function TicketDesk() {
   const access = useTicketAccess();
   const me = access.data?.data;
@@ -31,19 +32,6 @@ export function TicketDesk() {
       </div>
     );
   }
-  if (!me.on_desk && !me.is_admin) {
-    return (
-      <>
-        <PageHeader title="Ticket desk" />
-        <p className="text-muted-foreground p-4 text-sm sm:p-6">
-          The ticket desk is for the customer service team.
-          {me.handles_tickets
-            ? " Tickets sent to your department are under Team tickets."
-            : ""}
-        </p>
-      </>
-    );
-  }
   return <Desk me={me} />;
 }
 
@@ -52,15 +40,17 @@ function Desk({ me }: { me: TicketAccess }) {
   const userId = useSession((s) => s.user?.id);
   const [creating, setCreating] = useState(false);
   const overseer = me.desk_manager || me.is_admin;
-  // An Admin outside the desk has no tickets of their own to list.
-  const [scope, setScope] = useState<TicketScope>(
-    me.on_desk && !me.desk_manager ? "mine" : "desk",
-  );
+  // The desk (and Admin) get the escalation scores; anyone else just
+  // follows the tickets they raised.
+  const desk = me.on_desk || me.is_admin;
+  // The desk Manager and Admin start on the whole desk; everyone else on
+  // the tickets they raised.
+  const [scope, setScope] = useState<TicketScope>(overseer ? "desk" : "mine");
   const [status, setStatus] = useState<TicketStatus | "">("");
   const month = monthKey(new Date());
 
-  const stats = useTicketStats(month);
-  const returned = useTickets("mine", "returned", me.on_desk);
+  const stats = useTicketStats(month, desk);
+  const returned = useTickets("mine", "returned");
   const tickets = useTickets(scope, status || undefined);
   const mine = stats.data?.data.agents.find((a) => a.user_id === userId);
   const deskTotals = stats.data?.data.agents.reduce(
@@ -79,36 +69,31 @@ function Desk({ me }: { me: TicketAccess }) {
     <>
       <PageHeader
         title={
-          me.on_desk
-            ? `Customer service desk${firstName ? ` · ${firstName}` : ""}`
-            : "Customer service desk"
-        }
-        description={
-          overseer
-            ? `Every ticket the desk has raised, and how each agent's escalations are going in ${monthLabel(month)}.`
-            : "Raise a ticket when another department needs to handle a customer's issue, and follow it until it's resolved."
+          !desk
+            ? "My tickets"
+            : me.on_desk
+              ? `Customer service desk${firstName ? ` · ${firstName}` : ""}`
+              : "Customer service desk"
         }
         actions={
-          me.on_desk || me.is_admin ? (
-            <Button
-              type="button"
-              size="lg"
-              onClick={() => setCreating(true)}
-              data-tour="desk-new-ticket"
-            >
-              <Plus aria-hidden="true" />
-              New ticket
-            </Button>
-          ) : undefined
+          <Button
+            type="button"
+            size="lg"
+            onClick={() => setCreating(true)}
+            data-tour="desk-new-ticket"
+          >
+            <Plus aria-hidden="true" />
+            New ticket
+          </Button>
         }
       />
 
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div
           data-tour="desk-score"
-          className="grid grid-cols-2 gap-4 lg:grid-cols-4"
+          className={desk ? "grid grid-cols-2 gap-4 lg:grid-cols-4" : "hidden"}
         >
-          {stats.isLoading ? (
+          {!desk ? null : stats.isLoading ? (
             Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-24 w-full rounded-xl" />
             ))
@@ -143,7 +128,7 @@ function Desk({ me }: { me: TicketAccess }) {
         {returnedTickets.length > 0 ? (
           <SectionCard
             title={`Returned to you (${returnedTickets.length})`}
-            description="The team sent these back — open one to see why, fix it and send it again."
+            description="The team sent these back. Open one to see why, fix it and send it again."
             bodyClassName="px-0 pb-0"
             className="border-warning/50"
           >
@@ -163,7 +148,7 @@ function Desk({ me }: { me: TicketAccess }) {
             bodyClassName="px-0 pb-0"
           >
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table data-stack className="w-full text-sm">
                 <thead className="text-muted-foreground border-border-subtle border-y text-xs">
                   <tr>
                     <th scope="col" className="px-4 py-2 text-left font-medium">
@@ -257,7 +242,9 @@ function Desk({ me }: { me: TicketAccess }) {
             emptyDescription={
               status
                 ? undefined
-                : "When a customer's issue needs another department, raise a ticket with New ticket."
+                : desk
+                  ? "When a customer's issue needs another department, raise a ticket with New ticket."
+                  : "When you need another department to handle something, raise a ticket with New ticket."
             }
           />
         </SectionCard>

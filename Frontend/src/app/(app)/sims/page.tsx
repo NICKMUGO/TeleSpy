@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Smartphone } from "lucide-react";
+import { ArrowLeftRight, Smartphone } from "lucide-react";
 import type { LegacyColumnDef as ColumnDef } from "@tanstack/react-table/legacy";
 import { PageHeader } from "@/components/layout/page-header";
 import { DataTable } from "@/components/data/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SimHolderDialog } from "@/features/sims/sim-holder-dialog";
+import { ChangeHolderDialog } from "@/features/sims/change-holder-dialog";
 import type { SimCard } from "@/lib/api/types";
 import { useEmployees, useSims } from "@/lib/api/hooks";
 import { useSession } from "@/lib/auth/session-store";
@@ -25,7 +25,7 @@ export default function SimsPage() {
   // Only an Admin may change who holds a SIM (and so its extension) — a
   // Manager can see the inventory but not reassign it.
   const isAdmin = useSession((state) => state.user?.role) === "Admin";
-  const [changingHolder, setChangingHolder] = useState<SimCard | null>(null);
+  const [changingHolder, setChangingHolder] = useState(false);
 
   const employeeNameById = useMemo(
     () => new Map((employees.data?.data ?? []).map((e) => [e.id, e.full_name])),
@@ -33,7 +33,7 @@ export default function SimsPage() {
   );
 
   const columns = useMemo<ColumnDef<SimCard, unknown>[]>(() => {
-    const base: ColumnDef<SimCard, unknown>[] = [
+    return [
       {
         accessorKey: "provider",
         header: "Provider",
@@ -83,40 +83,20 @@ export default function SimsPage() {
         },
       },
     ];
-
-    if (!isAdmin) return base;
-
-    return [
-      ...base,
-      {
-        id: "actions",
-        header: "",
-        enableSorting: false,
-        cell: (c) => {
-          const sim = c.row.original;
-          return (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              // A suspended or decommissioned SIM can be taken back, but
-              // not given to anyone.
-              disabled={!sim.employee_id && sim.lifecycle_state !== "active"}
-              onClick={() => setChangingHolder(sim)}
-            >
-              {sim.employee_id ? "Change holder…" : "Assign…"}
-            </Button>
-          );
-        },
-      },
-    ];
-  }, [isAdmin, employeeNameById]);
+  }, [employeeNameById]);
 
   return (
     <>
       <PageHeader
         title="SIM inventory"
-        description="Every SIM card, its company number and extension, who holds it, and its lifecycle state."
+        actions={
+          isAdmin ? (
+            <Button type="button" onClick={() => setChangingHolder(true)}>
+              <ArrowLeftRight aria-hidden="true" />
+              Change holder
+            </Button>
+          ) : undefined
+        }
       />
       <DataTable
         tourId="sims-table"
@@ -129,13 +109,14 @@ export default function SimsPage() {
         emptyIcon={Smartphone}
         emptyTitle="No SIM cards yet"
         getRowId={(row) => row.id}
+        pageSize="fit"
+        phoneTitleColumn="allocated_to"
       />
       {changingHolder ? (
-        <SimHolderDialog
-          key={changingHolder.id}
-          sim={changingHolder}
+        <ChangeHolderDialog
+          sims={sims.data?.data ?? []}
           employees={employees.data?.data ?? []}
-          onClose={() => setChangingHolder(null)}
+          onClose={() => setChangingHolder(false)}
         />
       ) : null}
     </>

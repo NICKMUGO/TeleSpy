@@ -35,7 +35,11 @@ public class CdrIngestRequest
 }
 
 [ApiController]
-public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IAuditService audit) : ControllerBase
+public class CdrController(
+    TeleSpyDbContext db,
+    IViewerContext viewerContext,
+    IAuditService audit,
+    INotificationService notifications) : ControllerBase
 {
     [HttpPost("/cdr/ingest")]
     [RoleIdRequired("admin")]
@@ -62,6 +66,10 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
         // every row ingested so far instead of leaving a partial batch
         // committed.
         await using var transaction = await db.Database.BeginTransactionAsync();
+        // Calls on a line nobody held at the time — a SIM in the pool that's
+        // still in use. Reported to the HR manager and Admins after the
+        // batch, so that spend can't go unnoticed.
+        var poolLineCalls = new Dictionary<string, List<(DateTime At, double Minutes)>>(StringComparer.Ordinal);
 
         foreach (var row in records)
         {
@@ -99,6 +107,11 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
             }
             SimAllocation? allocation = sim?.Allocations.FirstOrDefault(a => a.IsActiveAt(occuredAt));
             if (allocation is not null) allocation.Sim = sim;
+            else if (sim is not null)
+            {
+                if (!poolLineCalls.TryGetValue(orig, out var calls)) poolLineCalls[orig] = calls = [];
+                calls.Add((occuredAt, durationMinutes));
+            }
 
             var @event = new UsageEvent
             {
@@ -135,9 +148,12 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
                 ["unattributed"] = unattributed,
                 ["skipped_unanswered"] = skippedUnanswered,
                 ["lines_created"] = createdExtensions,
+                ["unassigned_line_calls"] = poolLineCalls.ToDictionary(p => p.Key, p => (object?)p.Value.Count),
                 ["source_file"] = sourceFile,
             });
         await transaction.CommitAsync();
+        await notifications.NotifyUnassignedLineCallsAsync(poolLineCalls.Select(p => new UnassignedLineCalls(
+            p.Key, p.Value.Count, p.Value.Sum(c => c.Minutes), p.Value.Min(c => c.At), p.Value.Max(c => c.At))).ToList(), sourceFile);
         return StatusCode(201, new
         {
             data = new
@@ -221,6 +237,15 @@ public class CdrController(TeleSpyDbContext db, IViewerContext viewerContext, IA
             user.SetPassword(Security.GenerateResetToken());
             db.Users.Add(user);
             employee.User = user;
+        }
+        else
+        {
+            // A person holds one line: whatever else this holder had goes
+            // back to the pool, as in AllocationService.AllocateSimAsync.
+            var otherLines = await db.SimAllocations
+                .Where(a => a.EmployeeId == employee.EmployeeId && a.EndAt == null)
+                .ToListAsync();
+            foreach (var other in otherLines) other.CloseAllocation();
         }
 
         // Starts before the extension's first call in the batch, so every

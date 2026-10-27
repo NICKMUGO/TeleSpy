@@ -25,6 +25,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  useClosingDialog,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -79,18 +80,23 @@ export function EmployeeFormDialog({
   mode,
   ...props
 }: EmployeeFormDialogProps) {
+  const dialog = useClosingDialog(props.onClose);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = props.employees.find((e) => e.id === selectedId) ?? null;
 
   return (
-    <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+    <Dialog open={dialog.open} onOpenChange={dialog.onOpenChange}>
+      <DialogContent
+        onExitComplete={dialog.onExitComplete}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+      >
         {mode === "add" ? (
-          <EmployeeForm {...props} employee={null} />
+          <EmployeeForm {...props} onClose={dialog.close} employee={null} />
         ) : selected ? (
           <EmployeeForm
             key={selected.id}
             {...props}
+            onClose={dialog.close}
             employee={selected}
             onChooseAnother={() => setSelectedId(null)}
           />
@@ -163,7 +169,7 @@ export function EmployeePicker({
                     .join(" · ") || "No department"}
                 </span>
               </span>
-              <CommandShortcut className="font-mono text-sm tracking-normal">
+              <CommandShortcut className="font-tabular text-sm">
                 {employee.extension_code ?? "No ext."}
               </CommandShortcut>
             </CommandItem>

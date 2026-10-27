@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { IconBadge } from "@/components/data/icon-badge";
 
 interface EmptyStateProps {
   icon: LucideIcon;
@@ -17,10 +18,10 @@ export function EmptyState({
   action,
 }: EmptyStateProps) {
   return (
-    <div className="border-border m-6 flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-12 text-center">
-      <Icon aria-hidden="true" className="text-muted-foreground size-8" />
+    <div className="animate-rise m-4 flex flex-1 flex-col items-center justify-center gap-4 px-6 py-14 text-center sm:m-6">
+      <IconBadge icon={Icon} />
       <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium">{title}</p>
+        <p className="text-base font-semibold">{title}</p>
         {description ? (
           <p className="text-muted-foreground max-w-sm text-sm">
             {description}

@@ -1,5 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+
+/** Open the dashboard and wait until the app is live in the browser: the
+ * sign-in guard renders nothing until then, so the heading means React has
+ * attached its keyboard shortcuts. Pressing keys before that does nothing. */
+async function openDashboard(page: Page) {
+  await page.goto("/dashboard");
+  await expect(
+    page.getByRole("heading", { name: "Dashboard", level: 1 }),
+  ).toBeVisible();
+}
 
 test("skip link is the first focusable element and jumps to main content", async ({
   page,
@@ -25,7 +35,7 @@ test("sidebar navigation is reachable by mouse and updates the route", async ({
 });
 
 test("command palette opens with Ctrl+K and navigates", async ({ page }) => {
-  await page.goto("/dashboard");
+  await openDashboard(page);
   await page.keyboard.press("Control+k");
   await expect(
     page.getByPlaceholder("Search a name or extension, or jump to a page..."),
@@ -37,7 +47,7 @@ test("command palette opens with Ctrl+K and navigates", async ({ page }) => {
 });
 
 test("keyboard shortcuts dialog opens with ?", async ({ page }) => {
-  await page.goto("/dashboard");
+  await openDashboard(page);
   await page.keyboard.press("?");
   await expect(
     page.getByRole("heading", { name: "Keyboard shortcuts" }),
@@ -49,7 +59,7 @@ test("keyboard shortcuts dialog opens with ?", async ({ page }) => {
 });
 
 test("dashboard shell has no automatic a11y violations", async ({ page }) => {
-  await page.goto("/dashboard");
+  await openDashboard(page);
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

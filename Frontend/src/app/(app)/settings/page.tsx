@@ -19,10 +19,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Settings"
-        description="Display preferences, notifications, departments, company numbers and billing."
-      />
+      <PageHeader title="Settings" />
       <div className="flex flex-col gap-8 px-4 py-6 sm:px-6">
         <section data-tour="settings-display">
           <h2 className="mb-4 text-lg font-semibold">Display</h2>

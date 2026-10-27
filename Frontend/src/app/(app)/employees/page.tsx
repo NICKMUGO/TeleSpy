@@ -87,7 +87,6 @@ export default function EmployeesPage() {
     <>
       <PageHeader
         title="Employees"
-        description="Every employee with an HR record, their department and PBX extension."
         actions={
           isAdmin ? (
             <>
@@ -131,6 +130,7 @@ export default function EmployeesPage() {
         emptyTitle="No employees yet"
         emptyDescription="Employees appear here once an Admin adds them."
         getRowId={(row) => row.id}
+        pageSize="fit"
       />
       {dialog === "remove" ? (
         <RemoveEmployeeDialog

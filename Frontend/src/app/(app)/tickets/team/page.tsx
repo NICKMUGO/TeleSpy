@@ -38,10 +38,7 @@ export default function TeamTicketsPage() {
 
   return (
     <>
-      <PageHeader
-        title={`Team tickets · ${me.department_name}`}
-        description="Customer issues the service desk sent to your department. Take one, then resolve it with a note — or send it back if it isn't yours to handle."
-      />
+      <PageHeader title={`Team tickets · ${me.department_name}`} />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <SectionCard
           title={`Waiting for someone${waiting.data ? ` (${waiting.data.data.length})` : ""}`}

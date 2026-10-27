@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
+import { makeGenie } from "@/lib/genie";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
@@ -11,6 +12,21 @@ function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+}
+
+/** For a dialog its parent shows only while it's open (`{x ? <MyDialog
+ * onClose={…} /> : null}`): unmounting it straight away would skip the
+ * closing animation. `close` animates it shut first; the parent's `onClose`
+ * runs once it's gone. Pass `open` to <Dialog> and `onExitComplete` to its
+ * <DialogContent>. */
+function useClosingDialog(onClose: () => void) {
+  const [open, setOpen] = React.useState(true);
+  const close = React.useCallback(() => setOpen(false), []);
+  const onOpenChange = React.useCallback(
+    (next: boolean) => !next && setOpen(false),
+    [],
+  );
+  return { open, close, onOpenChange, onExitComplete: onClose };
 }
 
 function DialogTrigger({
@@ -39,7 +55,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs",
+        "data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 fixed inset-0 isolate z-50 bg-black/25 duration-300 supports-backdrop-filter:backdrop-blur-xs dark:bg-black/50",
         className,
       )}
       {...props}
@@ -47,25 +63,103 @@ function DialogOverlay({
   );
 }
 
+/** A dialog on desktop; on phones, an iOS-style bottom sheet that slides
+ * up from the bottom edge and can be swiped down to close by its handle. */
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  style,
+  onExitComplete,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  /** Once it has closed and its closing animation has finished. */
+  onExitComplete?: () => void;
 }) {
+  const exitRef = React.useRef(onExitComplete);
+  React.useEffect(() => {
+    exitRef.current = onExitComplete;
+  });
+  // Mounts with the panel on each open (this wrapper stays mounted while
+  // closed) and unmounts once its closing animation has played.
+  const panelRef = React.useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const unaim = aimGenie(el);
+    return () => {
+      unaim();
+      if (el.dataset.state === "closed") exitRef.current?.();
+    };
+  }, []);
+  const closeRef = React.useRef<HTMLButtonElement>(null);
+  const dragStart = React.useRef<number | null>(null);
+  const [dragY, setDragY] = React.useState(0);
+  const [dragging, setDragging] = React.useState(false);
+
+  function onHandleDown(event: React.PointerEvent<HTMLDivElement>) {
+    dragStart.current = event.clientY;
+    setDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+  function onHandleMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragStart.current === null) return;
+    setDragY(Math.max(0, event.clientY - dragStart.current));
+  }
+  function onHandleUp() {
+    if (dragStart.current === null) return;
+    dragStart.current = null;
+    setDragging(false);
+    // Far enough down closes it; anything less springs back.
+    if (dragY > 80) closeRef.current?.click();
+    else setDragY(0);
+  }
+
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-popover text-popover-foreground ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl p-4 text-sm ring-1 duration-100 outline-none sm:max-w-sm",
+          "bg-popover text-popover-foreground shadow-panel fixed z-50 grid w-full gap-4 p-4 text-sm outline-none max-sm:pt-7",
+          // Phone: a sheet along the bottom edge.
+          "inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-2xl pb-[calc(1rem+env(safe-area-inset-bottom))]",
+          "max-sm:data-open:animate-in max-sm:data-closed:animate-out max-sm:ease-spring max-sm:duration-300 max-sm:data-closed:duration-200",
+          "max-sm:data-open:slide-in-from-bottom max-sm:data-closed:slide-out-to-bottom",
+          // Desktop: centred, genie-ing out of whatever opened it.
+          "sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:max-w-sm sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:pb-4",
+          "sm:data-closed:[animation:var(--genie-out)] sm:data-open:[animation:var(--genie-in)]",
           className,
         )}
+        style={
+          dragY
+            ? {
+                ...style,
+                translate: `0 ${dragY}px`,
+                transition: dragging
+                  ? "none"
+                  : "translate 0.3s var(--ease-spring)",
+              }
+            : style
+        }
         {...props}
+        ref={panelRef}
       >
+        <div
+          aria-hidden="true"
+          onPointerDown={onHandleDown}
+          onPointerMove={onHandleMove}
+          onPointerUp={onHandleUp}
+          onPointerCancel={onHandleUp}
+          className="absolute inset-x-0 top-0 z-10 flex h-7 cursor-grab touch-none items-center justify-center sm:hidden"
+        >
+          <span className="bg-muted-foreground/30 h-1.5 w-10 rounded-full" />
+        </div>
+        <DialogPrimitive.Close
+          ref={closeRef}
+          tabIndex={-1}
+          aria-hidden="true"
+          className="hidden"
+        />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
@@ -82,6 +176,19 @@ function DialogContent({
       </DialogPrimitive.Content>
     </DialogPortal>
   );
+}
+
+/** Aims the genie at the button that opened *this* open, so the panel also
+ * closes back into it. Called as the panel mounts, before the dialog moves
+ * focus inside. Returns the cleanup. */
+function aimGenie(el: HTMLDivElement) {
+  const genie = makeGenie();
+  const sheet = document.createElement("style");
+  sheet.textContent = genie.css;
+  document.head.appendChild(sheet);
+  for (const [name, value] of Object.entries(genie.style))
+    el.style.setProperty(name, value);
+  return () => sheet.remove();
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
@@ -106,7 +213,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "bg-muted/50 -mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t p-4 sm:flex-row sm:justify-end",
+        "bg-muted/50 border-border-subtle -mx-4 -mb-[calc(1rem+env(safe-area-inset-bottom))] flex flex-col-reverse gap-2 border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:-mb-4 sm:flex-row sm:justify-end sm:rounded-b-2xl sm:pb-4",
         className,
       )}
       {...props}
@@ -129,7 +236,7 @@ function DialogTitle({
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn(
-        "font-heading text-base leading-none font-medium",
+        "font-heading text-lg leading-tight font-semibold tracking-tight",
         className,
       )}
       {...props}
@@ -164,4 +271,5 @@ export {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
+  useClosingDialog,
 };

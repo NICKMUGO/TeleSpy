@@ -59,9 +59,29 @@ public class AuthController(
     IAuditService audit,
     IViewerContext viewerContext,
     ICurrentUserAccessor currentUser,
-    IPasswordResetService passwordReset) : ControllerBase
+    IPasswordResetService passwordReset,
+    IStepUpService stepUp) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
+
+    /// <summary>Emails the signed-in Admin a one-time code that, with their
+    /// password, confirms a sensitive action — today, removing an employee
+    /// (POST /employees/{id}/remove, or a handover that removes the
+    /// holder). Admin only.</summary>
+    [HttpPost("/auth/step-up")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> StepUp()
+    {
+        var actor = await viewerContext.LoadedUserAsync();
+        var expiresMinutes = await stepUp.IssueCodeAsync(actor!, "remove an employee from TeleSpy");
+        await audit.RecordAuditAsync("step_up_requested", "user", actor!.UserId,
+            actorId: actor.UserId, actorRole: actor.Role?.RoleName);
+        return Ok(new
+        {
+            data = new { expires_minutes = expiresMinutes },
+            message = $"A confirmation code was sent to {actor.Email}.",
+        });
+    }
 
     [HttpGet("/auth/legal-notice")]
     public IActionResult LegalNotice() => Ok(new
@@ -397,6 +417,13 @@ public class AuthController(
     /// any of the last PasswordHistoryLimit.</summary>
     private async Task RotatePasswordAsync(User user, string newPassword)
     {
+        // The current password is normally the newest history row, but check
+        // it directly too, so an account whose history is missing (e.g. a
+        // password set outside the app) can't "change" to the same one.
+        if (user.CheckPassword(newPassword))
+        {
+            throw new ValidationFailed($"You can't reuse any of your last {Constants.PasswordHistoryLimit} passwords.");
+        }
         var history = await db.PasswordHistories.Where(h => h.UserId == user.UserId)
             .OrderByDescending(h => h.CreatedAt).Take(Constants.PasswordHistoryLimit).ToListAsync();
         foreach (var record in history)
@@ -411,6 +438,13 @@ public class AuthController(
         user.MustChangePassword = false;
         db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
         await db.SaveChangesAsync();
+
+        // Keep only what the reuse check reads: the last PasswordHistoryLimit
+        // hashes. Older ones serve no purpose and are just more to crack if
+        // the database ever leaked.
+        await db.PasswordHistories.Where(h => h.UserId == user.UserId)
+            .OrderByDescending(h => h.CreatedAt).Skip(Constants.PasswordHistoryLimit)
+            .ExecuteDeleteAsync();
     }
 
     [HttpPost("/auth/reset-password")]

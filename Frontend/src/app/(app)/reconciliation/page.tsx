@@ -47,10 +47,7 @@ export default function ReconciliationPage() {
 
   return (
     <>
-      <PageHeader
-        title="Bill reconciliation"
-        description="The bill rebuilt from the app's own call records, beside what the telco actually invoiced."
-      />
+      <PageHeader title="Bill reconciliation" />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         {reconciliation.error ? (
           <ErrorBanner
@@ -67,7 +64,7 @@ export default function ReconciliationPage() {
           />
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
               <StatCard
                 label={
                   headline
@@ -111,7 +108,7 @@ export default function ReconciliationPage() {
             </div>
 
             <div className="border-border overflow-x-auto rounded-lg border">
-              <table className="w-full text-sm">
+              <table data-stack className="w-full text-sm">
                 <caption className="sr-only">
                   Rebuilt bill and telco invoice by month
                 </caption>
@@ -160,7 +157,7 @@ export default function ReconciliationPage() {
                       </th>
                       <Money value={row.calls_list_cost_kes} />
                       <Money value={-row.discount_kes} />
-                      <td className="px-4 py-2.5 text-right font-mono whitespace-nowrap tabular-nums">
+                      <td className="font-tabular px-4 py-2.5 text-right whitespace-nowrap">
                         {kesExact(row.calls_cost_kes)}
                         {row.unassigned_lines_cost_kes > 0 ? (
                           <span className="text-destructive block text-xs">
@@ -187,7 +184,7 @@ export default function ReconciliationPage() {
                       </td>
                       <td
                         className={cn(
-                          "px-4 py-2.5 text-right font-mono whitespace-nowrap tabular-nums",
+                          "font-tabular px-4 py-2.5 text-right whitespace-nowrap",
                           differenceTone(row.difference_pct),
                         )}
                       >
@@ -265,7 +262,7 @@ function UnassignedLines() {
         </p>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table data-stack className="w-full text-sm">
           <caption className="sr-only">Spend on unassigned lines</caption>
           <thead>
             <tr className="border-border border-b">
@@ -290,11 +287,11 @@ function UnassignedLines() {
                 className="border-border border-b last:border-b-0"
               >
                 <td className="py-2 pr-4">{monthLabel(row.month)}</td>
-                <td className="py-2 pr-4 font-mono">{row.extension_code}</td>
+                <td className="font-tabular py-2 pr-4">{row.extension_code}</td>
                 <td className="py-2 pr-4 text-right tabular-nums">
                   {row.calls.toLocaleString("en-KE")}
                 </td>
-                <td className="py-2 pr-4 text-right font-mono tabular-nums">
+                <td className="font-tabular py-2 pr-4 text-right">
                   {kesExact(row.total_cost_kes)}
                 </td>
               </tr>
@@ -316,7 +313,7 @@ function Money({
   return (
     <td
       className={cn(
-        "px-4 py-2.5 text-right font-mono whitespace-nowrap tabular-nums",
+        "font-tabular px-4 py-2.5 text-right whitespace-nowrap",
         strong && "font-semibold",
       )}
     >
@@ -368,7 +365,7 @@ function InvoiceInput({ row }: { row: ReconciliationMonth }) {
         placeholder="Enter total"
         aria-label={label}
         aria-invalid={!valid}
-        className="w-36 font-mono"
+        className="font-tabular w-36"
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />

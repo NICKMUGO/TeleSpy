@@ -17,6 +17,7 @@ import { SectionCard } from "@/components/data/section-card";
 import { PageHeader } from "@/components/layout/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -40,6 +41,7 @@ import { dateTime } from "@/lib/format";
 
 const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   raised: "raised the ticket",
+  assigned: "assigned the ticket",
   claimed: "took the ticket",
   note: "added a note",
   returned: "sent it back to the desk",
@@ -83,19 +85,21 @@ export default function TicketPage() {
     onTeam && (t.claimed_by_id === user?.id || user?.role === "Manager");
   const isRaiser = t.raised_by_id === user?.id;
   const canResend = isRaiser || me.desk_manager || me.is_admin;
+  const backToTeam = onTeam && !isRaiser;
+  const deskLabel = me.on_desk || me.is_admin ? "Ticket desk" : "My tickets";
 
   return (
     <>
       <PageHeader
         title={t.subject}
-        description={`${t.number} · ${t.category_name} · raised by ${t.raised_by_name ?? "the desk"} ${dateTime(t.created_at)}`}
+        meta={`${t.number} · ${t.category_name} · raised by ${t.raised_by_name ?? "the desk"} ${dateTime(t.created_at)}`}
         actions={<TicketStatusBadge status={t.status} />}
       />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <Button asChild variant="ghost" size="sm" className="w-fit">
-          <Link href={onTeam && !isRaiser ? "/tickets/team" : "/tickets"}>
+          <Link href={backToTeam ? "/tickets/team" : "/tickets"}>
             <ArrowLeft aria-hidden="true" />
-            {onTeam && !isRaiser ? "Team tickets" : "Ticket desk"}
+            {backToTeam ? "Team tickets" : deskLabel}
           </Link>
         </Button>
 
@@ -114,7 +118,11 @@ export default function TicketPage() {
 
         <div className="grid items-start gap-4 lg:grid-cols-3">
           <div className="flex flex-col gap-4 lg:col-span-2">
-            <SectionCard title="What the customer needs">
+            <SectionCard
+              title={
+                t.customer_name ? "What the customer needs" : "What's needed"
+              }
+            >
               <p className="text-sm whitespace-pre-wrap">{t.description}</p>
             </SectionCard>
 
@@ -151,9 +159,13 @@ export default function TicketPage() {
             </SectionCard>
           </div>
 
-          <SectionCard title="Customer">
+          <SectionCard title={t.customer_name ? "Customer" : "Details"}>
             <dl className="grid gap-3 text-sm">
-              <Detail label="Name">{t.customer_name}</Detail>
+              {t.customer_name ? (
+                <Detail label="Name">{t.customer_name}</Detail>
+              ) : (
+                <Detail label="Customer">None (internal ticket)</Detail>
+              )}
               {t.customer_phone ? (
                 <Detail label="Phone">
                   <a
@@ -371,11 +383,18 @@ function CloseForm({
   );
 }
 
+/** The resend form's "What is it about?" choice for a reason of its own. */
+const RESEND_OTHER = "__other__";
+
 function ResendForm({ ticket }: { ticket: Ticket }) {
   const resend = useResendTicket();
   const categories = useTicketCategories();
   const departments = useDepartments();
-  const [categoryId, setCategoryId] = useState(ticket.category_id);
+  const [categoryId, setCategoryId] = useState(
+    ticket.category_id ?? RESEND_OTHER,
+  );
+  const [customReason, setCustomReason] = useState(ticket.custom_reason ?? "");
+  const custom = categoryId === RESEND_OTHER;
   const [departmentId, setDepartmentId] = useState(ticket.department_id);
   const [note, setNote] = useState("");
   const lastReturn = [...(ticket.events ?? [])]
@@ -384,11 +403,13 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (custom && !customReason.trim()) return;
     try {
       await resend.mutateAsync({
         id: ticket.id,
         body: {
-          category_id: categoryId,
+          category_id: custom ? undefined : categoryId,
+          custom_reason: custom ? customReason.trim() : undefined,
           department_id: departmentId,
           note: note.trim() || undefined,
         },
@@ -427,6 +448,7 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
                 if (routed) setDepartmentId(routed);
               }}
             >
+              <option value={RESEND_OTHER}>Other (describe it)</option>
               {categories.data?.data.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -449,6 +471,18 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
             </SelectNative>
           </div>
         </div>
+        {custom ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="resend-custom-reason">Short description</Label>
+            <Input
+              id="resend-custom-reason"
+              value={customReason}
+              onChange={(e) => setCustomReason(e.target.value)}
+              maxLength={80}
+              required
+            />
+          </div>
+        ) : null}
         <div className="flex flex-col gap-2">
           <Label htmlFor="resend-note">What changed?</Label>
           <Textarea
@@ -460,7 +494,11 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
             placeholder="e.g. Added the booking reference and the customer's new travel date."
           />
         </div>
-        <Button type="submit" className="w-fit" disabled={resend.isPending}>
+        <Button
+          type="submit"
+          className="w-fit"
+          disabled={resend.isPending || (custom && !customReason.trim())}
+        >
           <Send aria-hidden="true" />
           {resend.isPending ? "Sending…" : "Send again"}
         </Button>
@@ -475,11 +513,15 @@ function NoteComposer({ ticketId }: { ticketId: string }) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!body.trim()) return;
+    const note = body.trim();
+    if (!note) return;
+    // The note appears on the ticket at once; it comes back into the box
+    // only if the server refuses it.
+    setBody("");
     try {
-      await addNote.mutateAsync({ id: ticketId, body: body.trim() });
-      setBody("");
+      await addNote.mutateAsync({ id: ticketId, body: note });
     } catch (error) {
+      setBody(note);
       toast.error(errorMessage(error, "Couldn't add the note."));
     }
   }
@@ -505,10 +547,10 @@ function NoteComposer({ ticketId }: { ticketId: string }) {
         variant="outline"
         size="sm"
         className="w-fit"
-        disabled={!body.trim() || addNote.isPending}
+        disabled={!body.trim()}
       >
         <MessageSquare aria-hidden="true" />
-        {addNote.isPending ? "Adding…" : "Add note"}
+        Add note
       </Button>
     </form>
   );

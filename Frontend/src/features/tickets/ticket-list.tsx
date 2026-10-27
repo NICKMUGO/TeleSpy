@@ -67,12 +67,13 @@ export function TicketList({
                 </span>
               </div>
               <span className="text-muted-foreground truncate text-xs">
-                {ticket.customer_name}
-                {ticket.booking_reference
-                  ? ` · ${ticket.booking_reference}`
-                  : ""}
-                {" · "}
-                {ticket.category_name}
+                {[
+                  ticket.customer_name ?? "Internal",
+                  ticket.booking_reference,
+                  ticket.category_name,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             </div>
             <div className="text-muted-foreground flex items-center gap-3 text-xs sm:justify-end">

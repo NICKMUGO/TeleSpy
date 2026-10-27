@@ -19,7 +19,12 @@ using TeleSpy.Services;
 namespace TeleSpy.Api;
 
 [ApiController]
-public class InvoicesController(TeleSpyDbContext db, IMailService mail, IAuditService audit) : ControllerBase
+public class InvoicesController(
+    TeleSpyDbContext db,
+    IMailService mail,
+    IAuditService audit,
+    IViewerContext viewerContext,
+    INotificationService notifications) : ControllerBase
 {
     public class SendMonthlyRequest
     {
@@ -69,7 +74,7 @@ public class InvoicesController(TeleSpyDbContext db, IMailService mail, IAuditSe
 
                 This invoice is for the amount over the limit: KES {overBy:N2}.
 
-                You can see every month's costs in the TeleSpy app under Spend ledger.
+                You can see your monthly costs and limit on your TeleSpy dashboard.
                 """;
             mail.SendMailSafe(email, $"TeleSpy invoice for {summary.Month}: KES {overBy:N2} over your limit", body);
             sent++;
@@ -84,6 +89,71 @@ public class InvoicesController(TeleSpyDbContext db, IMailService mail, IAuditSe
             message = overLimit == 0
                 ? $"Nobody went over their limit in {month}, so no invoices were sent."
                 : $"Sent {sent} invoice(s) for {month} to the employees over their limit.",
+        });
+    }
+
+    /// <summary>Emails the HR manager (the Manager of the Human Resources
+    /// department) the list of employees over their monthly limit in
+    /// `month` — the latest billed month when omitted — with what each
+    /// spent, their limit and the amount over. Admin only.</summary>
+    [HttpPost("/invoices/report-to-hr")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> ReportToHr()
+    {
+        var actor = await viewerContext.LoadedUserAsync();
+        var request = await RequestBody.ReadJsonSilentAsync<SendMonthlyRequest>(Request);
+        var month = string.IsNullOrWhiteSpace(request.Month)
+            ? await db.UsageSummaries.OrderByDescending(s => s.Month).Select(s => s.Month).FirstOrDefaultAsync()
+            : request.Month.Trim();
+        if (month is null || month.Length != 7)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "month_required",
+                message = "There's no billed month to report on yet.",
+                field = "month",
+                hint = "Run the ML billing job first, or pass month as YYYY-MM.",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = DateTime.UtcNow.ToString("o"),
+            });
+        }
+
+        var summaries = await db.UsageSummaries
+            .Where(s => s.Month == month)
+            .Include(s => s.Employee!).ThenInclude(e => e.User!).ThenInclude(u => u.Role)
+            .Include(s => s.Employee!).ThenInclude(e => e.Department)
+            .ToListAsync();
+        var lines = summaries
+            .Where(s => s.CheckThresholdBreach(s.Employee?.User?.Role?.CallLimitKshs))
+            .Select(s => new OverLimitLine(s.Employee!.FullName, s.Employee.StaffNumber, s.Employee.Department?.Name,
+                s.TotalCost, s.Employee.User!.Role!.CallLimitKshs!.Value, s.Employee.RemovedAt is not null))
+            .ToList();
+
+        var recipients = await notifications.SendOverLimitReportToHrAsync(month, lines, actor!);
+        if (recipients.Count == 0)
+        {
+            return StatusCode(409, new
+            {
+                error_type = "no_hr_manager",
+                message = "There's no HR manager to email.",
+                field = (string?)null,
+                hint = "Give someone in the Human Resources department the Manager role, with an active login.",
+                status = 409,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = DateTime.UtcNow.ToString("o"),
+            });
+        }
+
+        await audit.RecordAuditAsync("over_limit_reported_to_hr", "usage_summary",
+            actorId: actor!.UserId, actorRole: actor.Role?.RoleName,
+            meta: new Dictionary<string, object?> { ["month"] = month, ["over_limit"] = lines.Count, ["recipients"] = recipients.Count });
+        return Ok(new
+        {
+            data = new { month, over_limit = lines.Count, recipients = recipients.Count },
+            message = $"Emailed the HR manager the {lines.Count} employee(s) over their limit in {month}.",
         });
     }
 }

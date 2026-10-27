@@ -148,7 +148,7 @@ export function CommandPalette({
                       {person.department}
                     </span>
                   ) : null}
-                  <CommandShortcut className="font-mono text-sm tracking-normal">
+                  <CommandShortcut className="font-tabular text-sm">
                     <span className="sr-only">extension </span>
                     {person.extension_code}
                   </CommandShortcut>

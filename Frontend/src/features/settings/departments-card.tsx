@@ -105,7 +105,6 @@ function DepartmentRow({ department }: { department: Department }) {
         <Switch
           id={deskId}
           checked={department.handles_customer_service}
-          disabled={update.isPending}
           onCheckedChange={(checked) =>
             void save({ handles_customer_service: checked })
           }

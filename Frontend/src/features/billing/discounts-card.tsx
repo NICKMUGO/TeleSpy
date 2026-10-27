@@ -162,7 +162,7 @@ function DiscountsForm({ initial }: { initial: LocalCallRateSettings }) {
           <Label htmlFor="on-net-prefixes">{networkName} number prefixes</Label>
           <Input
             id="on-net-prefixes"
-            className="font-mono"
+            className="font-tabular"
             aria-describedby="on-net-prefixes-hint"
             aria-invalid={!prefixesValid}
             value={form.on_net_prefixes}

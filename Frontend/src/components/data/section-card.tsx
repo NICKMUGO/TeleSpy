@@ -31,13 +31,13 @@ export function SectionCard({
     <section
       data-tour={tourId}
       className={cn(
-        "border-border-subtle bg-card flex flex-col overflow-hidden rounded-xl border",
+        "bg-card shadow-panel flex flex-col overflow-hidden rounded-xl",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3 px-4 pt-3.5 pb-3">
+      <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+          <h2 className="text-base font-semibold tracking-tight">{title}</h2>
           {description ? (
             <p className="text-muted-foreground mt-0.5 text-xs">
               {description}
@@ -55,7 +55,7 @@ export function SectionCard({
           action
         )}
       </div>
-      <div className={cn("flex-1 px-4 pb-4", bodyClassName)}>{children}</div>
+      <div className={cn("flex-1 px-5 pb-5", bodyClassName)}>{children}</div>
     </section>
   );
 }

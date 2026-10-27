@@ -53,6 +53,14 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
                 .Select(g => new { Month = g.Key, Calls = g.Sum(s => s.TotalCost), List = g.Sum(s => s.ListCost), Employees = g.Count() })
                 .ToListAsync())
             .ToDictionary(c => c.Month);
+        // Calls on lines nobody held are on the telco's bill too, so they're
+        // part of the rebuilt total — and shown on their own, since nobody
+        // was billed for them.
+        var unassigned = (await db.UnassignedLineUsages
+                .GroupBy(u => u.Month)
+                .Select(g => new { Month = g.Key, Calls = g.Sum(u => u.TotalCost), List = g.Sum(u => u.ListCost) })
+                .ToListAsync())
+            .ToDictionary(u => u.Month);
         var invoices = (await db.MonthlyInvoices.ToListAsync()).ToDictionary(i => i.Month);
 
         // The days the call data spans, so a month it only partly covers is
@@ -65,12 +73,12 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
         }
 
         var fixedWithTax = settings.FixedMonthlyChargeWithTaxKes();
-        var rows = costs.Keys.Union(invoices.Keys).Where(IsMonth).OrderByDescending(m => m, StringComparer.Ordinal).Select(month =>
+        var rows = costs.Keys.Union(unassigned.Keys).Union(invoices.Keys).Where(IsMonth).OrderByDescending(m => m, StringComparer.Ordinal).Select(month =>
         {
             var first = DateTime.ParseExact(month, "yyyy-MM", CultureInfo.InvariantCulture);
             var daysInMonth = DateTime.DaysInMonth(first.Year, first.Month);
             var daysCovered = 0;
-            if (costs.ContainsKey(month))
+            if (costs.ContainsKey(month) || unassigned.ContainsKey(month))
             {
                 daysCovered = daysInMonth;
                 if (dataFrom is not null && dataTo is not null)
@@ -82,11 +90,13 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
             }
 
             var cost = costs.GetValueOrDefault(month);
-            var callsCost = Math.Round(cost?.Calls ?? 0, 2);
-            var listCost = Math.Round(cost?.List ?? 0, 2);
+            var pool = unassigned.GetValueOrDefault(month);
+            var unassignedCost = Math.Round(pool?.Calls ?? 0, 2);
+            var callsCost = Math.Round((cost?.Calls ?? 0) + unassignedCost, 2);
+            var listCost = Math.Round((cost?.List ?? 0) + (pool?.List ?? 0), 2);
             // No call costs for the month (an invoice entered ahead of the
             // billing run) -> nothing to rebuild a bill from yet.
-            double? rebuilt = cost is null ? null : Math.Round(callsCost + fixedWithTax, 2);
+            double? rebuilt = cost is null && pool is null ? null : Math.Round(callsCost + fixedWithTax, 2);
             var invoice = invoices.GetValueOrDefault(month);
             double? difference = invoice is null || rebuilt is null ? null : Math.Round(rebuilt.Value - invoice.InvoiceTotalKes, 2);
             return new
@@ -98,6 +108,7 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
                 calls_list_cost_kes = listCost,
                 discount_kes = Math.Round(listCost - callsCost, 2),
                 calls_cost_kes = callsCost,
+                unassigned_lines_cost_kes = unassignedCost,
                 fixed_charge_kes = fixedWithTax,
                 rebuilt_total_kes = rebuilt,
                 invoice_total_kes = invoice?.InvoiceTotalKes,

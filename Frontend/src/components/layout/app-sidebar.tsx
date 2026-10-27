@@ -44,11 +44,22 @@ export function AppSidebar() {
   const role = useSession((state) => state.user?.role) ?? "Employee";
   const ticketAccess = useTicketAccess().data?.data;
 
-  // Customer service tickets depend on the department, not the role, so
-  // this section is built from GET /tickets/me rather than NAV_SECTIONS.
+  // Tickets depend on the department, not the role, so this section is
+  // built from GET /tickets/me rather than NAV_SECTIONS. Anyone can raise
+  // a ticket; the desk's page is its ticket desk, everyone else's is
+  // "My tickets".
   const ticketItems = [
-    ...(ticketAccess?.on_desk || ticketAccess?.is_admin
-      ? [{ title: "Ticket desk", href: "/tickets", icon: Headset }]
+    ...(ticketAccess
+      ? [
+          {
+            title:
+              ticketAccess.on_desk || ticketAccess.is_admin
+                ? "Ticket desk"
+                : "My tickets",
+            href: "/tickets",
+            icon: Headset,
+          },
+        ]
       : []),
     ...(ticketAccess?.handles_tickets
       ? [{ title: "Team tickets", href: "/tickets/team", icon: Inbox }]
@@ -58,7 +69,7 @@ export function AppSidebar() {
     ticketItems.length > 0
       ? [
           NAV_SECTIONS[0],
-          { title: "Customer service", items: ticketItems },
+          { title: "Tickets", items: ticketItems },
           ...NAV_SECTIONS.slice(1),
         ]
       : NAV_SECTIONS;

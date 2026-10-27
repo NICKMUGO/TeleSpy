@@ -3,7 +3,7 @@
 
 Clusters employees by calling behavior and writes each employee's cluster
 to usage_profiles.cluster_label. Calling patterns shift slowly, so this is
-meant to run infrequently (e.g. every 3 months via cron/systemd timer),
+meant to run infrequently (every 3 months via cron — deploy/ml.crontab),
 unlike anomaly_detection which should run often.
 
 Run standalone:

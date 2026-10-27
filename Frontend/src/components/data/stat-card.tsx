@@ -43,11 +43,11 @@ export function StatCard({
   const DeltaIcon = delta?.direction === "down" ? ArrowDownRight : ArrowUpRight;
 
   return (
-    <div className="border-border-subtle bg-card flex flex-col gap-1.5 rounded-xl border px-4 py-3.5">
-      <span className="text-muted-foreground text-xs">{label}</span>
+    <div className="bg-card shadow-panel flex flex-col gap-1.5 rounded-xl px-5 py-4">
+      <span className="text-muted-foreground text-sm">{label}</span>
       <p
         className={cn(
-          "font-tabular text-xl leading-tight font-semibold",
+          "font-tabular text-xl leading-tight font-semibold break-words sm:text-2xl",
           TONE_CLASSES[tone],
         )}
       >

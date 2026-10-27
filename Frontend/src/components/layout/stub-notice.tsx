@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import { IconBadge } from "@/components/data/icon-badge";
 
 interface StubNoticeProps {
   icon: LucideIcon;
@@ -11,8 +12,8 @@ interface StubNoticeProps {
 // screens are wired to the mock/real API in later phases).
 export function StubNotice({ icon: Icon, children }: StubNoticeProps) {
   return (
-    <div className="border-border m-6 flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-12 text-center">
-      <Icon aria-hidden="true" className="text-muted-foreground size-8" />
+    <div className="m-4 flex flex-1 flex-col items-center justify-center gap-4 px-6 py-14 text-center sm:m-6">
+      <IconBadge icon={Icon} />
       <p className="text-muted-foreground max-w-sm text-sm">{children}</p>
     </div>
   );

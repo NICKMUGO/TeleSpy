@@ -96,7 +96,7 @@ public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerCon
         var trendMonths = months.Where(m => string.CompareOrdinal(m, month) <= 0).Take(OverviewTrendMonths).Reverse().ToList();
 
         var headcount = await db.Employees
-            .Where(e => e.DepartmentId != null && departmentIds.Contains(e.DepartmentId))
+            .Where(e => e.DepartmentId != null && departmentIds.Contains(e.DepartmentId) && e.RemovedAt == null)
             .GroupBy(e => e.DepartmentId!)
             .Select(g => new { DepartmentId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(g => g.DepartmentId, g => g.Count);
@@ -272,9 +272,29 @@ public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerCon
         }
         var data = await RequestBody.ReadJsonSilentAsync<Dictionary<string, JsonElement>>(Request);
         if (data.TryGetValue("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String &&
-            nameEl.GetString() is { Length: > 0 } nameVal)
+            nameEl.GetString()?.Trim() is { Length: > 0 } nameVal)
         {
-            dept.Name = nameVal.Trim();
+            if (await db.Departments.AnyAsync(d => d.DepartmentId != departmentId && d.Name.ToLower() == nameVal.ToLower()))
+            {
+                return StatusCode(409, new
+                {
+                    error_type = "duplicate_department_name",
+                    message = "Another department already has that name.",
+                    field = "name",
+                    hint = "Department names must be unique.",
+                    status = 409,
+                    path = Request.Path.Value,
+                    method = Request.Method,
+                    timestamp = NowIso(),
+                });
+            }
+            dept.Name = nameVal;
+        }
+        // Its people work the customer service ticket desk.
+        if (data.TryGetValue("handles_customer_service", out var deskEl) &&
+            deskEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            dept.HandlesCustomerService = deskEl.GetBoolean();
         }
         if (data.TryGetValue("cost_centre_code", out var codeEl))
         {

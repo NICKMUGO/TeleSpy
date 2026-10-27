@@ -159,7 +159,15 @@ MAIL_PASSWORD=
 MAIL_DEFAULT_SENDER=TeleSpy <no-reply@telespy.local>
 # true = emails are written to the log instead of being sent
 MAIL_SUPPRESS_SEND=true
+
+# The first Admin. While no active Admin exists, the API creates this account
+# on startup and emails it a set-password link; ignored after that.
+BOOTSTRAP_ADMIN_EMAIL=you@company.com
+BOOTSTRAP_ADMIN_NAME=System Administrator
 ```
+
+Variables already set in your shell override `.env`, so
+`DATABASE_URL=… dotnet run` points at another database without editing it.
 
 Optional settings and their defaults:
 
@@ -199,10 +207,17 @@ places a call in the dataset becomes an employee with a SIM allocation, and
 every call placed from one of those extensions becomes a usage event (calls
 coming in from outside numbers are not tracked). Departments, telco plans,
 names, and email addresses are not in the dataset, so those are generated: five
-departments, three telco plans, an admin, and a manager per department. It
-skips itself if any department already exists. The demo account credentials
-are defined at the top of `BackendDotNet/Seed.cs`. Never run the seed against
-a real environment.
+departments, three telco plans, and a manager per department. It skips itself
+if any department already exists. Never run the seed against a real
+environment.
+
+No real person or known password is seeded: every seeded account is a
+placeholder on an `@telespy.local` address with a random password nobody is
+told, so none of them can sign in. To get in, set `BOOTSTRAP_ADMIN_EMAIL` and
+start the API — it creates that Admin and emails a set-password link (with
+`MAIL_SUPPRESS_SEND=true` the link is printed in the API log). Lost or expired
+links: use "Forgot password?" on the sign-in page. The Admin then adds the
+real Managers and Employees.
 
 With `MAIL_SUPPRESS_SEND=true`, login codes are printed in the API log rather
 than emailed, so you can sign in locally without an SMTP server.
@@ -281,8 +296,9 @@ hides navigation a role cannot use, but only as a convenience.
 
 There is no self-registration: every account, whatever its role, is created
 by an Admin (Employees → Add employee), and the new employee sets their own
-password from the emailed link. Only an Admin can change who holds a SIM and
-its extension.
+password from the emailed link. A department has one Manager: making someone
+its Manager (on create or edit) makes the previous Manager an Employee. Only
+an Admin can change who holds a SIM and its extension.
 
 ## API overview
 
@@ -338,13 +354,14 @@ interactive exploration.
 ### Training jobs
 
 Each job is a standalone script, so each can be scheduled independently.
+The production schedule is in `deploy/ml.crontab`.
 
 | Job                    | Model                                 | Writes to           | Suggested schedule |
 | ---------------------- | ------------------------------------- | ------------------- | ------------------ |
 | `billing.py`           | Rule-based rating                     | `usage_summaries`   | Monthly            |
-| `anomaly_detection.py` | Isolation Forest                      | `anomaly_flags`     | Every 4 hours      |
+| `anomaly_detection.py` | Isolation Forest                      | `anomaly_flags`     | Every 24 hours     |
 | `usage_profiling.py`   | KMeans, 3 clusters                    | `usage_profiles`    | Every 3 months     |
-| `forecasting.py`       | Prophet, with a log-linear fallback   | `forecast_results`  | Monthly            |
+| `forecasting.py`       | Prophet, with a log-linear fallback   | `forecast_results`  | Every 3 months     |
 
 How each model is evaluated:
 

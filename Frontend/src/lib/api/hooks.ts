@@ -29,7 +29,17 @@ import {
   usageApi,
   type TicketScope,
 } from "@/lib/api/resources";
-import type { HandoverFields, TicketStatus } from "@/lib/api/types";
+import type {
+  AnomalyFlag,
+  ApiEnvelope,
+  Department,
+  HandoverFields,
+  Ticket,
+  TicketCategory,
+  TicketEvent,
+  TicketStatus,
+} from "@/lib/api/types";
+import { useSession } from "@/lib/auth/session-store";
 
 // One hook per read, one mutation per write — thin wrappers so screens
 // never import lib/api/resources.ts directly and every cache key lives in
@@ -69,6 +79,8 @@ export const queryKeys = {
     ["tickets", "list", scope, status] as const,
   ticket: (id: string) => ["tickets", "detail", id] as const,
   ticketStats: (month?: string) => ["tickets", "stats", month] as const,
+  ticketAssignees: (departmentId: string) =>
+    ["tickets", "assignees", departmentId] as const,
   ticketCategories: (includeInactive: boolean) =>
     ["tickets", "categories", includeInactive] as const,
 };
@@ -80,6 +92,30 @@ function invalidateLineHolders(queryClient: QueryClient) {
   queryClient.invalidateQueries({ queryKey: queryKeys.employees });
   queryClient.invalidateQueries({ queryKey: queryKeys.sims });
   queryClient.invalidateQueries({ queryKey: queryKeys.directory });
+}
+
+/** Instant feedback: apply a change to the cached data straight away, so
+ * the screen updates before the server answers. Returns the undo for when
+ * the server refuses — the screen then snaps back (and the caller shows the
+ * error). Only for simple actions the server almost never rejects. */
+async function patchCache<T>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  update: (old: T) => T,
+  exact = false,
+) {
+  await queryClient.cancelQueries({ queryKey, exact });
+  const before = queryClient.getQueriesData<T>({ queryKey, exact });
+  queryClient.setQueriesData<T>({ queryKey, exact }, (old) =>
+    old === undefined ? old : update(old),
+  );
+  return () =>
+    before.forEach(([key, data]) => queryClient.setQueryData(key, data));
+}
+
+/** Who "I" am in an optimistic ticket event. */
+function myName() {
+  return useSession.getState().user?.full_name ?? "You";
 }
 
 /** The name + extension directory behind the Ctrl+K search. Only fetched
@@ -185,8 +221,20 @@ export function useUpdateDepartment() {
       id: string;
       body: Parameters<typeof departmentsApi.update>[1];
     }) => departmentsApi.update(id, body),
+    onMutate: async ({ id, body }) => ({
+      undo: await patchCache<ApiEnvelope<Department[]>>(
+        queryClient,
+        queryKeys.departments,
+        (old) => ({
+          ...old,
+          data: old.data.map((d) => (d.id === id ? { ...d, ...body } : d)),
+        }),
+        true,
+      ),
+    }),
+    onError: (_error, _vars, context) => context?.undo(),
     // A rename or the desk switch also changes the ticket desk/queues.
-    onSuccess: () => {
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.departments });
       void queryClient.invalidateQueries({ queryKey: queryKeys.tickets });
     },
@@ -286,7 +334,22 @@ export function useResolveAnomaly() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: analyticsApi.resolveAnomaly,
-    onSuccess: () =>
+    onMutate: async (flagId: string) => ({
+      undo: await patchCache<ApiEnvelope<AnomalyFlag[]>>(
+        queryClient,
+        ["analytics", "anomalies"],
+        (old) => ({
+          ...old,
+          data: old.data.map((f) =>
+            f.id === flagId
+              ? { ...f, resolved: true, resolved_at: new Date().toISOString() }
+              : f,
+          ),
+        }),
+      ),
+    }),
+    onError: (_error, _id, context) => context?.undo(),
+    onSettled: () =>
       queryClient.invalidateQueries({ queryKey: ["analytics", "anomalies"] }),
   });
 }
@@ -548,6 +611,16 @@ export function useTicketStats(month?: string, enabled = true) {
   });
 }
 
+/** Who in a department a ticket can be sent to directly. */
+export function useTicketAssignees(departmentId: string) {
+  return useQuery({
+    queryKey: queryKeys.ticketAssignees(departmentId),
+    queryFn: () => ticketsApi.assignees(departmentId),
+    enabled: !!departmentId,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useTicketCategories(includeInactive = false) {
   return useQuery({
     queryKey: queryKeys.ticketCategories(includeInactive),
@@ -559,13 +632,49 @@ export function useTicketCategories(includeInactive = false) {
  * so each one refreshes everything ticket-shaped. */
 function useTicketMutation<TArgs, TResult>(
   mutationFn: (args: TArgs) => Promise<TResult>,
+  /** Optional instant change to the cache while the request runs. */
+  optimistic?: (queryClient: QueryClient, args: TArgs) => Promise<() => void>,
 ) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
+    onMutate: async (args: TArgs) => ({
+      undo: optimistic ? await optimistic(queryClient, args) : undefined,
+    }),
+    onError: (_error, _args, context) => context?.undo?.(),
     onSettled: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.tickets }),
   });
+}
+
+/** Instantly add an event to an open ticket (and change its fields). */
+function patchTicket(
+  queryClient: QueryClient,
+  id: string,
+  event: Pick<TicketEvent, "kind" | "body">,
+  fields: Partial<Ticket> = {},
+) {
+  const now = new Date().toISOString();
+  return patchCache<ApiEnvelope<Ticket>>(
+    queryClient,
+    queryKeys.ticket(id),
+    (old) => ({
+      ...old,
+      data: {
+        ...old.data,
+        ...fields,
+        events: [
+          ...(old.data.events ?? []),
+          {
+            ...event,
+            id: `pending-${now}`,
+            actor_name: myName(),
+            created_at: now,
+          },
+        ],
+      },
+    }),
+  );
 }
 
 export function useCreateTicket() {
@@ -573,12 +682,29 @@ export function useCreateTicket() {
 }
 
 export function useClaimTicket() {
-  return useTicketMutation((id: string) => ticketsApi.claim(id));
+  return useTicketMutation(
+    (id: string) => ticketsApi.claim(id),
+    (queryClient, id) =>
+      patchTicket(
+        queryClient,
+        id,
+        { kind: "claimed", body: null },
+        {
+          status: "in_progress",
+          claimed_by_id: useSession.getState().user?.id ?? null,
+          claimed_by_name: myName(),
+          claimed_at: new Date().toISOString(),
+        },
+      ),
+  );
 }
 
 export function useAddTicketNote() {
-  return useTicketMutation(({ id, body }: { id: string; body: string }) =>
-    ticketsApi.addNote(id, body),
+  return useTicketMutation(
+    ({ id, body }: { id: string; body: string }) =>
+      ticketsApi.addNote(id, body),
+    (queryClient, { id, body }) =>
+      patchTicket(queryClient, id, { kind: "note", body }),
   );
 }
 
@@ -619,5 +745,14 @@ export function useUpdateTicketCategory() {
       id: string;
       body: Parameters<typeof ticketsApi.updateCategory>[1];
     }) => ticketsApi.updateCategory(id, body),
+    (queryClient, { id, body }) =>
+      patchCache<ApiEnvelope<TicketCategory[]>>(
+        queryClient,
+        ["tickets", "categories"],
+        (old) => ({
+          ...old,
+          data: old.data.map((c) => (c.id === id ? { ...c, ...body } : c)),
+        }),
+      ),
   );
 }

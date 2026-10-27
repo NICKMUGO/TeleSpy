@@ -23,6 +23,13 @@ public class CreateSimRequest
 public class AllocateSimRequest
 {
     public string? EmployeeId { get; set; }
+    // Only for a SIM someone holds: "swap" or "remove" (see Handover). A
+    // removal also needs the reason and the Admin's step-up — password plus
+    // the code from POST /auth/step-up.
+    public string? DisplacedHolder { get; set; }
+    public string? RemovalReason { get; set; }
+    public string? Password { get; set; }
+    public string? Code { get; set; }
 }
 
 [ApiController]
@@ -30,7 +37,8 @@ public class SimsController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
     IAuditService audit,
-    IAllocationService allocationService) : ControllerBase
+    IAllocationService allocationService,
+    IStepUpService stepUp) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
     private static readonly HashSet<string> ValidLifecycleStates = ["active", "suspended", "decommissioned"];
@@ -244,9 +252,28 @@ public class SimsController(
         return Ok(new { data = sim.ToDict(viewer!) });
     }
 
-    /// <summary>Gives the SIM and its extension to an employee — the first
-    /// allocation of a free line, or a handover from whoever holds it now
-    /// (see AllocationService). Admin only.</summary>
+    /// <summary>Spend on lines nobody held — a SIM in the pool that was still
+    /// used — per extension per month, as the billing run found it
+    /// (ML/training/billing.py). Optional ?month=YYYY-MM. Admin only.</summary>
+    [HttpGet("/sims/unassigned-usage")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> UnassignedUsage()
+    {
+        var query = db.UnassignedLineUsages.AsQueryable();
+        var month = Request.Query["month"].ToString();
+        if (!string.IsNullOrEmpty(month)) query = query.Where(u => u.Month == month);
+        var rows = await query.OrderByDescending(u => u.Month).ThenBy(u => u.ExtensionCode).ToListAsync();
+        return Ok(new
+        {
+            data = rows.Select(r => r.ToDict()).ToList(),
+            meta = new { total_cost_kes = Math.Round(rows.Sum(r => r.TotalCost), 2) },
+        });
+    }
+
+    /// <summary>Gives the SIM and its extension to an employee — a free
+    /// line, or one someone holds, with displaced_holder saying whether
+    /// they swap lines or are removed (see AllocationService). Admin
+    /// only.</summary>
     [HttpPost("/sims/{simId}/allocate")]
     [RoleIdRequired("admin")]
     public async Task<IActionResult> Allocate(string simId)
@@ -298,7 +325,14 @@ public class SimsController(
             });
         }
 
-        var allocation = await allocationService.AllocateSimAsync(sim, employee, actor!);
+        var handover = Handover.Parse(data.DisplacedHolder, data.RemovalReason);
+        if (handover?.Choice == DisplacedHolder.Remove && sim.GetCurrentAllocation() is not null)
+        {
+            await stepUp.VerifyAsync(actor!, data.Password, data.Code);
+        }
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var allocation = await allocationService.AllocateSimAsync(sim, employee, actor!, handover);
+        await transaction.CommitAsync();
         return StatusCode(201, new { data = allocation.ToDict(), message = "SIM allocated." });
     }
 

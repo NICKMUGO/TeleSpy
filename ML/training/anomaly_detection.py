@@ -19,11 +19,11 @@ long or unusually expensive are flagged — never one that is merely short.
 How many are flagged: the model is asked for the most unusual
 CONTAMINATION share of paid calls (0.5%, a couple of dozen in a typical
 two months of traffic — a list a person can actually review), and a flag
-is only stored when its score clears MIN_ANOMALY_SCORE, so borderline
-calls are dropped rather than shown as low-severity noise. Of those, only
-the MAX_FLAGS (15) highest-scoring are kept.
+is only stored when its score reaches MIN_ANOMALY_SCORE — the UI's "high"
+severity — so medium and borderline calls are dropped rather than shown as
+noise. Of those, only the MAX_FLAGS (15) highest-scoring are kept.
 
-Safe to run frequently (e.g. every 4 hours via cron/systemd timer, unlike
+Safe to run frequently (every 24 hours via cron — deploy/ml.crontab, unlike
 usage_profiling and forecasting which change slowly). Each run refits on
 everything and brings the open flags in line with the new fit: new
 anomalies are added, an open flag the model no longer supports is removed,
@@ -80,12 +80,12 @@ from common import Backend, CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL, new_i
 
 CONTAMINATION = 0.005  # share of paid calls treated as anomalous: the most unusual 0.5%
 # A flag is stored only at or above this 0-1 anomaly score. 0.5 is the
-# model's own anomaly boundary, and the calls sitting right on it are the
-# borderline ones — indistinguishable from the next few hundred the model
-# left alone — so they are dropped rather than shown as low-severity
-# noise. The UI grades what is stored as medium (0.52+) or high (0.55+);
-# see Frontend/src/lib/anomaly-severity.ts.
-MIN_ANOMALY_SCORE = 0.52
+# model's own anomaly boundary, and the calls near it are borderline —
+# indistinguishable from the next few hundred the model left alone. Only
+# clearly anomalous calls are worth a reviewer's time, so the bar is the
+# UI's "high" severity (HIGH_SEVERITY_THRESHOLD in
+# Frontend/src/lib/anomaly-severity.ts): everything stored shows as high.
+MIN_ANOMALY_SCORE = 0.55
 # The most flags a run leaves standing: the highest-scoring calls that
 # clear every test above. A review list is only useful if someone can get
 # through it, so past this the weaker flags are dropped however much

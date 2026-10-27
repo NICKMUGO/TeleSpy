@@ -5,6 +5,7 @@
 // handling and its ensure_default_roles().
 using Microsoft.EntityFrameworkCore;
 using TeleSpy.Models;
+using TeleSpy.Services;
 
 namespace TeleSpy.Core;
 
@@ -131,6 +132,126 @@ public static class CallRateBootstrap
             // hasn't migrated yet. Move on; this runs again (and succeeds)
             // the next time the app boots after migrating.
             logger.LogWarning(exc, "Skipped default-call-rate bootstrap: `billing_settings`/`international_call_rates` tables not present yet. Run `dotnet ef database update`.");
+        }
+    }
+}
+
+public static class AdminBootstrap
+{
+    /// <summary>Solves "who creates the first Admin" without a hardcoded
+    /// account. While no active Admin exists, creates one for
+    /// BOOTSTRAP_ADMIN_EMAIL with a random, never-revealed password and
+    /// emails them a set-password link — the same way an Admin-created
+    /// account starts (EmployeesController.Post). Once any active Admin
+    /// exists this does nothing, so it is safe on every boot and never
+    /// touches an existing database's accounts. Lost the link? "Forgot
+    /// password?" on the sign-in page issues a new one.</summary>
+    public static async Task EnsureBootstrapAdminAsync(TeleSpyDbContext db, IPasswordResetService passwordReset, ILogger logger)
+    {
+        try
+        {
+            var adminRoleId = Constants.RoleSlugs[Role.Admin];
+            if (await db.Users.AnyAsync(u => u.RoleId == adminRoleId && u.IsActive)) return;
+
+            if (string.IsNullOrWhiteSpace(Config.BootstrapAdminEmail))
+            {
+                logger.LogWarning("No active Admin exists and BOOTSTRAP_ADMIN_EMAIL is not set — nobody can sign in to create accounts. " +
+                    "Set BOOTSTRAP_ADMIN_EMAIL in .env and restart.");
+                return;
+            }
+
+            string email;
+            try
+            {
+                email = Validators.RequireValidEmail(Config.BootstrapAdminEmail);
+            }
+            catch (ValidationFailed)
+            {
+                logger.LogWarning("BOOTSTRAP_ADMIN_EMAIL is not a valid email address — no Admin was created.");
+                return;
+            }
+            // Never take over or promote an existing account; that's an
+            // Admin decision, and there isn't one yet.
+            if (await db.Users.AnyAsync(u => u.Email == email))
+            {
+                logger.LogWarning("BOOTSTRAP_ADMIN_EMAIL {Email} already belongs to a non-Admin account — no Admin was created. " +
+                    "Use an address with no account yet.", email);
+                return;
+            }
+
+            var fullName = Config.BootstrapAdminName.Trim();
+            if (fullName.Length == 0 || await TeleSpy.Api.EmployeeNames.IsTakenAsync(db, fullName)) fullName = $"Administrator ({email})";
+            var staffNumber = "ADM-0001";
+            for (var n = 2; await db.Employees.AnyAsync(e => e.StaffNumber == staffNumber); n++) staffNumber = $"ADM-{n:D4}";
+
+            var employee = new Employee { FullName = fullName, StaffNumber = staffNumber };
+            db.Employees.Add(employee);
+            await db.SaveChangesAsync();
+            var user = new User
+            {
+                EmployeeId = employee.EmployeeId, Email = email, RoleId = adminRoleId,
+                IsActive = true, MustChangePassword = true,
+            };
+            user.SetPassword(Security.GenerateResetToken());
+            db.Users.Add(user);
+            await db.SaveChangesAsync();
+            db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
+            db.AuditLogs.Add(new AuditLog
+            {
+                Action = "admin_bootstrapped", Resource = "user", ResourceId = user.UserId,
+                Meta = new Dictionary<string, object?> { ["email"] = email },
+                OccuredAt = Clock.UtcNow(),
+            });
+            await db.SaveChangesAsync();
+
+            await passwordReset.IssuePasswordResetAsync(user, newAccount: true);
+            logger.LogInformation("Created the first Admin, {Email}; a set-password link has been emailed to them.", email);
+        }
+        catch (Exception exc)
+        {
+            // Same as the bootstraps above: tables not migrated yet.
+            logger.LogWarning(exc, "Skipped Admin bootstrap: run `dotnet ef database update` first.");
+        }
+    }
+}
+
+public static class TicketCategoryBootstrap
+{
+    // Starter categories for the customer service desk, each routed to a
+    // department by cost-centre code (stable across department renames).
+    private static readonly (string Name, string CostCentreCode)[] Defaults =
+    [
+        ("Flight rebooking", "OPS"),
+        ("Flight delay or cancellation", "OPS"),
+        ("Baggage", "OPS"),
+        ("Refund or payment", "FIN"),
+        ("Complaint about staff", "HR"),
+    ];
+
+    /// <summary>Adds the starter categories once, only while there are none
+    /// at all — after that they're the Admin's to rename, re-route or turn
+    /// off in Settings, and this never touches them again. A default whose
+    /// department doesn't exist is skipped.</summary>
+    public static async Task EnsureDefaultCategoriesAsync(TeleSpyDbContext db, ILogger logger)
+    {
+        try
+        {
+            if (await db.TicketCategories.AnyAsync()) return;
+            var departments = await db.Departments.Where(d => d.CostCentreCode != null)
+                .ToDictionaryAsync(d => d.CostCentreCode!, d => d.DepartmentId);
+            if (departments.Count == 0) return; // nothing to route to yet (unseeded database)
+            foreach (var (name, code) in Defaults)
+            {
+                if (departments.TryGetValue(code, out var departmentId))
+                {
+                    db.TicketCategories.Add(new TicketCategory { Name = name, DepartmentId = departmentId });
+                }
+            }
+            await db.SaveChangesAsync();
+        }
+        catch (Exception exc)
+        {
+            logger.LogWarning(exc, "Could not add the default ticket categories.");
         }
     }
 }

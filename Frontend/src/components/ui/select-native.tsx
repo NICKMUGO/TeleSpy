@@ -19,7 +19,7 @@ function SelectNative({
       <select
         data-slot="select-native"
         className={cn(
-          "border-border bg-background h-9 w-full appearance-none rounded-lg border ps-3 pe-8 text-sm outline-none",
+          "border-border bg-background h-9 w-full appearance-none rounded-lg border ps-3 pe-8 text-sm outline-none max-sm:h-11 max-sm:text-base",
           "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3",
           "disabled:cursor-not-allowed disabled:opacity-50",
           className,

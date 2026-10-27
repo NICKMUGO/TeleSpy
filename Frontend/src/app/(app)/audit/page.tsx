@@ -111,10 +111,7 @@ export default function AuditPage() {
 
   return (
     <>
-      <PageHeader
-        title="Audit log"
-        description="Every recorded action across the system — admin visibility only."
-      />
+      <PageHeader title="Audit log" />
       <div className="flex flex-wrap items-end gap-3 px-4 pt-4 sm:px-6">
         <div className="flex flex-col gap-1">
           <Label htmlFor="audit-from" className="text-muted-foreground">

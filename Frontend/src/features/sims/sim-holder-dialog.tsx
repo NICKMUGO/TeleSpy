@@ -14,6 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  useClosingDialog,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
@@ -51,6 +52,8 @@ export function SimHolderDialog({
   employees: Employee[];
   onClose: () => void;
 }) {
+  const dialog = useClosingDialog(onClose);
+  const close = dialog.close;
   const allocate = useAllocateSim();
   const unassign = useUnassignSim();
   const pending = allocate.isPending || unassign.isPending;
@@ -137,7 +140,7 @@ export function SimHolderDialog({
               : `${chosen?.full_name} now holds ${line}; ${holderName} was removed and HR was emailed.`,
         );
       }
-      onClose();
+      close();
     } catch (error) {
       const retry = stepUpError(error);
       if (retry) {
@@ -159,8 +162,11 @@ export function SimHolderDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
+    <Dialog open={dialog.open} onOpenChange={dialog.onOpenChange}>
+      <DialogContent
+        onExitComplete={dialog.onExitComplete}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md"
+      >
         <DialogHeader>
           <DialogTitle>{held ? "Change holder" : "Assign SIM"}</DialogTitle>
           <DialogDescription>
@@ -209,7 +215,7 @@ export function SimHolderDialog({
           ) : null}
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={close}>
               Cancel
             </Button>
             <Button
@@ -261,7 +267,7 @@ export function SimHolderDialog({
         error={ruleError}
         onClose={() => {
           setRuleError(null);
-          onClose();
+          close();
         }}
       />
     </Dialog>
