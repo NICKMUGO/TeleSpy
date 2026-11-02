@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Headset, Inbox } from "lucide-react";
+import { Gauge, Headset, Inbox } from "lucide-react";
 import { BrandMark } from "@/components/brand/brand-lockup";
 import {
   Sidebar,
@@ -47,7 +47,7 @@ export function AppSidebar() {
   // Tickets depend on the department, not the role, so this section is
   // built from GET /tickets/me rather than NAV_SECTIONS. Anyone can raise
   // a ticket; the desk's page is its ticket desk, everyone else's is
-  // "My tickets".
+  // "My tickets". The SLA report is the whole organisation's, for everyone.
   const ticketItems = [
     ...(ticketAccess
       ? [
@@ -63,6 +63,9 @@ export function AppSidebar() {
       : []),
     ...(ticketAccess?.handles_tickets
       ? [{ title: "Team tickets", href: "/tickets/team", icon: Inbox }]
+      : []),
+    ...(ticketAccess
+      ? [{ title: "SLA report", href: "/tickets/sla", icon: Gauge }]
       : []),
   ];
   const sections: NavSection[] =

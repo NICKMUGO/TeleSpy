@@ -9,6 +9,25 @@ const nextConfig: NextConfig = {
   // request to keep the repo free of AI-tooling fingerprints. Disabled at
   // the source this time so it stops coming back.
   agentRules: false,
+  async headers() {
+    return [
+      {
+        // The service worker must never be cached by the browser or a
+        // proxy, or an update to it would take days to reach people.
+        source: "/sw.js",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "no-cache, no-store, must-revalidate",
+          },
+          {
+            key: "Content-Type",
+            value: "application/javascript; charset=utf-8",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

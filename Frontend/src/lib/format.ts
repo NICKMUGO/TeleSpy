@@ -28,6 +28,16 @@ export function monthKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** 75 -> "1 h 15 min"; 1500 -> "1 d 1 h". For time taken and time left. */
+export function duration(minutes: number) {
+  const m = Math.abs(Math.round(minutes));
+  if (m < 60) return `${m} min`;
+  const hours = Math.floor(m / 60);
+  if (hours < 24) return m % 60 ? `${hours} h ${m % 60} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+
 /** "2026-08" -> "August 2026"; "2026-08" -> "Aug" with short=true. */
 export function monthLabel(key: string, short = false) {
   const [year, month] = key.split("-").map(Number);

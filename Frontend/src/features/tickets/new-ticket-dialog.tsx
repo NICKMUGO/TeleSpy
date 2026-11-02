@@ -22,14 +22,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { Textarea } from "@/components/ui/textarea";
+import { PRIORITY_LABELS } from "@/features/tickets/ticket-status";
 import { ApiError } from "@/lib/api/client";
 import {
   useCreateTicket,
   useDepartments,
+  useSlaTargets,
   useTicketAccess,
   useTicketAssignees,
   useTicketCategories,
 } from "@/lib/api/hooks";
+import type { TicketPriority } from "@/lib/api/types";
+import { dateTime, duration } from "@/lib/format";
 
 /** The "What is it about?" choice for a reason the raiser writes
  * themselves instead of a quick category. It's the default: most tickets
@@ -50,11 +54,22 @@ const EMPTY = {
   assigneeId: "",
   subject: "",
   description: "",
+  priority: "medium" as TicketPriority,
+  /** A datetime-local value; "" = the priority's SLA target. */
+  dueAt: "",
 };
+
+/** "2026-11-02T14:30" for a datetime-local input, in the browser's time. */
+function localInputValue(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 
 /** Raising a ticket: who the customer is (the desk always; anyone else only
  * if it's for a customer), what it's about (a quick category, which picks
- * the department, or their own reason), who gets it, and what's needed. */
+ * the department, or their own reason), who gets it, what's needed, and
+ * how urgent it is — the priority sets the SLA deadline, unless the raiser
+ * gives it one of their own. */
 export function NewTicketDialog({
   open,
   onOpenChange,
@@ -77,6 +92,7 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
   const categories = useTicketCategories();
   const departments = useDepartments();
   const onDesk = useTicketAccess().data?.data.on_desk ?? false;
+  const slaTargets = useSlaTargets().data?.data;
   const createTicket = useCreateTicket();
   const [form, setForm] = useState(EMPTY);
   const [fieldError, setFieldError] = useState<{
@@ -86,6 +102,14 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
 
   const set = (key: keyof typeof EMPTY) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  const targetHours = (p: TicketPriority) =>
+    slaTargets ? slaTargets[`${p}_hours`] : undefined;
+  const hours = targetHours(form.priority);
+  // Re-read on each render so the default deadline shown keeps up.
+  const now = new Date();
+  const defaultDue =
+    hours === undefined ? null : new Date(now.getTime() + hours * 3_600_000);
 
   const custom = form.categoryId === OTHER;
   const category = categories.data?.data.find((c) => c.id === form.categoryId);
@@ -129,6 +153,8 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
         assigned_to_user_id: form.assigneeId || undefined,
         subject: form.subject.trim(),
         description: form.description.trim(),
+        priority: form.priority,
+        due_at: form.dueAt ? new Date(form.dueAt).toISOString() : undefined,
       });
       toast.success(result.message ?? "Ticket raised.");
       onDone();
@@ -366,6 +392,60 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
             />
             {errorFor("description")}
           </div>
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-3">
+          <legend className="mb-1 text-sm font-medium">
+            Priority and deadline
+          </legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="ticket-priority">Priority</Label>
+              <SelectNative
+                id="ticket-priority"
+                value={form.priority}
+                onChange={(e) => set("priority")(e.target.value)}
+              >
+                {(Object.keys(PRIORITY_LABELS) as TicketPriority[]).map((p) => {
+                  const h = targetHours(p);
+                  return (
+                    <option key={p} value={p}>
+                      {PRIORITY_LABELS[p]}
+                      {h === undefined ? "" : ` · within ${duration(h * 60)}`}
+                    </option>
+                  );
+                })}
+              </SelectNative>
+              {errorFor("priority")}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="ticket-due">
+                Resolve by{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="ticket-due"
+                type="datetime-local"
+                value={form.dueAt}
+                min={localInputValue(now)}
+                onChange={(e) => set("dueAt")(e.target.value)}
+                aria-describedby="ticket-due-note"
+              />
+              {errorFor("due_at")}
+            </div>
+          </div>
+          <p
+            id="ticket-due-note"
+            className="text-muted-foreground -mt-1 text-xs"
+          >
+            {form.dueAt
+              ? `Your own deadline replaces the ${PRIORITY_LABELS[form.priority].toLowerCase()} priority SLA.`
+              : defaultDue
+                ? `SLA target: resolved by ${dateTime(defaultDue.toISOString())}. Set a time to give it your own deadline.`
+                : "The priority sets how long they have to resolve it."}
+          </p>
         </fieldset>
 
         <DialogFooter>

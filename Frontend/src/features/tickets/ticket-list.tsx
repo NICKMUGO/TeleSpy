@@ -3,12 +3,17 @@ import { Inbox, type LucideIcon } from "lucide-react";
 import { EmptyState } from "@/components/data/empty-state";
 import { ErrorBanner } from "@/components/data/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TicketStatusBadge } from "@/features/tickets/ticket-status";
+import {
+  PriorityBadge,
+  SlaBadge,
+  TicketStatusBadge,
+} from "@/features/tickets/ticket-status";
 import type { Ticket } from "@/lib/api/types";
 import { timeAgo } from "@/lib/format";
 
-/** Tickets as a scannable list: number, subject and customer on the left;
- * where it is and who has it on the right. Each row opens the ticket. */
+/** Tickets as a scannable list: priority, number, subject and customer on
+ * the left; where it is, who has it and the SLA on the right. Each row
+ * opens the ticket. */
 export function TicketList({
   tickets,
   isLoading,
@@ -59,6 +64,7 @@ export function TicketList({
           >
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <div className="flex items-center gap-2">
+                <PriorityBadge priority={ticket.priority} />
                 <span className="text-muted-foreground font-tabular text-xs">
                   {ticket.number}
                 </span>
@@ -76,7 +82,7 @@ export function TicketList({
                   .join(" · ")}
               </span>
             </div>
-            <div className="text-muted-foreground flex items-center gap-3 text-xs sm:justify-end">
+            <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:flex-nowrap sm:justify-end">
               <span className="truncate">
                 {perspective === "desk"
                   ? ticket.department_name
@@ -85,6 +91,7 @@ export function TicketList({
                     : `From ${ticket.raised_by_name ?? "the desk"}`}
               </span>
               <span className="shrink-0">{timeAgo(ticket.updated_at)}</span>
+              <SlaBadge ticket={ticket} />
               <TicketStatusBadge status={ticket.status} />
             </div>
           </Link>

@@ -22,10 +22,13 @@ import type {
   RemovalReason,
   RoleRecord,
   SimCard,
+  SlaReport,
+  SlaTargets,
   Ticket,
   TicketAccess,
   TicketAssignee,
   TicketCategory,
+  TicketPriority,
   TicketStats,
   TicketStatus,
   TutorialProgress,
@@ -470,6 +473,9 @@ export const ticketsApi = {
     department_id?: string;
     /** One person in the department; left out, the whole department. */
     assigned_to_user_id?: string;
+    priority?: TicketPriority;
+    /** ISO deadline instead of the priority's SLA target. */
+    due_at?: string;
   }) =>
     apiRequest<ApiEnvelope<Ticket> & { message?: string }>("/tickets", {
       method: "POST",
@@ -507,6 +513,14 @@ export const ticketsApi = {
       method: "POST",
       body,
     }),
+  slaTargets: () => apiRequest<ApiEnvelope<SlaTargets>>("/tickets/sla-targets"),
+  updateSlaTargets: (body: Partial<SlaTargets>) =>
+    apiRequest<ApiEnvelope<SlaTargets>>("/tickets/sla-targets", {
+      method: "PATCH",
+      body,
+    }),
+  slaReport: (month?: string) =>
+    apiRequest<ApiEnvelope<SlaReport>>("/tickets/sla", { query: { month } }),
   assignees: (departmentId: string) =>
     apiRequest<ApiEnvelope<TicketAssignee[]>>("/tickets/assignees", {
       query: { department_id: departmentId },

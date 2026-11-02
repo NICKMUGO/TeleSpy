@@ -10,6 +10,7 @@ import { LocalRateCard } from "@/features/billing/local-rate-card";
 import { InternationalRatesTable } from "@/features/billing/international-rates-table";
 import { DepartmentsCard } from "@/features/settings/departments-card";
 import { NumberFormatCard } from "@/features/settings/number-format-card";
+import { SlaTargetsCard } from "@/features/settings/sla-targets-card";
 import { TicketCategoriesCard } from "@/features/settings/ticket-categories-card";
 import { useSession } from "@/lib/auth/session-store";
 
@@ -42,6 +43,7 @@ export default function SettingsPage() {
             <div className="flex flex-col gap-6">
               <DepartmentsCard />
               <TicketCategoriesCard />
+              <SlaTargetsCard />
             </div>
           </section>
         ) : null}

@@ -3,8 +3,10 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { AppProviders } from "@/components/providers/app-providers";
 import { PreferencesEffect } from "@/components/preferences-effect";
+import { ServiceWorkerRegistrar } from "@/components/pwa/install-app";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BRAND_COLORS } from "@/lib/brand-colors";
 import { noFlashScript } from "@/lib/no-flash-script";
 import "./globals.css";
 
@@ -24,15 +26,35 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 // viewport-fit=cover lets the tab bar and bottom sheets reach the screen's
-// rounded edge on iPhones, padded by env(safe-area-inset-bottom).
+// rounded edge on iPhones, padded by env(safe-area-inset-bottom). The theme
+// colour tints the installed app's title bar (and Android's status bar) to
+// match the page background.
 export const viewport: Viewport = {
   viewportFit: "cover",
+  themeColor: [
+    {
+      media: "(prefers-color-scheme: light)",
+      color: BRAND_COLORS.backgroundLight,
+    },
+    {
+      media: "(prefers-color-scheme: dark)",
+      color: BRAND_COLORS.backgroundDark,
+    },
+  ],
 };
 
 export const metadata: Metadata = {
   title: "TeleSpy",
   description:
     "SIM management and telecom cost accountability for Kenya Airways",
+  applicationName: "TeleSpy",
+  // Added to the iPhone/iPad Home Screen, it opens full screen under this
+  // name (the manifest covers every other platform).
+  appleWebApp: {
+    capable: true,
+    title: "TeleSpy",
+    statusBarStyle: "default",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -64,6 +86,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <AppProviders>
             <TooltipProvider delayDuration={300}>
               <PreferencesEffect />
+              <ServiceWorkerRegistrar />
               {children}
               <Toaster richColors closeButton />
             </TooltipProvider>

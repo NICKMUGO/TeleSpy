@@ -3,7 +3,6 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { makeGenie } from "@/lib/genie";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
@@ -55,7 +54,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0 fixed inset-0 isolate z-50 bg-black/25 duration-300 supports-backdrop-filter:backdrop-blur-xs dark:bg-black/50",
+        "max-sm:data-open:animate-in max-sm:data-open:fade-in-0 max-sm:data-closed:animate-out max-sm:data-closed:fade-out-0 fixed inset-0 isolate z-50 bg-black/25 duration-300 supports-backdrop-filter:backdrop-blur-xs dark:bg-black/50",
         className,
       )}
       {...props}
@@ -63,7 +62,7 @@ function DialogOverlay({
   );
 }
 
-/** A dialog on desktop; on phones, an iOS-style bottom sheet that slides
+/** A dialog on desktop (no animation, it just appears); on phones, an iOS-style bottom sheet that slides
  * up from the bottom edge and can be swiped down to close by its handle. */
 function DialogContent({
   className,
@@ -85,9 +84,7 @@ function DialogContent({
   // closed) and unmounts once its closing animation has played.
   const panelRef = React.useCallback((el: HTMLDivElement | null) => {
     if (!el) return;
-    const unaim = aimGenie(el);
     return () => {
-      unaim();
       if (el.dataset.state === "closed") exitRef.current?.();
     };
   }, []);
@@ -125,9 +122,8 @@ function DialogContent({
           "inset-x-0 bottom-0 max-h-[92dvh] overflow-y-auto rounded-t-2xl pb-[calc(1rem+env(safe-area-inset-bottom))]",
           "max-sm:data-open:animate-in max-sm:data-closed:animate-out max-sm:ease-spring max-sm:duration-300 max-sm:data-closed:duration-200",
           "max-sm:data-open:slide-in-from-bottom max-sm:data-closed:slide-out-to-bottom",
-          // Desktop: centred, genie-ing out of whatever opened it.
+          // Desktop: centred.
           "sm:inset-x-auto sm:top-1/2 sm:bottom-auto sm:left-1/2 sm:max-w-sm sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:pb-4",
-          "sm:data-closed:[animation:var(--genie-out)] sm:data-open:[animation:var(--genie-in)]",
           className,
         )}
         style={
@@ -176,19 +172,6 @@ function DialogContent({
       </DialogPrimitive.Content>
     </DialogPortal>
   );
-}
-
-/** Aims the genie at the button that opened *this* open, so the panel also
- * closes back into it. Called as the panel mounts, before the dialog moves
- * focus inside. Returns the cleanup. */
-function aimGenie(el: HTMLDivElement) {
-  const genie = makeGenie();
-  const sheet = document.createElement("style");
-  sheet.textContent = genie.css;
-  document.head.appendChild(sheet);
-  for (const [name, value] of Object.entries(genie.style))
-    el.style.setProperty(name, value);
-  return () => sheet.remove();
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {

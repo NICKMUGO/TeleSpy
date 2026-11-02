@@ -6,9 +6,14 @@ import { SectionCard } from "@/components/data/section-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TicketList } from "@/features/tickets/ticket-list";
 import { useTicketAccess, useTickets } from "@/lib/api/hooks";
+import type { Ticket } from "@/lib/api/types";
+
+const byDeadline = (tickets: Ticket[] | undefined) =>
+  tickets?.slice().sort((a, b) => a.due_at.localeCompare(b.due_at));
 
 /** A department's queue: tickets the desk sent it, waiting for someone to
- * take them, being worked, and recently resolved. */
+ * take them, being worked, and recently resolved. Open work is listed by
+ * SLA deadline, so whatever is due soonest is on top. */
 export default function TeamTicketsPage() {
   const access = useTicketAccess();
   const me = access.data?.data;
@@ -42,12 +47,12 @@ export default function TeamTicketsPage() {
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <SectionCard
           title={`Waiting for someone${waiting.data ? ` (${waiting.data.data.length})` : ""}`}
-          description="Oldest first is fairest — open one to take it."
+          description="Due soonest first — open one to take it."
           bodyClassName="px-0 pb-0"
           tourId="team-waiting"
         >
           <TicketList
-            tickets={waiting.data?.data.slice().reverse()}
+            tickets={byDeadline(waiting.data?.data)}
             isLoading={waiting.isLoading}
             error={waiting.error}
             onRetry={() => waiting.refetch()}
@@ -59,7 +64,7 @@ export default function TeamTicketsPage() {
         </SectionCard>
         <SectionCard title="In progress" bodyClassName="px-0 pb-0">
           <TicketList
-            tickets={working.data?.data}
+            tickets={byDeadline(working.data?.data)}
             isLoading={working.isLoading}
             error={working.error}
             onRetry={() => working.refetch()}

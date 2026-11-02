@@ -452,6 +452,12 @@ export interface ApiErrorBody {
 
 export type TicketStatus = "open" | "in_progress" | "returned" | "resolved";
 
+export type TicketPriority = "high" | "medium" | "low";
+
+/** Where a ticket stands against its SLA deadline. "paused" while it's
+ * returned to the raiser — the clock stops until it's sent again. */
+export type SlaStatus = "on_track" | "overdue" | "paused" | "met" | "missed";
+
 export interface TicketCategory {
   id: string;
   name: string;
@@ -494,6 +500,10 @@ export interface Ticket {
   department_id: string;
   department_name: string | null;
   status: TicketStatus;
+  priority: TicketPriority;
+  /** The SLA deadline. */
+  due_at: string;
+  sla_status: SlaStatus;
   raised_by_id: string;
   raised_by_name: string | null;
   claimed_by_id: string | null;
@@ -501,6 +511,8 @@ export interface Ticket {
   claimed_at: string | null;
   resolved_by_name: string | null;
   resolved_at: string | null;
+  /** Raised to resolved, null until resolved. */
+  resolution_minutes: number | null;
   resolution_note: string | null;
   return_count: number;
   created_at: string;
@@ -539,4 +551,46 @@ export interface TicketAgentStats {
 export interface TicketStats {
   month: string;
   agents: TicketAgentStats[];
+}
+
+/** GET /tickets/sla-targets — hours to resolve, per priority. */
+export interface SlaTargets {
+  high_hours: number;
+  medium_hours: number;
+  low_hours: number;
+}
+
+export interface SlaFigures {
+  resolved: number;
+  met: number;
+  missed: number;
+  /** Null when nothing was resolved. */
+  compliance_pct: number | null;
+  avg_resolution_minutes: number | null;
+}
+
+/** GET /tickets/sla — the organisation against the SLA for a month. */
+export interface SlaReport {
+  month: string;
+  targets: SlaTargets;
+  totals: SlaFigures & { overdue_open: number };
+  by_priority: (SlaFigures & {
+    priority: TicketPriority;
+    target_hours: number;
+    overdue_open: number;
+  })[];
+  by_department: (SlaFigures & {
+    department_id: string;
+    department_name: string | null;
+    overdue_open: number;
+  })[];
+  by_resolver: (SlaFigures & {
+    user_id: string;
+    name: string | null;
+    department_name: string | null;
+  })[];
+  /** Resolved that month — only tickets the caller can open. */
+  resolved: Ticket[];
+  /** Open past the deadline right now — only tickets the caller can open. */
+  overdue: Ticket[];
 }

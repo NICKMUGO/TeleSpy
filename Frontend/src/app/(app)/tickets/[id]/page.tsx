@@ -22,7 +22,13 @@ import { Label } from "@/components/ui/label";
 import { SelectNative } from "@/components/ui/select-native";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { TicketStatusBadge } from "@/features/tickets/ticket-status";
+import {
+  PRIORITY_LABELS,
+  PriorityBadge,
+  SlaBadge,
+  slaSummary,
+  TicketStatusBadge,
+} from "@/features/tickets/ticket-status";
 import { ApiError } from "@/lib/api/client";
 import {
   useAddTicketNote,
@@ -37,7 +43,7 @@ import {
 } from "@/lib/api/hooks";
 import type { Ticket, TicketEvent } from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session-store";
-import { dateTime } from "@/lib/format";
+import { dateTime, duration } from "@/lib/format";
 
 const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   raised: "raised the ticket",
@@ -93,7 +99,13 @@ export default function TicketPage() {
       <PageHeader
         title={t.subject}
         meta={`${t.number} · ${t.category_name} · raised by ${t.raised_by_name ?? "the desk"} ${dateTime(t.created_at)}`}
-        actions={<TicketStatusBadge status={t.status} />}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <PriorityBadge priority={t.priority} />
+            <SlaBadge ticket={t} />
+            <TicketStatusBadge status={t.status} />
+          </div>
+        }
       />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <Button asChild variant="ghost" size="sm" className="w-fit">
@@ -104,11 +116,15 @@ export default function TicketPage() {
         </Button>
 
         {t.status === "resolved" ? (
-          <Alert variant="success">
+          <Alert variant={t.sla_status === "met" ? "success" : "warning"}>
             <CircleCheckBig aria-hidden="true" />
             <AlertTitle>
               Resolved by {t.resolved_by_name}
               {t.resolved_at ? ` · ${dateTime(t.resolved_at)}` : ""}
+              {t.resolution_minutes !== null
+                ? ` · took ${duration(t.resolution_minutes)}`
+                : ""}
+              {t.sla_status === "met" ? " · within SLA" : " · missed SLA"}
             </AlertTitle>
             <AlertDescription className="whitespace-pre-wrap">
               {t.resolution_note}
@@ -189,6 +205,20 @@ export default function TicketPage() {
               {t.booking_reference ? (
                 <Detail label="Booking reference">
                   <span className="font-tabular">{t.booking_reference}</span>
+                </Detail>
+              ) : null}
+              <Detail label="Priority">{PRIORITY_LABELS[t.priority]}</Detail>
+              <Detail label="Resolve by (SLA)">
+                {dateTime(t.due_at)}
+                {t.status === "resolved" ? null : (
+                  <span className="text-muted-foreground block text-xs">
+                    {slaSummary(t)}
+                  </span>
+                )}
+              </Detail>
+              {t.resolution_minutes !== null ? (
+                <Detail label="Time to resolve">
+                  {duration(t.resolution_minutes)}
                 </Detail>
               ) : null}
               <Detail label="Handled by">
