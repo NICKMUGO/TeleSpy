@@ -231,6 +231,11 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.DepartmentId).HasColumnName("department_id").HasMaxLength(36).IsRequired();
             e.HasIndex(x => new { x.DepartmentId, x.Status });
             e.Property(x => x.Status).HasColumnName("status").HasMaxLength(20).IsRequired();
+            e.Property(x => x.Priority).HasColumnName("priority").HasMaxLength(10).IsRequired()
+                .HasDefaultValue(TicketPriority.Medium);
+            e.Property(x => x.DueAt).HasColumnName("due_at");
+            e.HasIndex(x => x.DueAt);
+            e.HasIndex(x => x.ResolvedAt);
             e.Property(x => x.RaisedByUserId).HasColumnName("raised_by_user_id").HasMaxLength(36).IsRequired();
             e.HasIndex(x => x.RaisedByUserId);
             e.Property(x => x.ClaimedByUserId).HasColumnName("claimed_by_user_id").HasMaxLength(36);
@@ -312,6 +317,9 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.ExciseRatePct).HasColumnName("excise_rate_pct").HasDefaultValue(BillingConstants.DefaultExciseRatePct);
             e.Property(x => x.VatRatePct).HasColumnName("vat_rate_pct").HasDefaultValue(BillingConstants.DefaultVatRatePct);
             e.Property(x => x.CompanyNumberPrefix).HasColumnName("company_number_prefix").HasMaxLength(BillingConstants.CompanyNumberPrefixMaxLength).HasDefaultValue(BillingConstants.DefaultCompanyNumberPrefix);
+            e.Property(x => x.SlaHighHours).HasColumnName("sla_high_hours").HasDefaultValue(BillingConstants.DefaultSlaHighHours);
+            e.Property(x => x.SlaMediumHours).HasColumnName("sla_medium_hours").HasDefaultValue(BillingConstants.DefaultSlaMediumHours);
+            e.Property(x => x.SlaLowHours).HasColumnName("sla_low_hours").HasDefaultValue(BillingConstants.DefaultSlaLowHours);
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 

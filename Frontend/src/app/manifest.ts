@@ -9,6 +9,11 @@ import { BRAND_COLORS } from "@/lib/brand-colors";
  * its own icon. iOS reads the name and display mode from here too, but its
  * icon from apple-icon.tsx.
  */
+// Bump when the icon artwork changes. Installed apps only re-download their
+// icons when this manifest changes, and the image addresses would otherwise
+// stay the same.
+const ICON_VERSION = 2;
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
@@ -24,19 +29,19 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: BRAND_COLORS.backgroundLight,
     icons: [
       {
-        src: "/icons/icon-192.png",
+        src: `/icons/icon-192.png?v=${ICON_VERSION}`,
         sizes: "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/icon-512.png",
+        src: `/icons/icon-512.png?v=${ICON_VERSION}`,
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/maskable-512.png",
+        src: `/icons/maskable-512.png?v=${ICON_VERSION}`,
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",
@@ -48,17 +53,23 @@ export default function manifest(): MetadataRoute.Manifest {
       {
         name: "Tickets",
         url: "/tickets",
-        icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
+        icons: [
+          { src: `/icons/icon-192.png?v=${ICON_VERSION}`, sizes: "192x192" },
+        ],
       },
       {
         name: "SLA report",
         url: "/tickets/sla",
-        icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
+        icons: [
+          { src: `/icons/icon-192.png?v=${ICON_VERSION}`, sizes: "192x192" },
+        ],
       },
       {
         name: "Dashboard",
         url: "/dashboard",
-        icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
+        icons: [
+          { src: `/icons/icon-192.png?v=${ICON_VERSION}`, sizes: "192x192" },
+        ],
       },
     ],
     categories: ["business", "productivity"],

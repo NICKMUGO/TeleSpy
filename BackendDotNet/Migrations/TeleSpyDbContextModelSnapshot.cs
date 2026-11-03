@@ -209,6 +209,24 @@ namespace TeleSpy.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("peak_start_hour");
 
+                    b.Property<int>("SlaHighHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(4)
+                        .HasColumnName("sla_high_hours");
+
+                    b.Property<int>("SlaLowHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(72)
+                        .HasColumnName("sla_low_hours");
+
+                    b.Property<int>("SlaMediumHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(24)
+                        .HasColumnName("sla_medium_hours");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("updated_at");
@@ -787,12 +805,24 @@ namespace TeleSpy.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("description");
 
+                    b.Property<DateTime>("DueAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("due_at");
+
                     b.Property<int>("Number")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasColumnName("number");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Number"));
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("medium")
+                        .HasColumnName("priority");
 
                     b.Property<string>("RaisedByUserId")
                         .IsRequired()
@@ -840,10 +870,14 @@ namespace TeleSpy.Migrations
 
                     b.HasIndex("ClaimedByUserId");
 
+                    b.HasIndex("DueAt");
+
                     b.HasIndex("Number")
                         .IsUnique();
 
                     b.HasIndex("RaisedByUserId");
+
+                    b.HasIndex("ResolvedAt");
 
                     b.HasIndex("ResolvedByUserId");
 

@@ -11,7 +11,7 @@
 //   no customer or billing data is ever stored here.
 //
 // Bump VERSION to throw every cached file away on the next visit.
-const VERSION = "v1";
+const VERSION = "v2";
 const STATIC_CACHE = `telespy-static-${VERSION}`;
 const OFFLINE_CACHE = `telespy-offline-${VERSION}`;
 const OFFLINE_URL = "/offline.html";

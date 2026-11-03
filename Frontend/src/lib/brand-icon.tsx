@@ -1,8 +1,14 @@
 import { ImageResponse } from "next/og";
 import { BRAND_COLORS } from "@/lib/brand-colors";
+import {
+  BRAND_HANDSET_PATH,
+  BRAND_WAVES_PATH,
+  BRAND_WAVES_STROKE,
+} from "@/lib/brand-glyph";
 
 /**
- * The app icon as a PNG: BrandMark's wing glyph, white on the red tile.
+ * The app icon as a PNG: BrandMark's ringing-phone glyph, white on the red
+ * tile.
  *
  * - "rounded": a rounded tile on transparent, for laptop docks, taskbars
  *   and the browser tab.
@@ -32,12 +38,12 @@ export function brandIcon(
       }}
     >
       <svg width={glyph} height={glyph} viewBox="0 0 24 24" fill="none">
+        <path d={BRAND_HANDSET_PATH} fill={BRAND_COLORS.onRed} />
         <path
-          d="M3 14.5 21 4 13.5 21l-2.4-6.1L3 14.5Z"
-          fill={BRAND_COLORS.onRed}
+          d={BRAND_WAVES_PATH}
           stroke={BRAND_COLORS.onRed}
-          strokeWidth={1.5}
-          strokeLinejoin="round"
+          strokeWidth={BRAND_WAVES_STROKE}
+          strokeLinecap="round"
         />
       </svg>
     </div>,

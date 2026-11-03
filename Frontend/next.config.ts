@@ -9,6 +9,16 @@ const nextConfig: NextConfig = {
   // request to keep the repo free of AI-tooling fingerprints. Disabled at
   // the source this time so it stops coming back.
   agentRules: false,
+  // Node 22.12+ loads a package's ESM build even from require() (the
+  // "module-sync" export condition), but Next's file tracing only copies
+  // @swc/helpers' CommonJS build into .next/standalone — so server.js died
+  // on start with "Cannot find module …/@swc/helpers/esm/…". Ship the ESM
+  // files too; harmless on older Node, which keeps using the CommonJS ones.
+  outputFileTracingIncludes: {
+    "/*": [
+      "./node_modules/.pnpm/@swc+helpers@*/node_modules/@swc/helpers/esm/**/*",
+    ],
+  },
   async headers() {
     return [
       {

@@ -149,6 +149,15 @@ public static class BillingConstants
     public const int CompanyNumberPrefixMinLength = 6;
     public const int CompanyNumberPrefixMaxLength = 9;
 
+    // Ticket SLA (service level agreement): how many hours a ticket of each
+    // priority has to be resolved in, on the clock (not business hours).
+    // Editable in Settings; the raiser can still give one ticket an earlier
+    // or later deadline of its own.
+    public const int DefaultSlaHighHours = 4;
+    public const int DefaultSlaMediumHours = 24;
+    public const int DefaultSlaLowHours = 72;
+    public const int SlaMaxHours = 24 * 30;
+
     // Per-country KES/minute, sourced from
     // ML/training/International_Calling_Rates.pdf (Safaricom international
     // rates). (CountryCode, CountryName-or-null, RateKesPerMinute). Only

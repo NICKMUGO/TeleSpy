@@ -1,13 +1,14 @@
+import {
+  BRAND_HANDSET_PATH,
+  BRAND_WAVES_PATH,
+  BRAND_WAVES_STROKE,
+} from "@/lib/brand-glyph";
 import { cn } from "@/lib/utils";
 
 /**
- * The app mark: a red tile carrying an abstract wing/tail glyph.
- *
- * Deliberately NOT a redraw of the Kenya Airways bird — that mark is a
- * registered trademark and can't be reproduced from a wireframe sketch.
- * This is a neutral stand-in in the same silhouette family, to be swapped
- * for the licensed asset once brand supplies it (same note as the
- * placeholder --color-kq-red in globals.css).
+ * The app mark: a red tile carrying a ringing phone handset, for the
+ * product's telecom focus. Deliberately not the Kenya Airways bird, which is
+ * a registered trademark.
  */
 export function BrandMark({ className }: { className?: string }) {
   return (
@@ -24,12 +25,12 @@ export function BrandMark({ className }: { className?: string }) {
         className="size-[60%]"
         role="presentation"
       >
+        <path d={BRAND_HANDSET_PATH} fill="currentColor" />
         <path
-          d="M3 14.5 21 4 13.5 21l-2.4-6.1L3 14.5Z"
-          fill="currentColor"
-          strokeLinejoin="round"
-          strokeWidth={1.5}
+          d={BRAND_WAVES_PATH}
           stroke="currentColor"
+          strokeWidth={BRAND_WAVES_STROKE}
+          strokeLinecap="round"
         />
       </svg>
     </span>

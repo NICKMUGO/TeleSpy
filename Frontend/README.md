@@ -57,8 +57,9 @@ Open http://localhost:3000.
 | Command                        | Does                                                             |
 | ------------------------------ | ---------------------------------------------------------------- |
 | `pnpm dev`                     | Start the dev server (Turbopack)                                 |
-| `pnpm build`                   | Production build (`output: "standalone"`)                        |
-| `pnpm start`                   | Run the production build                                         |
+| `pnpm build`                   | Production build (`output: "standalone"`), ready to deploy       |
+| `pnpm start`                   | Run the production build locally                                 |
+| `pnpm start:standalone`        | Run it the way production does (`.next/standalone/server.js`)    |
 | `pnpm lint`                    | ESLint (flat config), includes the no-raw-color-literal rule     |
 | `pnpm typecheck`               | `tsc --noEmit`                                                   |
 | `pnpm format` / `format:check` | Prettier (writes / checks)                                       |

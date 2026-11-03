@@ -372,7 +372,19 @@ public class BillingSettings
     // 0703083370. Not a billing figure, but this row is the organisation's
     // one settings record. Admin-editable via PATCH /settings/number-format.
     public string CompanyNumberPrefix { get; set; } = BillingConstants.DefaultCompanyNumberPrefix;
+    // Ticket SLA targets, in hours from raising to resolved, per priority.
+    // Admin-editable via PATCH /tickets/sla-targets.
+    public int SlaHighHours { get; set; } = BillingConstants.DefaultSlaHighHours;
+    public int SlaMediumHours { get; set; } = BillingConstants.DefaultSlaMediumHours;
+    public int SlaLowHours { get; set; } = BillingConstants.DefaultSlaLowHours;
     public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
+
+    public int SlaHoursFor(string priority) => priority switch
+    {
+        TicketPriority.High => SlaHighHours,
+        TicketPriority.Low => SlaLowHours,
+        _ => SlaMediumHours,
+    };
 
     /// <summary>Excise is charged on the amount, then VAT on amount + excise
     /// — 1.15 x 1.16 = 1.334 at the default rates.</summary>
@@ -784,6 +796,31 @@ public static class TicketStatus
     public static readonly string[] All = [Open, InProgress, Returned, Resolved];
 }
 
+/// <summary>How urgent a ticket is, which sets its SLA target.</summary>
+public static class TicketPriority
+{
+    public const string High = "high";
+    public const string Medium = "medium";
+    public const string Low = "low";
+
+    public static readonly string[] All = [High, Medium, Low];
+}
+
+/// <summary>Where a ticket stands against its deadline.</summary>
+public static class SlaStatus
+{
+    /// <summary>Still being worked, deadline not passed.</summary>
+    public const string OnTrack = "on_track";
+    /// <summary>Still being worked, deadline passed.</summary>
+    public const string Overdue = "overdue";
+    /// <summary>Back with the raiser: the clock stops until it's sent again.</summary>
+    public const string Paused = "paused";
+    /// <summary>Resolved by the deadline.</summary>
+    public const string Met = "met";
+    /// <summary>Resolved after the deadline.</summary>
+    public const string Missed = "missed";
+}
+
 /// <summary>What a ticket is about, and the department that handles it by
 /// default. Admin-managed in Settings.</summary>
 public class TicketCategory
@@ -826,6 +863,11 @@ public class Ticket
     public string? CustomReason { get; set; }
     public string DepartmentId { get; set; } = "";
     public string Status { get; set; } = TicketStatus.Open;
+    public string Priority { get; set; } = TicketPriority.Medium;
+    /// <summary>The SLA deadline: raised + the priority's target, unless the
+    /// raiser set one of their own. Pushed back by however long the ticket
+    /// sat returned with the raiser, since the team couldn't work it then.</summary>
+    public DateTime DueAt { get; set; }
 
     public string RaisedByUserId { get; set; } = "";
     public string? ClaimedByUserId { get; set; }
@@ -849,6 +891,17 @@ public class Ticket
 
     public static string FormatNumber(int number) => $"TKT-{number:D6}";
 
+    public string SlaStatusAt(DateTime now) => Status switch
+    {
+        TicketStatus.Resolved => ResolvedAt <= DueAt ? SlaStatus.Met : SlaStatus.Missed,
+        TicketStatus.Returned => SlaStatus.Paused,
+        _ => now > DueAt ? SlaStatus.Overdue : SlaStatus.OnTrack,
+    };
+
+    /// <summary>Minutes from raised to resolved, null until resolved.</summary>
+    public int? ResolutionMinutes() =>
+        ResolvedAt is null ? null : (int)Math.Round((ResolvedAt.Value - CreatedAt).TotalMinutes);
+
     public Dictionary<string, object?> ToDict(bool includeEvents = false)
     {
         var outDict = new Dictionary<string, object?>
@@ -867,6 +920,9 @@ public class Ticket
             ["department_id"] = DepartmentId,
             ["department_name"] = Department?.Name,
             ["status"] = Status,
+            ["priority"] = Priority,
+            ["due_at"] = UtcTime.Iso(DueAt),
+            ["sla_status"] = SlaStatusAt(Clock.UtcNow()),
             ["raised_by_id"] = RaisedByUserId,
             ["raised_by_name"] = RaisedBy?.Employee?.FullName ?? RaisedBy?.Email,
             ["claimed_by_id"] = ClaimedByUserId,
@@ -874,6 +930,7 @@ public class Ticket
             ["claimed_at"] = UtcTime.Iso(ClaimedAt),
             ["resolved_by_name"] = ResolvedBy?.Employee?.FullName ?? ResolvedBy?.Email,
             ["resolved_at"] = UtcTime.Iso(ResolvedAt),
+            ["resolution_minutes"] = ResolutionMinutes(),
             ["resolution_note"] = ResolutionNote,
             ["return_count"] = ReturnCount,
             ["created_at"] = UtcTime.Iso(CreatedAt),

@@ -7,6 +7,12 @@
 // it. That department claims it, and either resolves it with a note — a
 // successful escalation for the agent who raised it — or returns it to the
 // raiser to fix and send again. Calls never create tickets on their own.
+//
+// Like an incident, every ticket has a priority (high/medium/low) and an
+// SLA deadline: raised + that priority's target hours (Admin-set), or a
+// deadline the raiser gives it. Resolved by the deadline meets the SLA,
+// after it misses it; time spent returned to the raiser doesn't count.
+// GET /tickets/sla reports how the whole organisation is doing against it.
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -34,6 +40,18 @@ public class CreateTicketRequest
     /// <summary>One person in that department to send it to. Left out, the
     /// whole department's queue gets it.</summary>
     public string? AssignedToUserId { get; set; }
+    /// <summary>high | medium | low; medium when left out.</summary>
+    public string? Priority { get; set; }
+    /// <summary>An ISO time to have it resolved by, instead of the
+    /// priority's SLA target.</summary>
+    public string? DueAt { get; set; }
+}
+
+public class SlaTargetsRequest
+{
+    public int? HighHours { get; set; }
+    public int? MediumHours { get; set; }
+    public int? LowHours { get; set; }
 }
 
 public class TicketNoteRequest
@@ -161,6 +179,9 @@ public class TicketsController(
         return (ticket, access, null);
     }
 
+    /// <summary>For emails: Kenya is UTC+3 all year.</summary>
+    private static string NairobiTime(DateTime utc) => utc.AddHours(3).ToString("ddd d MMM yyyy, HH:mm") + " (Nairobi)";
+
     private static string? Clean(string? value, int maxLength)
     {
         var trimmed = value?.Trim();
@@ -263,6 +284,56 @@ public class TicketsController(
         await db.Entry(category).Reference(c => c.Department).LoadAsync();
         await audit.RecordAuditAsync("ticket_category_updated", "ticket_category", category.CategoryId);
         return Ok(new { data = category.ToDict() });
+    }
+
+    // --- SLA targets -------------------------------------------------------
+
+    private async Task<BillingSettings> SettingsAsync() =>
+        await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId)
+        ?? throw new InvalidOperationException("Company settings have not been initialised.");
+
+    private static Dictionary<string, object?> TargetsDict(BillingSettings settings) => new()
+    {
+        ["high_hours"] = settings.SlaHighHours,
+        ["medium_hours"] = settings.SlaMediumHours,
+        ["low_hours"] = settings.SlaLowHours,
+    };
+
+    /// <summary>Hours to resolve, per priority. Anyone can read them — the
+    /// new ticket form shows them.</summary>
+    [HttpGet("/tickets/sla-targets")]
+    public async Task<IActionResult> SlaTargets() => Ok(new { data = TargetsDict(await SettingsAsync()) });
+
+    [HttpPatch("/tickets/sla-targets")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> UpdateSlaTargets()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<SlaTargetsRequest>(Request);
+        foreach (var (field, value) in new[] { ("high_hours", data.HighHours), ("medium_hours", data.MediumHours), ("low_hours", data.LowHours) })
+        {
+            if (value is < 1 or > BillingConstants.SlaMaxHours)
+            {
+                return Error("validation_error", $"Targets are 1 to {BillingConstants.SlaMaxHours} hours.", 422, field);
+            }
+        }
+        var settings = await SettingsAsync();
+        var high = data.HighHours ?? settings.SlaHighHours;
+        var medium = data.MediumHours ?? settings.SlaMediumHours;
+        var low = data.LowHours ?? settings.SlaLowHours;
+        if (high > medium || medium > low)
+        {
+            return Error("validation_error", "A higher priority needs a shorter (or equal) target.", 422, "high_hours",
+                "Keep High ≤ Medium ≤ Low.");
+        }
+        settings.SlaHighHours = high;
+        settings.SlaMediumHours = medium;
+        settings.SlaLowHours = low;
+        settings.UpdatedAt = Clock.UtcNow();
+        await db.SaveChangesAsync();
+        // Only tickets raised from now on — a deadline already given stands.
+        await audit.RecordAuditAsync("ticket_sla_targets_updated", "billing_settings", settings.Id,
+            meta: new Dictionary<string, object?> { ["high"] = high, ["medium"] = medium, ["low"] = low });
+        return Ok(new { data = TargetsDict(settings) });
     }
 
     // --- Assigning ------------------------------------------------------------
@@ -383,6 +454,108 @@ public class TicketsController(
         return Ok(new { data = new { month = start.ToString("yyyy-MM"), agents = rows } });
     }
 
+    // --- SLA report ------------------------------------------------------------
+
+    private sealed record SlaRow(int Resolved, int Met, int Missed, double? CompliancePct, int? AvgResolutionMinutes);
+
+    private static SlaRow Summarise(IReadOnlyCollection<Ticket> resolved)
+    {
+        var met = resolved.Count(t => t.ResolvedAt <= t.DueAt);
+        return new SlaRow(
+            resolved.Count,
+            met,
+            resolved.Count - met,
+            resolved.Count == 0 ? null : Math.Round(100.0 * met / resolved.Count, 1),
+            resolved.Count == 0 ? null : (int)Math.Round(resolved.Average(t => t.ResolutionMinutes()!.Value)));
+    }
+
+    private static Dictionary<string, object?> RowDict(SlaRow row) => new()
+    {
+        ["resolved"] = row.Resolved,
+        ["met"] = row.Met,
+        ["missed"] = row.Missed,
+        ["compliance_pct"] = row.CompliancePct,
+        ["avg_resolution_minutes"] = row.AvgResolutionMinutes,
+    };
+
+    /// <summary>How the organisation did against the SLA for ?month=YYYY-MM
+    /// (default this month): tickets resolved that month, met vs missed,
+    /// overall, per priority, per handling department and per person who
+    /// resolved them, plus every ticket still open past its deadline. The
+    /// figures are everyone's to see; the ticket rows only the ones the
+    /// caller could open anyway.</summary>
+    [HttpGet("/tickets/sla")]
+    public async Task<IActionResult> SlaReport()
+    {
+        var access = await LoadAccessAsync();
+        var month = Request.Query["month"].ToString();
+        if (!DateTime.TryParseExact(month, "yyyy-MM", null, System.Globalization.DateTimeStyles.None, out var start))
+        {
+            var today = Clock.UtcNow();
+            start = new DateTime(today.Year, today.Month, 1);
+        }
+        var end = start.AddMonths(1);
+        var now = Clock.UtcNow();
+
+        var resolved = await TicketsWithIncludes()
+            .Where(t => t.Status == TicketStatus.Resolved && t.ResolvedAt >= start && t.ResolvedAt < end)
+            .ToListAsync();
+        var overdue = await TicketsWithIncludes()
+            .Where(t => (t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress) && t.DueAt < now)
+            .OrderBy(t => t.DueAt)
+            .ToListAsync();
+        var settings = await SettingsAsync();
+
+        var byPriority = TicketPriority.All.Select(p =>
+        {
+            var row = RowDict(Summarise(resolved.Where(t => t.Priority == p).ToList()));
+            row["priority"] = p;
+            row["target_hours"] = settings.SlaHoursFor(p);
+            row["overdue_open"] = overdue.Count(t => t.Priority == p);
+            return row;
+        });
+        var byDepartment = resolved.Select(t => t.DepartmentId).Concat(overdue.Select(t => t.DepartmentId)).Distinct()
+            .Select(id =>
+            {
+                var mine = resolved.Where(t => t.DepartmentId == id).ToList();
+                var row = RowDict(Summarise(mine));
+                row["department_id"] = id;
+                row["department_name"] = mine.Concat(overdue).First(t => t.DepartmentId == id).Department?.Name;
+                row["overdue_open"] = overdue.Count(t => t.DepartmentId == id);
+                return row;
+            })
+            .OrderBy(r => (double?)r["compliance_pct"] ?? 101).ThenBy(r => r["department_name"] as string);
+        var byResolver = resolved.Where(t => t.ResolvedByUserId is not null).GroupBy(t => t.ResolvedByUserId!)
+            .Select(g =>
+            {
+                var row = RowDict(Summarise(g.ToList()));
+                var first = g.First();
+                row["user_id"] = g.Key;
+                row["name"] = first.ResolvedBy?.Employee?.FullName ?? first.ResolvedBy?.Email;
+                row["department_name"] = first.Department?.Name;
+                return row;
+            })
+            .OrderByDescending(r => (int)r["resolved"]!).ThenBy(r => r["name"] as string);
+
+        var totals = RowDict(Summarise(resolved));
+        totals["overdue_open"] = overdue.Count;
+        return Ok(new
+        {
+            data = new
+            {
+                month = start.ToString("yyyy-MM"),
+                targets = TargetsDict(settings),
+                totals,
+                by_priority = byPriority,
+                by_department = byDepartment,
+                by_resolver = byResolver,
+                resolved = resolved.Where(t => CanSee(access, t)).OrderByDescending(t => t.ResolvedAt)
+                    .Take(MaxListed).Select(t => t.ToDict()),
+                overdue = overdue.Where(t => CanSee(access, t)).Take(MaxListed).Select(t => t.ToDict()),
+            },
+        });
+    }
+
     [HttpGet("/tickets/{ticketId}")]
     public async Task<IActionResult> Get(string ticketId)
     {
@@ -453,6 +626,32 @@ public class TicketsController(
             departmentId = data.DepartmentId;
         }
 
+        var priority = string.IsNullOrEmpty(data.Priority) ? TicketPriority.Medium : data.Priority.ToLowerInvariant();
+        if (!TicketPriority.All.Contains(priority))
+        {
+            return Error("validation_error", "Priority is high, medium or low.", 422, "priority");
+        }
+        var raisedAt = Clock.UtcNow();
+        DateTime dueAt;
+        if (!string.IsNullOrEmpty(data.DueAt))
+        {
+            if (!DateTime.TryParse(data.DueAt, null,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var parsed))
+            {
+                return Error("validation_error", "That deadline isn't a date and time.", 422, "due_at");
+            }
+            dueAt = DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified);
+            if (dueAt <= raisedAt.AddMinutes(5) || dueAt > raisedAt.AddHours(BillingConstants.SlaMaxHours))
+            {
+                return Error("validation_error", "Set a deadline from a few minutes to 30 days from now.", 422, "due_at");
+            }
+        }
+        else
+        {
+            dueAt = raisedAt.AddHours((await SettingsAsync()).SlaHoursFor(priority));
+        }
+
         User? assignee = null;
         if (!string.IsNullOrEmpty(data.AssignedToUserId))
         {
@@ -475,6 +674,10 @@ public class TicketsController(
             CategoryId = category?.CategoryId,
             CustomReason = customReason,
             DepartmentId = departmentId!,
+            Priority = priority,
+            CreatedAt = raisedAt,
+            UpdatedAt = raisedAt,
+            DueAt = dueAt,
             RaisedByUserId = access.Viewer.UserId,
         };
         db.Tickets.Add(ticket);
@@ -502,15 +705,18 @@ public class TicketsController(
                 ["department_id"] = departmentId,
                 ["category_id"] = category?.CategoryId,
                 ["assigned_to_user_id"] = assignee?.UserId,
+                ["priority"] = priority,
+                ["due_at"] = UtcTime.Iso(dueAt),
             });
 
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticket.TicketId);
         var number = Ticket.FormatNumber(saved.Number);
         if (assignee is not null)
         {
-            mail.SendMailSafe(assignee.Email, $"{number} assigned to you: {saved.Subject}",
+            mail.SendMailSafe(assignee.Email, $"{number} assigned to you ({saved.Priority} priority): {saved.Subject}",
                 $"{saved.RaisedBy?.Employee?.FullName ?? saved.RaisedBy?.Email} sent you a ticket.\n\n" +
-                $"About: {saved.Category?.Name ?? saved.CustomReason}\n\n{saved.Description}\n\n" +
+                $"About: {saved.Category?.Name ?? saved.CustomReason}\n" +
+                $"Priority: {saved.Priority}\nResolve by: {NairobiTime(saved.DueAt)}\n\n{saved.Description}\n\n" +
                 "Open it from Team tickets to work it.");
         }
         var sentTo = assignee is null
@@ -683,6 +889,9 @@ public class TicketsController(
             }
             ticket.DepartmentId = data.DepartmentId;
         }
+        // The SLA clock stood still while it was back with the raiser.
+        var returnedAt = ticket.Events.Where(e => e.Kind == "returned").Max(e => (DateTime?)e.CreatedAt);
+        if (returnedAt is not null) ticket.DueAt += Clock.UtcNow() - returnedAt.Value;
         ticket.Status = TicketStatus.Open;
         AddEvent(ticket, access.Viewer, "resent", Clean(data.Note, 4000));
         await db.SaveChangesAsync();

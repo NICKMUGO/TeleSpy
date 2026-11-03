@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   MoreHorizontal,
   Settings,
-  Smartphone,
   TriangleAlert,
   Users,
   type LucideIcon,
@@ -36,33 +35,29 @@ export function MobileTabBar() {
   // A team that's sent tickets lands on its queue; everyone else on the
   // tickets they raised (anyone can raise one). The other page stays under
   // More.
-  const tickets: Tab | null = access?.on_desk
-    ? { title: "Tickets", href: "/tickets", icon: Headset }
-    : access?.handles_tickets
+  // Always there, even before access has loaded, so the tab never goes
+  // missing.
+  const tickets: Tab =
+    access?.handles_tickets && !access.on_desk
       ? { title: "Tickets", href: "/tickets/team", icon: Inbox }
-      : access
-        ? { title: "Tickets", href: "/tickets", icon: Headset }
-        : null;
+      : { title: "Tickets", href: "/tickets", icon: Headset };
 
   const tabs: Tab[] =
     role === "Admin" || role === "Manager"
       ? [
           { title: "Home", href: "/dashboard", icon: LayoutDashboard },
-          { title: "SIMs", href: "/sims", icon: Smartphone },
+          // SIMs is under More.
+          tickets,
           { title: "Staff", href: "/employees", icon: Users },
-          // The customer service desk lives in its tickets; everyone else
-          // in the anomalies.
-          access?.on_desk && tickets
-            ? tickets
-            : {
-                title: "Alerts",
-                href: "/analytics/anomalies",
-                icon: TriangleAlert,
-              },
+          {
+            title: "Alerts",
+            href: "/analytics/anomalies",
+            icon: TriangleAlert,
+          },
         ]
       : [
           { title: "Home", href: "/dashboard", icon: LayoutDashboard },
-          ...(tickets ? [tickets] : []),
+          tickets,
           { title: "Settings", href: "/settings", icon: Settings },
         ];
 

@@ -148,6 +148,14 @@ build order, so switching `pnpm start` / Playwright's `webServer` over to
 the standalone entrypoint is deferred until there's an actual container
 build step that needs it.
 
+**Update (Nov 2026):** the copy is now part of the build. `pnpm build` runs
+`scripts/copy-standalone-assets.mjs` after `next build`, so
+`.next/standalone` always contains `public/` (the PWA's `sw.js`,
+`offline.html`) and `.next/static`, and runs as-is with
+`pnpm start:standalone` (`node .next/standalone/server.js`). A deploy only
+has to ship the `.next/standalone` folder. `pnpm start` stays `next start`
+for local use and Playwright.
+
 ## Phase 3 — App shell
 
 ### Repo relocated mid-build: `.claude/worktrees/frontend-scaffold` → `Frontend/worktrees/frontend-scaffold`
