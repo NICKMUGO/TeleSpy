@@ -111,8 +111,10 @@ jobs:
             cd /opt/telespy
             test -f .env || { echo "/opt/telespy/.env is missing - see deploy/README.md step 3"; exit 1; }
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            docker compose pull
-            docker compose --profile jobs pull ml
+            # A push rebuilds only what changed; an image this run didn't
+            # build (or one never pushed yet) keeps the copy already here.
+            docker compose pull --ignore-pull-failures
+            docker compose --profile jobs pull --ignore-pull-failures ml
             docker compose up -d --remove-orphans
             docker logout ghcr.io
             docker image prune -f
