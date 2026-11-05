@@ -56,7 +56,6 @@ public class AuthController(
     IJwtService jwtService,
     ICacheService cache,
     IMailService mail,
-    IAuditService audit,
     IViewerContext viewerContext,
     ICurrentUserAccessor currentUser,
     IPasswordResetService passwordReset,
@@ -74,12 +73,10 @@ public class AuthController(
     {
         var actor = await viewerContext.LoadedUserAsync();
         var expiresMinutes = await stepUp.IssueCodeAsync(actor!, "remove an employee from TeleSpy");
-        await audit.RecordAuditAsync("step_up_requested", "user", actor!.UserId,
-            actorId: actor.UserId, actorRole: actor.Role?.RoleName);
         return Ok(new
         {
             data = new { expires_minutes = expiresMinutes },
-            message = $"A confirmation code was sent to {actor.Email}.",
+            message = $"A confirmation code was sent to {actor!.Email}.",
         });
     }
 
@@ -153,7 +150,6 @@ public class AuthController(
                 user.FailedLoginAttempts = 0;
             }
             await db.SaveChangesAsync();
-            await audit.RecordAuditAsync("login_failed", "user", user.UserId, actorId: user.UserId, actorRole: user.Role?.RoleName);
             return StatusCode(401, new
             {
                 error_type = "invalid_credentials",
@@ -325,7 +321,6 @@ public class AuthController(
 
         var access = jwtService.CreateAccessToken(user.UserId, role, user.RoleId, departmentId, sessionId: sessionId);
         var refresh = jwtService.CreateRefreshToken(user.UserId, role, user.RoleId, departmentId, sessionId);
-        await audit.RecordAuditAsync("login_success", "user", user.UserId, actorId: user.UserId, actorRole: role);
 
         return Ok(new
         {
@@ -529,7 +524,6 @@ public class AuthController(
         record.Consumed = true;
         await db.SaveChangesAsync();
         await db.Entry(user).Reference(u => u.Role).LoadAsync();
-        await audit.RecordAuditAsync("password_reset", "user", user.UserId, actorId: user.UserId, actorRole: user.Role?.RoleName);
         return Ok(new { message = "Password reset. You can now sign in with your new password." });
     }
 
@@ -576,7 +570,6 @@ public class AuthController(
             });
         }
 
-        await audit.RecordAuditAsync("password_changed", "user", user.UserId);
         return Ok(new { message = "Password changed." });
     }
 

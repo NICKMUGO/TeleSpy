@@ -19,7 +19,7 @@ namespace TeleSpy.Api;
 /// Employee is intentionally excluded: this surfaces total_cost_kes, a field
 /// private from other employees.</summary>
 [ApiController]
-public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerContext, IAuditService audit) : ControllerBase
+public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerContext) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -85,7 +85,6 @@ public class AnalyticsController(TeleSpyDbContext db, IViewerContext viewerConte
         flag.ResolvedAt = Clock.UtcNow();
         flag.ResolvedByUserId = actor!.UserId;
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("anomaly_resolved", "anomaly_flag", flag.FlagId);
         return Ok(new { data = flag.ToDict(), message = "Anomaly flag resolved." });
     }
 

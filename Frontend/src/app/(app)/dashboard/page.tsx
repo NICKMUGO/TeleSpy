@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/data/error-banner";
 import {
   useAnomalies,
-  useAuditLog,
+  useCdrBatches,
   useDepartments,
   useEmployees,
   useMyUsage,
@@ -74,7 +74,7 @@ function OrgDashboard() {
   const usage = useUsage({ limit: 500 });
   // Admin-only endpoint — a Manager gets a 403 here, which is expected, so
   // the ingestion card is hidden rather than surfaced as a page error.
-  const audit = useAuditLog();
+  const batches = useCdrBatches({ limit: 1 });
 
   const loading =
     employees.isLoading ||
@@ -218,11 +218,7 @@ function OrgDashboard() {
     [anomalies.data],
   );
 
-  const lastIngest = useMemo(
-    () =>
-      (audit.data?.data ?? []).find((entry) => entry.action === "cdr_ingested"),
-    [audit.data],
-  );
+  const lastIngest = batches.data?.data[0];
 
   const spendDelta = percentDelta(totals.current, totals.previous);
 
@@ -487,18 +483,15 @@ function OrgDashboard() {
                 actionHref={{ label: "Open", href: "/ingestion" }}
               >
                 <p className="font-tabular truncate text-xs">
-                  {String(lastIngest.meta.source_file ?? "manual upload")}
+                  {lastIngest.source_file ?? "manual upload"}
                 </p>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-muted-foreground font-tabular text-xs">
-                    {Number(lastIngest.meta.ingested ?? 0).toLocaleString(
-                      "en-KE",
-                    )}{" "}
-                    rows
+                    {lastIngest.ingested.toLocaleString("en-KE")} rows
                   </span>
                   <Badge variant="secondary">
-                    {Number(lastIngest.meta.unattributed ?? 0) > 0
-                      ? `${lastIngest.meta.unattributed} unattributed`
+                    {lastIngest.unattributed > 0
+                      ? `${lastIngest.unattributed} unattributed`
                       : "Fully attributed"}
                   </Badge>
                 </div>

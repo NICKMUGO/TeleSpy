@@ -10,7 +10,7 @@ using TeleSpy.Services;
 namespace TeleSpy.Api;
 
 [ApiController]
-public class RolesController(TeleSpyDbContext db, IViewerContext viewerContext, IAuditService audit) : ControllerBase
+public class RolesController(TeleSpyDbContext db, IViewerContext viewerContext) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -67,8 +67,6 @@ public class RolesController(TeleSpyDbContext db, IViewerContext viewerContext, 
                 .Select(e => e.GetString()!).ToList();
         }
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("role_limit_updated", "role", role.RoleId,
-            meta: new Dictionary<string, object?> { ["call_limit_kshs"] = role.CallLimitKshs });
         return Ok(new { data = role.ToDict(), message = "Role updated." });
     }
 

@@ -7,7 +7,8 @@
 // Run:
 //     dotnet run                      # dev server
 //     dotnet ef database update       # apply migrations (mirrors `flask db upgrade`)
-//     dotnet run -- --seed            # load demo data from the CDR dataset (mirrors `python seed.py`)
+//     dotnet run -- --migrate         # apply pending migrations and exit (run by the container on deploy)
+//     dotnet run -- --seed          # load demo data from the CDR dataset (mirrors `python seed.py`)
 //     dotnet run -- --reencrypt       # move stored encrypted values to the current algorithm/key
 //
 // The first Admin is created on boot from BOOTSTRAP_ADMIN_EMAIL while no
@@ -31,6 +32,12 @@ using TeleSpy.Services;
 DotNetEnv.Env.NoClobber().Load(); // mirrors core/config.py's load_dotenv()
 Config.Validate();    // fail fast on missing secrets, mirrors Config.validate()
 
+if (args.Contains("--migrate"))
+{
+    await using var migrateDb = DatabaseConfig.CreateStandaloneContext();
+    await migrateDb.Database.MigrateAsync();
+    return;
+}
 if (args.Contains("--seed"))
 {
     await Seed.RunAsync();
@@ -57,7 +64,6 @@ builder.Services.AddSingleton<ICacheService, CacheService>();
 builder.Services.AddSingleton<MailQueue>();
 builder.Services.AddHostedService<MailSender>();
 builder.Services.AddScoped<IMailService, MailService>();
-builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<IAllocationService, AllocationService>();
 builder.Services.AddScoped<IStepUpService, StepUpService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();

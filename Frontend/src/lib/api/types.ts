@@ -387,14 +387,16 @@ export interface RoleRecord {
   call_limit_kshs: number | null;
 }
 
-export interface AuditLogEntry {
+/** One CDR upload, from GET /cdr/batches. */
+export interface CdrIngestBatch {
   id: string;
-  actor_user_id: string | null;
-  actor_role: string | null;
-  action: string;
-  resource: string | null;
-  resource_id: string | null;
-  meta: Record<string, unknown>;
+  uploaded_by_role: string | null;
+  source_file: string | null;
+  ingested: number;
+  attributed: number;
+  unattributed: number;
+  skipped_unanswered: number;
+  lines_created: number;
   occured_at: string;
 }
 

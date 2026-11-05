@@ -89,7 +89,6 @@ public class TicketCategoryRequest
 public class TicketsController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
-    IAuditService audit,
     IMailService mail) : ControllerBase
 {
     private const int MaxListed = 200;
@@ -249,7 +248,6 @@ public class TicketsController(
         db.TicketCategories.Add(category);
         await db.SaveChangesAsync();
         await db.Entry(category).Reference(c => c.Department).LoadAsync();
-        await audit.RecordAuditAsync("ticket_category_created", "ticket_category", category.CategoryId);
         return StatusCode(201, new { data = category.ToDict() });
     }
 
@@ -282,7 +280,6 @@ public class TicketsController(
         if (data.IsActive is not null) category.IsActive = data.IsActive.Value;
         await db.SaveChangesAsync();
         await db.Entry(category).Reference(c => c.Department).LoadAsync();
-        await audit.RecordAuditAsync("ticket_category_updated", "ticket_category", category.CategoryId);
         return Ok(new { data = category.ToDict() });
     }
 
@@ -331,8 +328,6 @@ public class TicketsController(
         settings.UpdatedAt = Clock.UtcNow();
         await db.SaveChangesAsync();
         // Only tickets raised from now on — a deadline already given stands.
-        await audit.RecordAuditAsync("ticket_sla_targets_updated", "billing_settings", settings.Id,
-            meta: new Dictionary<string, object?> { ["high"] = high, ["medium"] = medium, ["low"] = low });
         return Ok(new { data = TargetsDict(settings) });
     }
 
@@ -699,15 +694,6 @@ public class TicketsController(
             });
         }
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("ticket_raised", "ticket", ticket.TicketId,
-            meta: new Dictionary<string, object?>
-            {
-                ["department_id"] = departmentId,
-                ["category_id"] = category?.CategoryId,
-                ["assigned_to_user_id"] = assignee?.UserId,
-                ["priority"] = priority,
-                ["due_at"] = UtcTime.Iso(dueAt),
-            });
 
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticket.TicketId);
         var number = Ticket.FormatNumber(saved.Number);
@@ -802,7 +788,6 @@ public class TicketsController(
         ticket.ResolutionNote = note;
         AddEvent(ticket, access.Viewer, "resolved", note);
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("ticket_resolved", "ticket", ticket.TicketId);
         if (ticket.RaisedBy is not null)
         {
             mail.SendMailSafe(ticket.RaisedBy.Email, $"{Ticket.FormatNumber(ticket.Number)} resolved: {ticket.Subject}",
@@ -838,7 +823,6 @@ public class TicketsController(
         ticket.ReturnCount++;
         AddEvent(ticket, access.Viewer, "returned", reason);
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("ticket_returned", "ticket", ticket.TicketId);
         if (ticket.RaisedBy is not null)
         {
             mail.SendMailSafe(ticket.RaisedBy.Email, $"{Ticket.FormatNumber(ticket.Number)} returned: {ticket.Subject}",
@@ -895,8 +879,6 @@ public class TicketsController(
         ticket.Status = TicketStatus.Open;
         AddEvent(ticket, access.Viewer, "resent", Clean(data.Note, 4000));
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("ticket_resent", "ticket", ticket.TicketId,
-            meta: new Dictionary<string, object?> { ["department_id"] = ticket.DepartmentId });
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
         return Ok(new { data = saved.ToDict() });
     }

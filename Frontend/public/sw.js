@@ -7,8 +7,8 @@
 //   which is what makes the installed app open fast.
 // - Pages always come from the network, so nobody sees stale data; with
 //   no connection, the offline page shows instead of the browser's error.
-// - API calls (another origin) and anything else pass straight through:
-//   no customer or billing data is ever stored here.
+// - API calls (/api/…, or another origin) and anything else pass straight
+//   through: no customer or billing data is ever stored here.
 //
 // Bump VERSION to throw every cached file away on the next visit.
 const VERSION = "v2";
@@ -90,6 +90,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(pageOrOffline(request));

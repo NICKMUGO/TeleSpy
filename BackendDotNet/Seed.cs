@@ -200,21 +200,6 @@ public static class Seed
 
         await SeedUsageAsync(db, calls, allocationByExtension);
 
-        db.AuditLogs.Add(new AuditLog
-        {
-            Action = "system_seeded",
-            Resource = "database",
-            Meta = new Dictionary<string, object?>
-            {
-                ["departments"] = Departments.Length,
-                ["employees"] = extensions.Count,
-                ["plans"] = plans.Count,
-                ["usage_events"] = calls.Count,
-                ["skipped_not_from_extension"] = datasetCalls.Count - calls.Count,
-                ["dataset"] = Path.GetFileName(datasetPath),
-            },
-            OccuredAt = Clock.UtcNow(),
-        });
         await db.SaveChangesAsync();
 
         Console.WriteLine($"Seeded {Departments.Length} departments, {plans.Count} telco plans, " +
@@ -293,13 +278,6 @@ public static class Seed
             Console.WriteLine($"Added extension {extension}: {employee.FullName} ({staffNumber}, {dept.Name}).");
         }
 
-        db.AuditLogs.Add(new AuditLog
-        {
-            Action = "system_seed_topped_up",
-            Resource = "database",
-            Meta = new Dictionary<string, object?> { ["extensions"] = missing, ["dataset"] = Path.GetFileName(datasetPath) },
-            OccuredAt = Clock.UtcNow(),
-        });
         await db.SaveChangesAsync();
         Console.WriteLine($"Added {missing.Count} placeholder employee(s) for dataset extensions that had no holder.");
     }

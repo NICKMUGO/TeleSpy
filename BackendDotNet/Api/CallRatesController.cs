@@ -14,7 +14,7 @@ using TeleSpy.Services;
 namespace TeleSpy.Api;
 
 [ApiController]
-public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : ControllerBase
+public class CallRatesController(TeleSpyDbContext db) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -190,7 +190,6 @@ public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : Con
         settings.UpdatedAt = Clock.UtcNow();
 
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("local_call_rate_updated", "billing_settings", settings.Id, meta: settings.ToDict());
         return Ok(new { data = settings.ToDict(), message = "Local call rate updated." });
     }
 
@@ -230,7 +229,6 @@ public class CallRatesController(TeleSpyDbContext db, IAuditService audit) : Con
         rate.UpdatedAt = Clock.UtcNow();
 
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("international_call_rate_updated", "international_call_rate", rate.Id, meta: rate.ToDict());
         return Ok(new { data = rate.ToDict(), message = "International call rate updated." });
     }
 }

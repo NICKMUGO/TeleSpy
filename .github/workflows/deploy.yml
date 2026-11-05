@@ -1,0 +1,121 @@
+# One pipeline for the whole app, all on the Azure VM. On every push to
+# main it rebuilds only the images whose code changed, pushes them to GHCR
+# and rolls the server forward:
+#   Frontend/**       -> ghcr.io/nickmugo/telespy-web
+#   BackendDotNet/**  -> ghcr.io/nickmugo/telespy-api
+#   ML/**             -> ghcr.io/nickmugo/telespy-ml
+#   deploy/**         -> config only (compose file, Caddyfile, crontab)
+# "Run workflow" on the Actions tab rebuilds and redeploys everything.
+#
+# Needs (Settings -> Secrets and variables -> Actions):
+#   secrets   SERVER_HOST     the VM's DNS name (azure-provision.sh prints it)
+#             SERVER_SSH_KEY  the private key azure-provision.sh created
+#   variable  SITE_DOMAIN     the public hostname (usually = SERVER_HOST)
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.web }}
+      api: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.api }}
+      ml: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.ml }}
+      any: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'Frontend/**'
+            api:
+              - 'BackendDotNet/**'
+            ml:
+              - 'ML/**'
+            any:
+              - 'Frontend/**'
+              - 'BackendDotNet/**'
+              - 'ML/**'
+              - 'deploy/**'
+
+  deploy:
+    needs: changes
+    if: needs.changes.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build web image
+        if: needs.changes.outputs.web == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: Frontend
+          push: true
+          tags: ghcr.io/nickmugo/telespy-web:latest
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://${{ vars.SITE_DOMAIN }}/api
+            NEXT_PUBLIC_BUILD_LABEL=${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Build API image
+        if: needs.changes.outputs.api == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: BackendDotNet
+          push: true
+          tags: ghcr.io/nickmugo/telespy-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build ML image
+        if: needs.changes.outputs.ml == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ML
+          push: true
+          tags: ghcr.io/nickmugo/telespy-ml:latest
+          cache-from: type=gha,scope=ml
+          cache-to: type=gha,mode=max,scope=ml
+
+      - name: Roll out on the server
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          HOST: ${{ secrets.SERVER_HOST }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          install -m 600 /dev/null ~/key && echo "$SSH_KEY" > ~/key
+          ssh_opts="-i $HOME/key -o StrictHostKeyChecking=accept-new"
+          scp $ssh_opts deploy/docker-compose.yml deploy/Caddyfile deploy/ml.crontab "azureuser@$HOST:/opt/telespy/"
+          ssh $ssh_opts "azureuser@$HOST" GHCR_USER="$GHCR_USER" GHCR_TOKEN="$GHCR_TOKEN" bash -s <<'REMOTE'
+            set -e
+            cd /opt/telespy
+            test -f .env || { echo "/opt/telespy/.env is missing - see deploy/README.md step 3"; exit 1; }
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker compose pull
+            docker compose --profile jobs pull ml
+            docker compose up -d --remove-orphans
+            docker logout ghcr.io
+            docker image prune -f
+            crontab ml.crontab
+          REMOTE

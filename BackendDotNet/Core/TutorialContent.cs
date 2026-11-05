@@ -29,7 +29,6 @@ public static class TutorialContent
             new("anomalies", "Anomalies", "Review calls and employees flagged for unusual cost or usage.", "/analytics/anomalies", "anomalies-flagged"),
             new("forecasts", "Forecasts", "Projected telecom spend for upcoming periods.", "/analytics/forecasts", "forecasts-chart"),
             new("profiles", "Usage profiles", "Employees clustered by calling behavior.", "/analytics/profiles", "profiles-groups"),
-            new("audit", "Audit log", "A full, tamper-evident trail of sensitive actions across the system.", "/audit", "audit-table"),
         ],
         [Role.Manager] = [.. Common,
             new("employees", "Your team", "View the employees in your department.", "/employees", "employees-table"),

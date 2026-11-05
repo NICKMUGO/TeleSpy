@@ -288,7 +288,7 @@ function StyleguideContent() {
           <Button variant="outline">Cancel</Button>
           <Button variant="ghost">Dismiss</Button>
           <Button variant="destructive">Deallocate SIM</Button>
-          <Button variant="link">View audit log</Button>
+          <Button variant="link">View usage history</Button>
           <Button variant="default" disabled>
             Allocate SIM
           </Button>
@@ -360,7 +360,7 @@ function StyleguideContent() {
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="usage">Usage</TabsTrigger>
-            <TabsTrigger value="audit">Audit</TabsTrigger>
+            <TabsTrigger value="history">History</TabsTrigger>
           </TabsList>
           <TabsContent
             value="overview"
@@ -371,8 +371,11 @@ function StyleguideContent() {
           <TabsContent value="usage" className="text-muted-foreground text-sm">
             Usage content.
           </TabsContent>
-          <TabsContent value="audit" className="text-muted-foreground text-sm">
-            Audit content.
+          <TabsContent
+            value="history"
+            className="text-muted-foreground text-sm"
+          >
+            History content.
           </TabsContent>
         </Tabs>
       </section>

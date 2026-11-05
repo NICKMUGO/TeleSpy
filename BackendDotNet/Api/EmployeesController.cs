@@ -40,7 +40,6 @@ public class RemoveEmployeeRequest
 public class EmployeesController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
-    IAuditService audit,
     IAllocationService allocationService,
     IPasswordResetService passwordReset,
     IStepUpService stepUp,
@@ -335,15 +334,13 @@ public class EmployeesController(
         await transaction.CommitAsync();
 
         await passwordReset.IssuePasswordResetAsync(user, newAccount: true);
-        await audit.RecordAuditAsync("employee_created", "employee", employee.EmployeeId, actorId: actor!.UserId, actorRole: actor.Role?.RoleName);
-        await AuditManagerReplacementsAsync(employee, replacedManagers);
         foreach (var replaced in replacedManagers)
         {
             if (replaced.User is not null) await cache.ClearActiveSessionAsync(replaced.User.UserId);
         }
         if (makingAdmin)
         {
-            await AnnounceAdminHandoverAsync(employee, formerAdmins, actor);
+            await AnnounceAdminHandoverAsync(employee, formerAdmins, actor!);
         }
         return StatusCode(201, new
         {
@@ -690,11 +687,6 @@ public class EmployeesController(
             }
         }
 
-        // Field names only — "email" in the list is the record of the change;
-        // the addresses themselves stay out of the audit trail.
-        await audit.RecordAuditAsync("employee_updated", "employee", employee.EmployeeId,
-            meta: new Dictionary<string, object?> { ["fields"] = data.Keys.ToList() });
-        await AuditManagerReplacementsAsync(employee, replacedManagers);
         return Ok(new
         {
             data = employee.ToDict(actor),
@@ -734,7 +726,7 @@ public class EmployeesController(
     }
 
     /// <summary>After a handover commits: signs the former Admin out (their
-    /// token still says Admin), emails both people, and audits it.</summary>
+    /// token still says Admin), and emails both people.</summary>
     private async Task AnnounceAdminHandoverAsync(Employee newAdmin, List<User> formerAdmins, User actor)
     {
         foreach (var former in formerAdmins)
@@ -743,9 +735,6 @@ public class EmployeesController(
             mail.SendMailSafe(former.Email, "You are no longer the TeleSpy Admin",
                 $"The Admin role was handed over to {newAdmin.FullName}. Your account is now an Employee account; " +
                 "sign in again to continue.\n\nIf you didn't expect this, contact your HR manager.");
-            await audit.RecordAuditAsync("admin_handed_over", "employee", newAdmin.EmployeeId,
-                actorId: actor.UserId, actorRole: TeleSpy.Role.Admin,
-                meta: new Dictionary<string, object?> { ["from_employee_id"] = former.EmployeeId, ["to_employee_id"] = newAdmin.EmployeeId });
         }
         if (newAdmin.User is not null)
         {
@@ -771,15 +760,6 @@ public class EmployeesController(
         foreach (var e in previous) e.User!.RoleId = Constants.RoleSlugs[TeleSpy.Role.Employee];
         await db.SaveChangesAsync();
         return previous;
-    }
-
-    private async Task AuditManagerReplacementsAsync(Employee manager, List<Employee> replaced)
-    {
-        foreach (var e in replaced)
-        {
-            await audit.RecordAuditAsync("manager_replaced", "employee", e.EmployeeId,
-                meta: new Dictionary<string, object?> { ["department_id"] = manager.DepartmentId, ["new_manager_id"] = manager.EmployeeId });
-        }
     }
 
     /// <summary>Remove an employee who left the company. Their line goes back
@@ -861,7 +841,6 @@ public class EmployeesController(
         employee.User.IsActive = false;
         await db.SaveChangesAsync();
         await cache.ClearActiveSessionAsync(employee.User.UserId);
-        await audit.RecordAuditAsync("employee_deactivated", "employee", employee.EmployeeId);
         return NoContent();
     }
 }

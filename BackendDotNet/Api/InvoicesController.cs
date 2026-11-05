@@ -22,7 +22,6 @@ namespace TeleSpy.Api;
 public class InvoicesController(
     TeleSpyDbContext db,
     IMailService mail,
-    IAuditService audit,
     IViewerContext viewerContext,
     INotificationService notifications) : ControllerBase
 {
@@ -79,9 +78,6 @@ public class InvoicesController(
             mail.SendMailSafe(email, $"TeleSpy invoice for {summary.Month}: KES {overBy:N2} over your limit", body);
             sent++;
         }
-
-        await audit.RecordAuditAsync("invoices_sent", "usage_summary", actorId: null, actorRole: "admin",
-            meta: new Dictionary<string, object?> { ["month"] = month, ["sent"] = sent, ["over_limit"] = overLimit });
 
         return Ok(new
         {
@@ -147,9 +143,6 @@ public class InvoicesController(
             });
         }
 
-        await audit.RecordAuditAsync("over_limit_reported_to_hr", "usage_summary",
-            actorId: actor!.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?> { ["month"] = month, ["over_limit"] = lines.Count, ["recipients"] = recipients.Count });
         return Ok(new
         {
             data = new { month, over_limit = lines.Count, recipients = recipients.Count },

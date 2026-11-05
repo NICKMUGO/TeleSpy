@@ -16,7 +16,7 @@ public class CreateTelcoPlanRequest
 }
 
 [ApiController]
-public class TelcoPlansController(TeleSpyDbContext db, IAuditService audit) : ControllerBase
+public class TelcoPlansController(TeleSpyDbContext db) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -72,7 +72,6 @@ public class TelcoPlansController(TeleSpyDbContext db, IAuditService audit) : Co
         };
         db.TelcoPlans.Add(plan);
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("telco_plan_created", "telco_plan", plan.PlanId);
         return StatusCode(201, new { data = plan.ToDict(), message = "Created." });
     }
 }

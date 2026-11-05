@@ -157,7 +157,7 @@ public class MyUsageController(TeleSpyDbContext db, IViewerContext viewerContext
 /// shared prefix followed by the 3-digit extension, so with the prefix
 /// 0703083 the person on extension 370 is 0703083370. Admin only.</summary>
 [ApiController]
-public class NumberFormatController(TeleSpyDbContext db, IAuditService audit) : ControllerBase
+public class NumberFormatController(TeleSpyDbContext db) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -265,8 +265,6 @@ public class NumberFormatController(TeleSpyDbContext db, IAuditService audit) : 
             await db.SaveChangesAsync();
         }
 
-        await audit.RecordAuditAsync("number_format_updated", "billing_settings", settings.Id,
-            meta: new Dictionary<string, object?> { ["prefix"] = prefix, ["sims_renumbered"] = renumbered });
         var outDict = ToDict(settings);
         outDict["sims_renumbered"] = renumbered;
         return Ok(new

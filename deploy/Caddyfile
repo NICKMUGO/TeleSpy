@@ -1,0 +1,18 @@
+# The only public entry point on the Azure VM. One hostname serves the
+# whole app, with HTTPS from Let's Encrypt (Caddy gets and renews the
+# certificate itself):
+#   /api/*  -> the .NET API (the /api prefix is stripped before forwarding)
+#   else    -> the Next.js frontend
+# {$SITE_DOMAIN} is the VM's Azure DNS name (…cloudapp.azure.com) or your
+# own domain pointed at the VM — see deploy/README.md.
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	handle_path /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

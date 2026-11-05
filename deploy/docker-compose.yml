@@ -1,0 +1,87 @@
+# Production stack on the Azure VM, in /opt/telespy. Images are built in
+# GitHub Actions and pulled from GHCR; this file, the Caddyfile and
+# ml.crontab are copied here on every deploy. Secrets live in
+# /opt/telespy/.env (never in git) — start from deploy/.env.example.
+#
+# Sized for the Azure for Students free VM (Standard_B1s, 1 GB RAM + the
+# swap file cloud-init.yml creates): the .NET GC is told to stay small and
+# Postgres/Redis keep modest caches.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }   # keep container logs from filling the disk
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on: [api, web]
+    logging: *logging
+
+  web:
+    image: ghcr.io/nickmugo/telespy-web:latest
+    restart: unless-stopped
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
+    logging: *logging
+
+  api:
+    image: ghcr.io/nickmugo/telespy-api:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DOTNET_gcServer: "0"          # workstation GC: far less memory than server GC
+      DOTNET_GCConserveMemory: "5"
+    volumes:
+      - ./data:/app/ML/data:ro      # CDR dataset, only read by `--seed`
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    logging: *logging
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40"]
+    environment:
+      POSTGRES_DB: telespy
+      POSTGRES_USER: telespy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telespy -d telespy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    logging: *logging
+
+  ml:
+    image: ghcr.io/nickmugo/telespy-ml:latest
+    profiles: [jobs]             # never started by `up`; cron runs it (ml.crontab)
+    volumes:
+      - ./.env:/app/BackendDotNet/.env:ro   # training/common.py reads DATABASE_URL from here
+      - ./data:/app/ML/data
+    depends_on:
+      db: { condition: service_healthy }
+    logging: *logging
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

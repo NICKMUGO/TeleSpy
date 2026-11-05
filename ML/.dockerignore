@@ -1,0 +1,6 @@
+data/
+__pycache__/
+*.ipynb
+*.png
+*.pdf
+Dockerfile

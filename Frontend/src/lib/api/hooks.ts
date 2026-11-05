@@ -9,7 +9,6 @@ import {
 } from "@tanstack/react-query";
 import {
   analyticsApi,
-  auditApi,
   budgetsApi,
   callRatesApi,
   cdrApi,
@@ -67,7 +66,8 @@ export const queryKeys = {
   reconciliation: ["reconciliation"] as const,
   overLimit: (month?: string) => ["budgets", "over-limit", month] as const,
   roles: ["roles"] as const,
-  audit: (params?: Record<string, unknown>) => ["audit", params] as const,
+  cdrBatches: (params?: Record<string, unknown>) =>
+    ["cdr-batches", params] as const,
   tutorial: ["tutorial", "progress"] as const,
   localCallRate: ["call-rates", "local"] as const,
   internationalCallRates: ["call-rates", "international"] as const,
@@ -499,10 +499,10 @@ export function useUpdateInternationalCallRate() {
   });
 }
 
-export function useAuditLog(params?: Parameters<typeof auditApi.list>[0]) {
+export function useCdrBatches(params?: Parameters<typeof cdrApi.batches>[0]) {
   return useQuery({
-    queryKey: queryKeys.audit(params),
-    queryFn: () => auditApi.list(params),
+    queryKey: queryKeys.cdrBatches(params),
+    queryFn: () => cdrApi.batches(params),
     placeholderData: keepPreviousData,
   });
 }
@@ -519,7 +519,10 @@ export function useIngestCdr() {
     }) => cdrApi.ingest(records, sourceFile),
     // A batch sets up a SIM and a holder for any extension it's the first
     // to mention.
-    onSuccess: () => invalidateLineHolders(queryClient),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cdr-batches"] });
+      return invalidateLineHolders(queryClient);
+    },
   });
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { CloudUpload, FileSpreadsheet, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
@@ -18,11 +18,11 @@ import {
   type ParsedBatch,
 } from "@/features/ingestion/cdr-parser";
 import { ApiError } from "@/lib/api/client";
-import { useAuditLog, useIngestCdr } from "@/lib/api/hooks";
+import { useCdrBatches, useIngestCdr } from "@/lib/api/hooks";
 import { downloadCsv } from "@/lib/export-csv";
 import { monthKey, monthLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { AuditLogEntry } from "@/lib/api/types";
+import type { CdrIngestBatch } from "@/lib/api/types";
 
 const CARRIERS = ["Safaricom", "Airtel", "Telkom"];
 
@@ -55,19 +55,12 @@ export default function IngestionPage() {
     unattributed: number;
     lines_created: number;
   } | null>(null);
-  const [openBatch, setOpenBatch] = useState<AuditLogEntry | null>(null);
+  const [openBatch, setOpenBatch] = useState<CdrIngestBatch | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const ingest = useIngestCdr();
-  const audit = useAuditLog();
-
-  const batches = useMemo(
-    () =>
-      (audit.data?.data ?? []).filter(
-        (entry) => entry.action === "cdr_ingested",
-      ),
-    [audit.data],
-  );
+  const history = useCdrBatches();
+  const batches = history.data?.data ?? [];
 
   async function handleFile(file: File) {
     setResult(null);
@@ -103,7 +96,6 @@ export default function IngestionPage() {
           `New extension(s) ${response.data.new_extensions.join(", ")}: a SIM and a stand-in employee were created for each. Rename them under Employees.`,
         );
       }
-      audit.refetch();
     } catch (error) {
       setStage("idle");
       toast.error(
@@ -332,10 +324,10 @@ export default function IngestionPage() {
         {/* History */}
         <SectionCard
           title="Ingestion history"
-          description="Every cdr_ingested entry from the audit log"
+          description="Every CDR batch uploaded, newest first"
           bodyClassName="px-0 pb-0"
         >
-          {audit.isLoading ? (
+          {history.isLoading ? (
             <div className="flex flex-col gap-2 px-4 pb-4">
               <Skeleton className="h-8 w-full" />
               <Skeleton className="h-8 w-full" />
@@ -372,22 +364,18 @@ export default function IngestionPage() {
                         {entry.id.slice(0, 8).toUpperCase()}
                       </td>
                       <td className="font-tabular max-w-56 truncate px-4 py-2.5 text-xs">
-                        {String(entry.meta.source_file ?? "manual upload")}
+                        {entry.source_file ?? "manual upload"}
                       </td>
                       <td className="px-4 py-2.5">
-                        {entry.actor_role ?? "system"}
+                        {entry.uploaded_by_role ?? "system"}
                       </td>
                       <td className="font-tabular px-4 py-2.5 text-end">
-                        {Number(entry.meta.ingested ?? 0).toLocaleString(
-                          "en-KE",
-                        )}
+                        {entry.ingested.toLocaleString("en-KE")}
                       </td>
                       <td className="px-4 py-2.5 text-end">
-                        {Number(entry.meta.unattributed ?? 0) > 0 ? (
+                        {entry.unattributed > 0 ? (
                           <Badge variant="destructive">
-                            {Number(entry.meta.unattributed).toLocaleString(
-                              "en-KE",
-                            )}
+                            {entry.unattributed.toLocaleString("en-KE")}
                           </Badge>
                         ) : (
                           <span className="text-muted-foreground font-tabular">

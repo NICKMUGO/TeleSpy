@@ -9,8 +9,8 @@ describe("isNavItemVisible", () => {
   });
 
   it("is hidden from roles not in the item's allow-list", () => {
-    const auditItem = ALL_NAV_ITEMS.find((i) => i.href === "/audit")!;
-    expect(isNavItemVisible(auditItem, "Employee")).toBe(false);
-    expect(isNavItemVisible(auditItem, "Admin")).toBe(true);
+    const item = ALL_NAV_ITEMS.find((i) => i.href === "/reconciliation")!;
+    expect(isNavItemVisible(item, "Employee")).toBe(false);
+    expect(isNavItemVisible(item, "Admin")).toBe(true);
   });
 });

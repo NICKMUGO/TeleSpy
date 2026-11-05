@@ -65,57 +65,6 @@ namespace TeleSpy.Migrations
                     b.ToTable("anomaly_flags", (string)null);
                 });
 
-            modelBuilder.Entity("TeleSpy.Models.AuditLog", b =>
-                {
-                    b.Property<string>("AuditId")
-                        .HasMaxLength(36)
-                        .HasColumnType("character varying(36)")
-                        .HasColumnName("audit_id");
-
-                    b.Property<string>("Action")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("action");
-
-                    b.Property<string>("ActorRole")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("actor_role");
-
-                    b.Property<string>("ActorUserId")
-                        .HasMaxLength(36)
-                        .HasColumnType("character varying(36)")
-                        .HasColumnName("actor_user_id");
-
-                    b.Property<string>("Meta")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("meta");
-
-                    b.Property<DateTime>("OccuredAt")
-                        .HasColumnType("timestamp without time zone")
-                        .HasColumnName("occured_at");
-
-                    b.Property<string>("Resource")
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("resource");
-
-                    b.Property<string>("ResourceId")
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("resource_id");
-
-                    b.HasKey("AuditId");
-
-                    b.HasIndex("ActorUserId");
-
-                    b.HasIndex("OccuredAt");
-
-                    b.ToTable("audit_logs", (string)null);
-                });
-
             modelBuilder.Entity("TeleSpy.Models.BillingSettings", b =>
                 {
                     b.Property<string>("Id")
@@ -240,6 +189,59 @@ namespace TeleSpy.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("billing_settings", (string)null);
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.CdrIngestBatch", b =>
+                {
+                    b.Property<string>("BatchId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("batch_id");
+
+                    b.Property<int>("Attributed")
+                        .HasColumnType("integer")
+                        .HasColumnName("attributed");
+
+                    b.Property<int>("Ingested")
+                        .HasColumnType("integer")
+                        .HasColumnName("ingested");
+
+                    b.Property<int>("LinesCreated")
+                        .HasColumnType("integer")
+                        .HasColumnName("lines_created");
+
+                    b.Property<DateTime>("OccuredAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("occured_at");
+
+                    b.Property<int>("SkippedUnanswered")
+                        .HasColumnType("integer")
+                        .HasColumnName("skipped_unanswered");
+
+                    b.Property<string>("SourceFile")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("source_file");
+
+                    b.Property<int>("Unattributed")
+                        .HasColumnType("integer")
+                        .HasColumnName("unattributed");
+
+                    b.Property<string>("UploadedByRole")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("uploaded_by_role");
+
+                    b.Property<string>("UploadedByUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("uploaded_by_user_id");
+
+                    b.HasKey("BatchId");
+
+                    b.HasIndex("OccuredAt");
+
+                    b.ToTable("cdr_ingest_batches", (string)null);
                 });
 
             modelBuilder.Entity("TeleSpy.Models.Consent", b =>
@@ -1277,15 +1279,6 @@ namespace TeleSpy.Migrations
                     b.Navigation("Event");
                 });
 
-            modelBuilder.Entity("TeleSpy.Models.AuditLog", b =>
-                {
-                    b.HasOne("TeleSpy.Models.User", "Actor")
-                        .WithMany("AuditEntries")
-                        .HasForeignKey("ActorUserId");
-
-                    b.Navigation("Actor");
-                });
-
             modelBuilder.Entity("TeleSpy.Models.Employee", b =>
                 {
                     b.HasOne("TeleSpy.Models.Department", "Department")
@@ -1513,8 +1506,6 @@ namespace TeleSpy.Migrations
 
             modelBuilder.Entity("TeleSpy.Models.User", b =>
                 {
-                    b.Navigation("AuditEntries");
-
                     b.Navigation("PasswordHistory");
                 });
 #pragma warning restore 612, 618

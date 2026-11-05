@@ -38,7 +38,6 @@ public class CdrIngestRequest
 public class CdrController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
-    IAuditService audit,
     INotificationService notifications) : ControllerBase
 {
     [HttpPost("/cdr/ingest")]
@@ -140,17 +139,18 @@ public class CdrController(
             }
         }
 
-        await audit.RecordAuditAsync("cdr_ingested", "usage_event", actorId: actor!.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?>
-            {
-                ["ingested"] = ingested,
-                ["attributed"] = attributed,
-                ["unattributed"] = unattributed,
-                ["skipped_unanswered"] = skippedUnanswered,
-                ["lines_created"] = createdExtensions,
-                ["unassigned_line_calls"] = poolLineCalls.ToDictionary(p => p.Key, p => (object?)p.Value.Count),
-                ["source_file"] = sourceFile,
-            });
+        db.CdrIngestBatches.Add(new CdrIngestBatch
+        {
+            UploadedByUserId = actor!.UserId,
+            UploadedByRole = actor.Role?.RoleName,
+            SourceFile = sourceFile,
+            Ingested = ingested,
+            Attributed = attributed,
+            Unattributed = unattributed,
+            SkippedUnanswered = skippedUnanswered,
+            LinesCreated = createdExtensions.Count,
+        });
+        await db.SaveChangesAsync();
         await transaction.CommitAsync();
         await notifications.NotifyUnassignedLineCallsAsync(poolLineCalls.Select(p => new UnassignedLineCalls(
             p.Key, p.Value.Count, p.Value.Sum(c => c.Minutes), p.Value.Min(c => c.At), p.Value.Max(c => c.At))).ToList(), sourceFile);
@@ -260,6 +260,22 @@ public class CdrController(
         await db.SaveChangesAsync();
         return sim;
     }
+    /// <summary>GET /cdr/batches — past CDR uploads, newest first.</summary>
+    [HttpGet("/cdr/batches")]
+    [RoleIdRequired("admin")]
+    public async Task<IActionResult> Batches()
+    {
+        var (page, limit) = Pagination.PaginateArgs(Request);
+        var total = await db.CdrIngestBatches.CountAsync();
+        var rows = await db.CdrIngestBatches.OrderByDescending(b => b.OccuredAt)
+            .Skip((page - 1) * limit).Take(limit).ToListAsync();
+        return Ok(new
+        {
+            data = rows.Select(b => b.ToDict()).ToList(),
+            meta = Pagination.PaginateMeta(page, limit, total),
+        });
+    }
+
     [HttpGet("/usage")]
     [RoleIdRequired("admin", "manager")]
     public async Task<IActionResult> Get()

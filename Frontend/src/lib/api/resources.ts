@@ -6,7 +6,7 @@ import { apiRequest } from "@/lib/api/client";
 import type {
   AnomalyFlag,
   ApiEnvelope,
-  AuditLogEntry,
+  CdrIngestBatch,
   Department,
   DepartmentForecast,
   DepartmentsOverview,
@@ -373,18 +373,6 @@ export const rolesApi = {
     }),
 };
 
-// --- Audit --------------------------------------------------------
-export const auditApi = {
-  /** Newest first. `from` (inclusive) and `to` (exclusive) are ISO
-   * instants bounding when the action happened. */
-  list: (params?: {
-    page?: number;
-    limit?: number;
-    from?: string;
-    to?: string;
-  }) => apiRequest<ApiEnvelope<AuditLogEntry[]>>("/audit", { query: params }),
-};
-
 // --- Settings (self-service) --------------------------------------------------------
 export const settingsApi = {
   me: () =>
@@ -427,6 +415,11 @@ export const cdrApi = {
     >("/cdr/ingest", {
       method: "POST",
       body: { records, source_file: sourceFile },
+    }),
+  /** Past uploads, newest first. Admin only. */
+  batches: (params?: { page?: number; limit?: number }) =>
+    apiRequest<ApiEnvelope<CdrIngestBatch[]>>("/cdr/batches", {
+      query: params,
     }),
 };
 

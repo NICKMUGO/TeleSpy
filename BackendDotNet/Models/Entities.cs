@@ -218,7 +218,6 @@ public class User
     public Employee? Employee { get; set; }
     public Role? Role { get; set; }
     public List<PasswordHistory> PasswordHistory { get; set; } = [];
-    public List<AuditLog> AuditEntries { get; set; } = [];
 
     /// <summary>Write-only, mirroring the Python hybrid_property: there is no
     /// getter for the plaintext password, only this setter (hashes via
@@ -748,29 +747,32 @@ public class ForecastResult
     };
 }
 
-public class AuditLog
+/// <summary>One CDR upload: who sent it, from which file, and how it went.
+/// One small row per batch — the Ingestion page's history and the
+/// dashboard's "last ingest" read from here.</summary>
+public class CdrIngestBatch
 {
-    public string AuditId { get; set; } = Guid.NewGuid().ToString();
-    public string? ActorUserId { get; set; }
-    public string Action { get; set; } = "";
+    public string BatchId { get; set; } = Guid.NewGuid().ToString();
+    public string? UploadedByUserId { get; set; }
+    public string? UploadedByRole { get; set; }
+    public string? SourceFile { get; set; }
+    public int Ingested { get; set; }
+    public int Attributed { get; set; }
+    public int Unattributed { get; set; }
+    public int SkippedUnanswered { get; set; }
+    public int LinesCreated { get; set; }
     public DateTime OccuredAt { get; set; } = Clock.UtcNow();
-    // Extra columns beyond the ERD's 4, kept for a genuinely useful trail.
-    public string? ActorRole { get; set; }
-    public string? Resource { get; set; }
-    public string? ResourceId { get; set; }
-    public Dictionary<string, object?> Meta { get; set; } = [];
-
-    public User? Actor { get; set; }
 
     public Dictionary<string, object?> ToDict() => new()
     {
-        ["id"] = AuditId,
-        ["actor_user_id"] = ActorUserId,
-        ["actor_role"] = ActorRole,
-        ["action"] = Action,
-        ["resource"] = Resource,
-        ["resource_id"] = ResourceId,
-        ["meta"] = Meta,
+        ["id"] = BatchId,
+        ["uploaded_by_role"] = UploadedByRole,
+        ["source_file"] = SourceFile,
+        ["ingested"] = Ingested,
+        ["attributed"] = Attributed,
+        ["unattributed"] = Unattributed,
+        ["skipped_unanswered"] = SkippedUnanswered,
+        ["lines_created"] = LinesCreated,
         ["occured_at"] = UtcTime.Iso(OccuredAt),
     };
 }

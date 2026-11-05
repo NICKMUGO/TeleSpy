@@ -1,7 +1,7 @@
 // EF Core DbContext mirroring Backend/models/models.py's SQLAlchemy mapping:
 // same table names, snake_case columns, foreign keys, unique constraints and
 // indexes. JSON columns (Role.Permissions, AnomalyFlag.ContributingFeatures,
-// AuditLog.Meta, TutorialProgress.CompletedStepIds) are stored as a
+// TutorialProgress.CompletedStepIds) are stored as a
 // serialized string on every provider — the same DB-agnostic behavior
 // SQLAlchemy's db.JSON type gives Flask across SQLite/Postgres.
 using System.Text.Json;
@@ -34,7 +34,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<UnassignedLineUsage> UnassignedLineUsages => Set<UnassignedLineUsage>();
     public DbSet<MonthlyInvoice> MonthlyInvoices => Set<MonthlyInvoice>();
     public DbSet<ForecastResult> ForecastResults => Set<ForecastResult>();
-    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<CdrIngestBatch> CdrIngestBatches => Set<CdrIngestBatch>();
     public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketEvent> TicketEvents => Set<TicketEvent>();
@@ -150,7 +150,6 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             e.HasMany(x => x.PasswordHistory).WithOne(x => x.User).HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
-            e.HasMany(x => x.AuditEntries).WithOne(x => x.Actor).HasForeignKey(x => x.ActorUserId);
         });
 
         modelBuilder.Entity<PasswordHistory>(e =>
@@ -477,20 +476,22 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.GeneratedAt).HasColumnName("generated_at");
         });
 
-        modelBuilder.Entity<AuditLog>(e =>
+        modelBuilder.Entity<CdrIngestBatch>(e =>
         {
-            e.ToTable("audit_logs");
-            e.HasKey(x => x.AuditId);
-            e.Property(x => x.AuditId).HasColumnName("audit_id").HasMaxLength(36);
-            e.Property(x => x.ActorUserId).HasColumnName("actor_user_id").HasMaxLength(36);
-            e.Property(x => x.Action).HasColumnName("action").HasMaxLength(60).IsRequired();
+            e.ToTable("cdr_ingest_batches");
+            e.HasKey(x => x.BatchId);
+            e.Property(x => x.BatchId).HasColumnName("batch_id").HasMaxLength(36);
+            // No FK to users: a batch's history outlives its uploader's account.
+            e.Property(x => x.UploadedByUserId).HasColumnName("uploaded_by_user_id").HasMaxLength(36);
+            e.Property(x => x.UploadedByRole).HasColumnName("uploaded_by_role").HasMaxLength(32);
+            e.Property(x => x.SourceFile).HasColumnName("source_file").HasMaxLength(255);
+            e.Property(x => x.Ingested).HasColumnName("ingested");
+            e.Property(x => x.Attributed).HasColumnName("attributed");
+            e.Property(x => x.Unattributed).HasColumnName("unattributed");
+            e.Property(x => x.SkippedUnanswered).HasColumnName("skipped_unanswered");
+            e.Property(x => x.LinesCreated).HasColumnName("lines_created");
             e.Property(x => x.OccuredAt).HasColumnName("occured_at");
             e.HasIndex(x => x.OccuredAt);
-            e.Property(x => x.ActorRole).HasColumnName("actor_role").HasMaxLength(32);
-            e.Property(x => x.Resource).HasColumnName("resource").HasMaxLength(60);
-            e.Property(x => x.ResourceId).HasColumnName("resource_id").HasMaxLength(60);
-            e.Property(x => x.Meta).HasColumnName("meta")
-                .HasConversion(JsonDictConverter()).Metadata.SetValueComparer(JsonDictComparer());
         });
     }
 }

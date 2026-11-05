@@ -196,12 +196,6 @@ public static class AdminBootstrap
             db.Users.Add(user);
             await db.SaveChangesAsync();
             db.PasswordHistories.Add(new PasswordHistory { UserId = user.UserId, PasswordHashValue = user.PasswordHash, CreatedAt = Clock.UtcNow() });
-            db.AuditLogs.Add(new AuditLog
-            {
-                Action = "admin_bootstrapped", Resource = "user", ResourceId = user.UserId,
-                Meta = new Dictionary<string, object?> { ["email"] = email },
-                OccuredAt = Clock.UtcNow(),
-            });
             await db.SaveChangesAsync();
 
             await passwordReset.IssuePasswordResetAsync(user, newAccount: true);

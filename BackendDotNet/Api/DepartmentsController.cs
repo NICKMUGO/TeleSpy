@@ -18,7 +18,7 @@ public class CreateDepartmentRequest
 }
 
 [ApiController]
-public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerContext, IAuditService audit) : ControllerBase
+public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerContext) : ControllerBase
 {
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -247,7 +247,6 @@ public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerCon
         var dept = new Department { Name = name, CostCentreCode = data.CostCentreCode, BudgetCeiling = data.BudgetCeiling };
         db.Departments.Add(dept);
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("department_created", "department", dept.DepartmentId);
         return StatusCode(201, new { data = dept.ToDict(), message = "Created." });
     }
 
@@ -305,7 +304,6 @@ public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerCon
             dept.BudgetCeiling = budgetEl.ValueKind == JsonValueKind.Number ? budgetEl.GetDouble() : null;
         }
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("department_updated", "department", dept.DepartmentId);
         return Ok(new { data = dept.ToDict() });
     }
 

@@ -10,18 +10,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { downloadCsv } from "@/lib/export-csv";
-import type { AuditLogEntry } from "@/lib/api/types";
-
-function num(value: unknown) {
-  return Number(value ?? 0);
-}
+import type { CdrIngestBatch } from "@/lib/api/types";
 
 /**
  * Detail view for one ingestion batch.
  *
- * Everything here comes from the audit_logs row the ingest wrote
- * (action=cdr_ingested, meta={ingested, attributed, unattributed,
- * source_file}). There is no per-stage timing in that record, so this
+ * Everything here comes from the cdr_ingest_batches row the ingest wrote
+ * (counts plus source file). There is no per-stage timing in that record, so this
  * shows the outcome of each stage against the one real timestamp rather
  * than inventing a plausible-looking per-step clock.
  */
@@ -29,16 +24,14 @@ export function BatchDetailSheet({
   entry,
   onOpenChange,
 }: {
-  entry: AuditLogEntry | null;
+  entry: CdrIngestBatch | null;
   onOpenChange: (open: boolean) => void;
 }) {
   if (!entry) return null;
 
-  const ingested = num(entry.meta.ingested);
-  const attributed = num(entry.meta.attributed);
-  const unattributed = num(entry.meta.unattributed);
+  const { ingested, attributed, unattributed } = entry;
   const attributionRate = ingested ? (attributed / ingested) * 100 : 0;
-  const sourceFile = String(entry.meta.source_file ?? "manual upload");
+  const sourceFile = entry.source_file ?? "manual upload";
 
   const stages = [
     {
@@ -65,7 +58,7 @@ export function BatchDetailSheet({
             {entry.id.slice(0, 8).toUpperCase()}
           </SheetTitle>
           <SheetDescription>
-            {sourceFile} · uploaded by {entry.actor_role ?? "system"} ·{" "}
+            {sourceFile} · uploaded by {entry.uploaded_by_role ?? "system"} ·{" "}
             {new Date(entry.occured_at).toLocaleString("en-KE")}
           </SheetDescription>
         </SheetHeader>
@@ -138,7 +131,7 @@ export function BatchDetailSheet({
                   ["Ingested", ingested],
                   ["Attributed", attributed],
                   ["Unattributed", unattributed],
-                  ["Actor role", entry.actor_role ?? ""],
+                  ["Uploaded by", entry.uploaded_by_role ?? ""],
                   ["Occurred at", entry.occured_at],
                 ],
               )

@@ -25,6 +25,7 @@ employees by usage pattern, and forecast next month's departmental spend.
 - [Billing rules](#billing-rules)
 - [Security](#security)
 - [Testing and CI](#testing-and-ci)
+- [Deployment](#deployment)
 
 ## Features
 
@@ -45,7 +46,6 @@ employees by usage pattern, and forecast next month's departmental spend.
 - **Spend forecasting** — Prophet forecasts next-period spend per department.
 - **Budgets and invoices** — per-role monthly cost ceilings, over-limit
   reports, and monthly invoice emails.
-- **Audit log** — every sensitive change is recorded and visible to admins.
 - **Secure sign-in** — email OTP as a second factor, account lockout,
   password history, and one active session per user.
 
@@ -98,7 +98,7 @@ TeleSpy/
 │   ├── Api/                Controllers, one per domain
 │   ├── Core/               Config, JWT, middleware, role attributes, startup bootstrap
 │   ├── Models/             EF Core entities and DbContext
-│   ├── Services/           Allocation, audit, cache, mail, call classification, password reset
+│   ├── Services/           Allocation, cache, mail, call classification, password reset
 │   ├── Migrations/         EF Core migrations
 │   ├── Program.cs          Application entry point
 │   └── Seed.cs             Demo data generator
@@ -108,6 +108,7 @@ TeleSpy/
 │   ├── src/components/     Shared UI and layout
 │   ├── src/lib/            API client, auth session store, helpers
 │   └── tests/              Playwright end-to-end tests
+├── deploy/                 Azure VM deployment (compose, Caddy, cloud-init, cron)
 └── ML/
     ├── ingestion/          CDR fetch connectors (CUCM, Avaya, generic SFTP)
     ├── preprocessing/      CDR cleaning and normalisation
@@ -292,7 +293,6 @@ hides navigation a role cannot use, but only as a convenience.
 | Resolve anomalies                      |  Yes  |   No    |    No    |
 | Edit call rates and role cost limits   |  Yes  |   No    |    No    |
 | Send monthly invoices                  |  Yes  |   No    |    No    |
-| Read the audit log                     |  Yes  |   No    |    No    |
 
 There is no self-registration: every account, whatever its role, is created
 by an Admin (Employees → Add employee), and the new employee sets their own
@@ -313,13 +313,12 @@ All routes except the sign-in routes and `/health` require a bearer token.
 | Departments | `GET` `POST /departments`, `PATCH /departments/{id}`, `GET /departments/{id}/spend`                           |
 | SIMs        | `GET` `POST /sims`, `PATCH /sims/{id}`, `POST /sims/{id}/allocate`, `POST /sims/{id}/unassign`                |
 | Telco plans | `GET` `POST /telco-plans`                                                                                     |
-| Usage       | `POST /cdr/ingest`, `GET /usage`, `GET /me/usage`                                                             |
+| Usage       | `POST /cdr/ingest`, `GET /cdr/batches`, `GET /usage`, `GET /me/usage`                                         |
 | Analytics   | `GET /analytics/anomalies`, `POST /analytics/anomalies/{id}/resolve`, `GET /analytics/profiles`, `GET /analytics/usage-summary`, `GET /forecast/{departmentId}` |
 | Call rates  | `GET` `PATCH /call-rates/local`, `GET /call-rates/international`, `PATCH /call-rates/international/{countryCode}` |
 | Budgets     | `GET /roles`, `PATCH /roles/{id}`, `GET /budgets/over-limit`                                                  |
 | Reconciliation | `GET /reconciliation`, `PUT /reconciliation/{month}`                                                       |
 | Invoices    | `POST /invoices/send-monthly`                                                                                 |
-| Audit       | `GET /audit`                                                                                                  |
 | Reports     | `GET /reports/monthly?month=YYYY-MM` (the printable monthly report; Manager: own department only)          |
 | Numbers     | `GET` `PATCH /settings/number-format` (Admin: the company number prefix; extension = last 3 digits)          |
 | Account     | `GET` `PATCH /settings/me`, `GET` `POST /tutorial/progress`, `POST /tutorial/restart`, `POST /tutorial/dismiss` |
@@ -423,7 +422,6 @@ and sets it beside the telco's actual invoice total, which an admin enters.
   searchable.
 - **Consent** — users accept a versioned privacy notice aligned with Kenya's
   Data Protection Act.
-- **Audit trail** — sensitive actions are logged with who did them and when.
 
 ## Testing and CI
 
@@ -433,3 +431,10 @@ The frontend has unit tests (Vitest and Testing Library) and end-to-end tests
 `Frontend/.github/workflows/ci.yml` defines two jobs: lint, format check,
 contrast check, typecheck, unit tests, and build; then Playwright end-to-end
 tests.
+
+## Deployment
+
+Production runs on one Azure VM (the Azure for Students free B1s), with
+Docker Compose. Caddy serves the frontend at `/` and the API at `/api`
+over HTTPS. GitHub Actions builds the images and redeploys on every push
+to `main`. For the one-time setup, see [`deploy/README.md`](deploy/README.md).

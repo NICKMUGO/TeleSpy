@@ -100,7 +100,6 @@ public interface IAllocationService
 
 public class AllocationService(
     TeleSpyDbContext db,
-    IAuditService audit,
     ICacheService cache,
     INotificationService notifications) : IAllocationService
 {
@@ -151,19 +150,6 @@ public class AllocationService(
         db.SimAllocations.Add(allocation);
         await db.SaveChangesAsync();
 
-        await audit.RecordAuditAsync(
-            "sim_allocated", "sim_allocation", allocation.AllocationId,
-            actorId: actor.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?>
-            {
-                ["sim_id"] = sim.SimId,
-                ["employee_id"] = employee.EmployeeId,
-                ["extension"] = extension,
-                ["previous_employee_id"] = previous?.EmployeeId,
-                ["previous_holder_removed"] = previous is not null,
-                ["released_sim_ids"] = otherLines.Select(a => a.SimId).ToList(),
-            });
-
         return allocation;
     }
 
@@ -183,14 +169,6 @@ public class AllocationService(
             await db.SaveChangesAsync();
         }
 
-        await audit.RecordAuditAsync("sim_unassigned", "sim_allocation", current.AllocationId,
-            actorId: actor.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?>
-            {
-                ["sim_id"] = sim.SimId,
-                ["employee_id"] = current.EmployeeId,
-                ["extension"] = extension,
-            });
         return current;
     }
 
@@ -255,16 +233,6 @@ public class AllocationService(
         // Signed out everywhere, now — not when their token runs out.
         if (employee.User is not null) await cache.ClearActiveSessionAsync(employee.User.UserId);
 
-        await audit.RecordAuditAsync(
-            "employee_removed", "employee", employee.EmployeeId,
-            actorId: actor.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?>
-            {
-                ["reason"] = reason,
-                ["extension"] = releasedExtension,
-                ["released_sim_ids"] = openLines.Select(a => a.SimId).ToList(),
-                ["replaced_by_employee_id"] = replacement?.EmployeeId,
-            });
         await notifications.NotifyEmployeeRemovedAsync(employee, reason!, releasedExtension, replacement, actor);
     }
 
@@ -301,16 +269,6 @@ public class AllocationService(
         holder.ExtensionCode = moverCode;
         await db.SaveChangesAsync();
 
-        await audit.RecordAuditAsync(
-            "lines_swapped", "employee", mover.EmployeeId,
-            actorId: actor.UserId, actorRole: actor.Role?.RoleName,
-            meta: new Dictionary<string, object?>
-            {
-                ["employee_id"] = mover.EmployeeId,
-                ["employee_extension"] = holderCode,
-                ["other_employee_id"] = holder.EmployeeId,
-                ["other_employee_extension"] = moverCode,
-            });
         return moverAllocation;
     }
 

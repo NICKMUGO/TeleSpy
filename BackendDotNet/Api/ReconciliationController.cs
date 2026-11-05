@@ -15,7 +15,7 @@ using TeleSpy.Services;
 namespace TeleSpy.Api;
 
 [ApiController]
-public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) : ControllerBase
+public class ReconciliationController(TeleSpyDbContext db) : ControllerBase
 {
     private IActionResult Error(string errorType, string message, int status, string? field = null, string? hint = null)
     {
@@ -156,7 +156,6 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
         {
             if (invoice is not null) db.MonthlyInvoices.Remove(invoice);
             await db.SaveChangesAsync();
-            await audit.RecordAuditAsync("monthly_invoice_cleared", "monthly_invoice", month);
             return Ok(new { data = (object?)null, message = "Invoice total cleared." });
         }
         if (totalEl.ValueKind != JsonValueKind.Number || totalEl.GetDouble() <= 0)
@@ -177,8 +176,6 @@ public class ReconciliationController(TeleSpyDbContext db, IAuditService audit) 
         }
         invoice.UpdatedAt = Clock.UtcNow();
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("monthly_invoice_recorded", "monthly_invoice", month,
-            meta: new Dictionary<string, object?> { ["invoice_total_kes"] = invoice.InvoiceTotalKes, ["note"] = invoice.Note });
         return Ok(new
         {
             data = new { month, invoice_total_kes = invoice.InvoiceTotalKes, note = invoice.Note },

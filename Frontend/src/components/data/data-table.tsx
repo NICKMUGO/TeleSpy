@@ -69,7 +69,7 @@ interface DataTableProps<TData extends object> {
 }
 
 /** One table implementation for every screen (employees, SIMs, usage,
- * anomalies, audit, …): headless TanStack Table v9 for sort/filter state,
+ * anomalies, …): headless TanStack Table v9 for sort/filter state,
  * a real <table> for semantics, horizontal scroll contained to the table
  * itself (not the page) so this stays usable at phone width without
  * breaking layout — the one thing allowed to scroll sideways. */

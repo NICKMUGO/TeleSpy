@@ -36,7 +36,6 @@ public class AllocateSimRequest
 public class SimsController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
-    IAuditService audit,
     IAllocationService allocationService,
     IStepUpService stepUp) : ControllerBase
 {
@@ -176,7 +175,6 @@ public class SimsController(
         };
         db.SimCards.Add(sim);
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("sim_created", "sim_card", sim.SimId);
         return StatusCode(201, new { data = sim.ToDict(viewer!), message = "Created." });
     }
 
@@ -247,8 +245,6 @@ public class SimsController(
         }
 
         await db.SaveChangesAsync();
-        await audit.RecordAuditAsync("sim_updated", "sim_card", sim.SimId,
-            meta: new Dictionary<string, object?> { ["fields"] = data.Keys.ToList() });
         return Ok(new { data = sim.ToDict(viewer!) });
     }
 
