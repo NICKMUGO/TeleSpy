@@ -1,7 +1,7 @@
 #cloud-config
 # First-boot setup for the TeleSpy Azure VM (passed as --custom-data by
 # deploy/azure-provision.sh): Docker, the /opt/telespy app folder, ML job
-# logs (rotated weekly), swap for the 1 GB Standard_B1s, automatic security
+# logs (rotated weekly), swap for the 1 GB free-tier VM, automatic security
 # updates, and Nairobi time for deploy/ml.crontab.
 timezone: Africa/Nairobi
 package_update: true

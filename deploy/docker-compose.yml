@@ -3,7 +3,7 @@
 # ml.crontab are copied here on every deploy. Secrets live in
 # /opt/telespy/.env (never in git) — start from deploy/.env.example.
 #
-# Sized for the Azure for Students free VM (Standard_B1s, 1 GB RAM + the
+# Sized for the Azure for Students free VM (1 GB RAM + the
 # swap file cloud-init.yml creates): the .NET GC is told to stay small and
 # Postgres/Redis keep modest caches.
 x-logging: &logging

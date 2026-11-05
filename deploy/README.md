@@ -1,8 +1,13 @@
 # Deploying TeleSpy on Azure for Students
 
 Everything runs on one small Azure VM, inside the free allowance of an
-Azure for Students subscription. The free allowance is 750 hours a month
-of a Standard_B1s VM and two 64 GB P6 SSDs, for 12 months.
+Azure for Students subscription: 750 hours a month of a free-tier VM size
+(this one is Standard_B2ats_v2, 2 vCPU / 1 GB) and two 64 GB P6 SSDs, for
+12 months.
+
+**Live server:** `telespy-ke.centralindia.cloudapp.azure.com` (IP
+`4.213.4.170`, resource group `telespy-centralindia`), serving
+https://telespy.co.ke once its DNS points there.
 
 ```
 Internet ──443──> Caddy (HTTPS, Let's Encrypt)
@@ -31,7 +36,7 @@ az login                      # pick the Azure for Students subscription
 ```
 
 The script prints the server's DNS name, for example
-`telespy-12345.southafricanorth.cloudapp.azure.com`. It also prints the
+`telespy-ke.centralindia.cloudapp.azure.com`. It also prints the
 path of the SSH key it created, `~/.ssh/telespy_azure`.
 
 If Azure rejects the region with a policy error, set `LOCATION` to one of
@@ -44,8 +49,6 @@ Go to Settings → Secrets and variables → Actions on the repository:
 
 - **Secret** `SERVER_HOST`: the DNS name from step 1.
 - **Secret** `SERVER_SSH_KEY`: the contents of `~/.ssh/telespy_azure`, the private key.
-- **Variable** `SITE_DOMAIN`: the same DNS name. It is baked into the
-  frontend as `https://<SITE_DOMAIN>/api`.
 
 ## 3. Server secrets (once)
 
@@ -96,7 +99,7 @@ tail -f /var/log/telespy/anomaly.log      # ML job logs
 docker compose exec db pg_dump -U telespy telespy | gzip > backup-$(date +%F).sql.gz
 ```
 
-**Credit:** a B1s that runs all month uses about 730 of the 750 free hours,
+**Credit:** a free-tier VM that runs all month uses about 730 of the 750 free hours,
 so leave only one VM running. Check what's left under Cost Management in
 the Azure portal. If you stop the VM, use **Stop (deallocate)** in the
 portal or `az vm deallocate`, so the hours stop counting.

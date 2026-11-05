@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Creates the TeleSpy server on an Azure for Students subscription: one
-# Standard_B1s Ubuntu VM (in the free 750 hours/month for 12 months) on a
-# 64 GB P6 SSD (also in the free allowance), with a public DNS name and
+# Standard_B2ats_v2 Ubuntu VM (2 vCPU, 1 GB; one of the free-tier sizes,
+# 750 hours/month for 12 months) on a 64 GB P6 SSD (also in the free
+# allowance), with a public DNS name and
 # only ports 22, 80 and 443 open. cloud-init.yml installs Docker on first
 # boot. Run once, from your own machine:
 #
@@ -9,19 +10,22 @@
 #     ./deploy/azure-provision.sh
 #
 # Override any default with an environment variable, e.g.
-#     LOCATION=northeurope DNS_LABEL=telespy-ke ./deploy/azure-provision.sh
+#     LOCATION=italynorth VM_SIZE=Standard_B1s ./deploy/azure-provision.sh
 #
-# Azure for Students only allows some regions. If creation fails with
-# "RequestDisallowedByAzure" / a policy error, list the allowed ones with
+# Azure for Students only allows some regions (for this subscription:
+# centralindia, uaenorth, austriaeast, switzerlandnorth, italynorth), and a
+# free size can be out of capacity in one ("SkuNotAvailable": UAE North had
+# neither B1s nor B2ats_v2 on 2026-11-05). Try another region or
+# VM_SIZE=Standard_B1s. To list the allowed regions:
 #     az policy assignment list --query "[].parameters.listOfAllowedLocations.value" -o tsv
 # and set LOCATION to one of them.
 set -euo pipefail
 
-RESOURCE_GROUP=${RESOURCE_GROUP:-telespy-rg}
-LOCATION=${LOCATION:-southafricanorth}
+RESOURCE_GROUP=${RESOURCE_GROUP:-telespy-centralindia}
+LOCATION=${LOCATION:-centralindia}
 VM_NAME=${VM_NAME:-telespy-vm}
-VM_SIZE=${VM_SIZE:-Standard_B1s}
-DNS_LABEL=${DNS_LABEL:-telespy-$RANDOM}
+VM_SIZE=${VM_SIZE:-Standard_B2ats_v2}
+DNS_LABEL=${DNS_LABEL:-telespy-ke}
 ADMIN_USER=azureuser   # .github/workflows/deploy.yml connects as this user
 SSH_KEY=${SSH_KEY:-$HOME/.ssh/telespy_azure}
 
@@ -59,7 +63,6 @@ Server created: $fqdn
 Next (deploy/README.md has the details):
   1. GitHub secrets:  SERVER_HOST=$fqdn
                       SERVER_SSH_KEY=<contents of $SSH_KEY>
-     GitHub variable: SITE_DOMAIN=$fqdn
   2. ssh -i $SSH_KEY $ADMIN_USER@$fqdn
      then create /opt/telespy/.env from deploy/.env.example (SITE_DOMAIN=$fqdn).
   3. Run the Deploy workflow (Actions tab -> Deploy -> Run workflow).

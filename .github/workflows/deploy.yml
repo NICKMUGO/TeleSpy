@@ -10,7 +10,6 @@
 # Needs (Settings -> Secrets and variables -> Actions):
 #   secrets   SERVER_HOST     the VM's DNS name (azure-provision.sh prints it)
 #             SERVER_SSH_KEY  the private key azure-provision.sh created
-#   variable  SITE_DOMAIN     the public hostname (usually = SERVER_HOST)
 name: Deploy
 
 on:
@@ -72,7 +71,7 @@ jobs:
           push: true
           tags: ghcr.io/nickmugo/telespy-web:latest
           build-args: |
-            NEXT_PUBLIC_API_URL=https://${{ vars.SITE_DOMAIN }}/api
+            NEXT_PUBLIC_API_URL=/api
             NEXT_PUBLIC_BUILD_LABEL=${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web

@@ -59,7 +59,12 @@ interface RequestOptions {
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]) {
-  const url = new URL(path, API_BASE_URL);
+  // Joined as text, not `new URL(path, base)`: that drops any path on the
+  // base (".../api" + "/auth/login" would become "/auth/login"). The base
+  // may also be relative ("/api" in production, same origin behind Caddy).
+  const origin =
+    typeof window === "undefined" ? "http://localhost" : window.location.origin;
+  const url = new URL(`${API_BASE_URL.replace(/\/+$/, "")}${path}`, origin);
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) url.searchParams.set(key, String(value));
