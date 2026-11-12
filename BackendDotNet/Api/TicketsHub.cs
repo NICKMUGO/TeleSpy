@@ -40,7 +40,8 @@ public class TicketsHub(TeleSpyDbContext db, TicketPresence presence) : Hub
         if (userId is null) return false;
         var viewer = await db.Users.Include(u => u.Role).Include(u => u.Employee).ThenInclude(e => e!.Department)
             .FirstOrDefaultAsync(u => u.UserId == userId && u.IsActive);
-        var ticket = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.TicketId == ticketId);
+        var ticket = await db.Tickets.AsNoTracking().Include(t => t.Forwards)
+            .FirstOrDefaultAsync(t => t.TicketId == ticketId);
         if (viewer is null || ticket is null || !TicketVisibility.CanSee(viewer, viewer.Employee?.Department, ticket))
         {
             return false;
@@ -175,6 +176,10 @@ public static class TicketVisibility
         return role == TeleSpy.Role.Admin ||
             ticket.RaisedByUserId == viewer.UserId ||
             (department is not null && ticket.DepartmentId == department.DepartmentId) ||
-            deskManager;
+            deskManager ||
+            // Forwarded to them, or to their department, for something (Forwards
+            // must be loaded). Stays visible once sent back, as history.
+            ticket.Forwards.Any(f => f.ToUserId == viewer.UserId ||
+                                     (department is not null && f.ToDepartmentId == department.DepartmentId));
     }
 }

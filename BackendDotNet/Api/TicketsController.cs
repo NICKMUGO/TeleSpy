@@ -11,6 +11,14 @@
 // ticket's chat. Whoever is on a ticket can also hand it back to their
 // team's queue. Calls never create tickets on their own.
 //
+// Whoever has a ticket can also pass it on (Laserfiche-style routing):
+// - transfer: it moves for good to another person or department, who then
+//   own it and resolve it;
+// - forward: it goes to a person or a department for something the handler
+//   needs done (a change made, a detail checked). They do it and send it
+//   back with a note; the handler then resolves it. While it's out the
+//   handler can only wait or recall it.
+//
 // Like an incident, every ticket has a priority (high/medium/low) and an
 // SLA deadline: raised + that priority's target hours (Admin-set), or how
 // long the raiser gives it (4 hours to a month) or a time they pick. Resolved by the deadline meets the SLA,
@@ -102,6 +110,20 @@ public class ResendTicketRequest
     public string? Note { get; set; }
 }
 
+public class PassTicketRequest
+{
+    public string? DepartmentId { get; set; }
+    /// <summary>One person in that department; left out, the whole department.</summary>
+    public string? AssignedToUserId { get; set; }
+    /// <summary>Transfer: optional context. Forward: what's needed (required).</summary>
+    public string? Note { get; set; }
+}
+
+public class ForwardReplyRequest
+{
+    public string? Note { get; set; }
+}
+
 public class TicketCategoryRequest
 {
     public string? Name { get; set; }
@@ -161,7 +183,12 @@ public class TicketsController(
         .Include(t => t.Department)
         .Include(t => t.RaisedBy).ThenInclude(u => u!.Employee)
         .Include(t => t.ClaimedBy).ThenInclude(u => u!.Employee)
-        .Include(t => t.ResolvedBy).ThenInclude(u => u!.Employee);
+        .Include(t => t.ResolvedBy).ThenInclude(u => u!.Employee)
+        .Include(t => t.Forwards).ThenInclude(f => f.FromUser).ThenInclude(u => u!.Employee)
+        .Include(t => t.Forwards).ThenInclude(f => f.ToUser).ThenInclude(u => u!.Employee)
+        .Include(t => t.Forwards).ThenInclude(f => f.RepliedBy).ThenInclude(u => u!.Employee)
+        .Include(t => t.Forwards).ThenInclude(f => f.ToDepartment)
+        .AsSplitQuery();
 
     /// <summary>Ids of everyone in the customer service desk departments —
     /// the people whose tickets the desk Manager oversees.</summary>
@@ -216,6 +243,12 @@ public class TicketsController(
         var to = new HashSet<string> { ticket.RaisedByUserId };
         if (ticket.ClaimedByUserId is { } claimer) to.Add(claimer);
         else to.UnionWith(await AssignableUsers(ticket.DepartmentId).Select(u => u.UserId).ToListAsync());
+        // Whoever it's out with right now is part of the conversation too.
+        foreach (var forward in ticket.Forwards.Where(f => f.Status == TicketForwardStatus.Pending))
+        {
+            if (forward.ToUserId is { } toUser) to.Add(toUser);
+            else to.UnionWith(await AssignableUsers(forward.ToDepartmentId).Select(u => u.UserId).ToListAsync());
+        }
         to.Remove(sender.UserId);
         push.Notify(to, ticket.TicketId,
             $"{sender.Employee?.FullName ?? sender.Email} · {Ticket.FormatNumber(ticket.Number)}", Short(body), TicketUrl(ticket));
@@ -433,7 +466,8 @@ public class TicketsController(
     // --- Lists ---------------------------------------------------------------
 
     /// <summary>?scope=mine (raised by me) | desk (everything the desk raised —
-    /// desk Manager/Admin) | team (sent to my department) | all (Admin).
+    /// desk Manager/Admin) | team (sent to my department) | forwarded (out
+    /// with me or my department for something) | all (Admin).
     /// ?status= narrows to one status.</summary>
     [HttpGet("/tickets")]
     public async Task<IActionResult> List()
@@ -452,6 +486,16 @@ public class TicketsController(
                 break;
             case "team" when access.DepartmentId is not null:
                 query = query.Where(t => t.DepartmentId == access.DepartmentId);
+                break;
+            case "forwarded":
+                // Out with me, or with my department as a whole (its Manager
+                // sees every one sent to the department), waiting on us.
+                var me = access.Viewer.UserId;
+                var myDept = access.DepartmentId;
+                var manager = access.IsManager;
+                query = query.Where(t => t.Forwards.Any(f => f.Status == TicketForwardStatus.Pending &&
+                    (f.ToUserId == me ||
+                     (myDept != null && f.ToDepartmentId == myDept && (f.ToUserId == null || manager)))));
                 break;
             case "all" when access.IsAdmin:
                 break;
@@ -1012,6 +1056,10 @@ public class TicketsController(
         {
             return Error("ticket_not_active", "Only an open or in-progress ticket can be resolved.", 409, "status");
         }
+        if (ticket.IsForwarded)
+        {
+            return Error("ticket_forwarded", "It's out with someone else for now. Wait for it to come back, or recall it.", 409, "status");
+        }
         // An unclaimed ticket is claimed by whoever resolves it.
         if (ticket.Status == TicketStatus.Open && OnHandlingTeam(access, ticket))
         {
@@ -1053,6 +1101,10 @@ public class TicketsController(
         if (ticket!.Status is TicketStatus.Resolved or TicketStatus.Returned)
         {
             return Error("ticket_not_active", "Only an open or in-progress ticket can be rejected.", 409, "status");
+        }
+        if (ticket.IsForwarded)
+        {
+            return Error("ticket_forwarded", "It's out with someone else for now. Wait for it to come back, or recall it.", 409, "status");
         }
         var canReturn = ticket.Status == TicketStatus.Open ? OnHandlingTeam(access, ticket) : CanClose(access, ticket);
         if (!canReturn)
@@ -1096,6 +1148,10 @@ public class TicketsController(
         if (ticket!.Status != TicketStatus.InProgress)
         {
             return Error("ticket_not_claimed", "Only a ticket someone is working can be handed back to the team.", 409, "status");
+        }
+        if (ticket.IsForwarded)
+        {
+            return Error("ticket_forwarded", "It's out with someone else for now. Wait for it to come back, or recall it.", 409, "status");
         }
         if (!CanClose(access, ticket))
         {
@@ -1162,6 +1218,211 @@ public class TicketsController(
         // Sent again — possibly to a different department that's never seen
         // it — so it's a new ticket in that team's queue.
         await PushNewTicketAsync(saved, access.Viewer.UserId, access.Viewer.Employee?.FullName);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    // --- Passing a ticket on: transfer, or forward and get it back -------------
+
+    /// <summary>Whoever has the ticket: anyone in the department while it's
+    /// in the queue, then whoever took it (or their Manager).</summary>
+    private static bool HasTicket(Access access, Ticket ticket) =>
+        ticket.Status == TicketStatus.Open ? OnHandlingTeam(access, ticket) : CanClose(access, ticket);
+
+    private static string Who(Department department, User? person) =>
+        person is null ? $"everyone in {department.Name}" : $"{person.Employee?.FullName ?? person.Email} ({department.Name})";
+
+    /// <summary>Where a transfer or forward is going: a department, and
+    /// optionally one person in it.</summary>
+    private async Task<(Department? Department, User? Person, IActionResult? Problem)> PassTargetAsync(PassTicketRequest data)
+    {
+        if (string.IsNullOrEmpty(data.DepartmentId) || await db.Departments.FindAsync(data.DepartmentId) is not { } department)
+        {
+            return (null, null, Error("department_not_found", "Choose a department.", 422, "department_id"));
+        }
+        if (string.IsNullOrEmpty(data.AssignedToUserId)) return (department, null, null);
+        var person = await AssignableUsers(department.DepartmentId).FirstOrDefaultAsync(u => u.UserId == data.AssignedToUserId);
+        return person is null
+            ? (null, null, Error("assignee_not_found", $"That person isn't in {department.Name}.", 422, "assigned_to_user_id"))
+            : (department, person, null);
+    }
+
+    /// <summary>The ticket moves for good: the new person or department owns
+    /// it from now on and resolves it. The SLA deadline doesn't change.</summary>
+    [HttpPost("/tickets/{ticketId}/transfer")]
+    public async Task<IActionResult> Transfer(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (ticket!.Status is not (TicketStatus.Open or TicketStatus.InProgress))
+        {
+            return Error("ticket_not_active", "Only an open or in-progress ticket can be transferred.", 409, "status");
+        }
+        if (!HasTicket(access, ticket))
+        {
+            return Error("not_ticket_owner", "Only the person working this ticket, or their Manager, can transfer it.", 403);
+        }
+        if (ticket.IsForwarded)
+        {
+            return Error("ticket_forwarded", "It's out with someone else for now. Wait for it to come back, or recall it.", 409, "status");
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<PassTicketRequest>(Request);
+        var (department, person, targetProblem) = await PassTargetAsync(data);
+        if (targetProblem is not null) return targetProblem;
+        if (department!.DepartmentId == ticket.DepartmentId &&
+            (person is null ? ticket.ClaimedByUserId is null : person.UserId == ticket.ClaimedByUserId))
+        {
+            return Error("validation_error", "It's already there. Choose someone else.", 422, "department_id");
+        }
+        var now = Clock.UtcNow();
+        ticket.DepartmentId = department.DepartmentId;
+        ticket.ClaimedByUserId = person?.UserId;
+        ticket.ClaimedAt = person is null ? null : now;
+        ticket.Status = person is null ? TicketStatus.Open : TicketStatus.InProgress;
+        var note = Clean(data.Note, 4000);
+        AddEvent(ticket, access.Viewer, "transferred", $"To {Who(department, person)}." + (note is null ? "" : $"\n{note}"));
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        var number = Ticket.FormatNumber(saved.Number);
+        var sender = access.Viewer.Employee?.FullName ?? access.Viewer.Email;
+        if (person is not null)
+        {
+            mail.SendMailSafe(person.Email, $"{number} transferred to you ({saved.Priority} priority): {saved.Subject}",
+                $"{sender} transferred a ticket to you. It's yours to resolve now.\n\n" +
+                (note is null ? "" : $"Their note:\n{note}\n\n") +
+                $"Resolve by: {NairobiTime(saved.DueAt)}\n\n{saved.Description}\n\nOpen it from Team tickets.");
+        }
+        await PushNewTicketAsync(saved, access.Viewer.UserId, sender);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>Send it to a person or department for something that needs
+    /// doing; it stays the handler's and comes back when they're done. An
+    /// open ticket is taken by whoever forwards it — it comes back to them.</summary>
+    [HttpPost("/tickets/{ticketId}/forward")]
+    public async Task<IActionResult> Forward(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (ticket!.Status is not (TicketStatus.Open or TicketStatus.InProgress))
+        {
+            return Error("ticket_not_active", "Only an open or in-progress ticket can be forwarded.", 409, "status");
+        }
+        if (!HasTicket(access, ticket))
+        {
+            return Error("not_ticket_owner", "Only the person working this ticket, or their Manager, can forward it.", 403);
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<PassTicketRequest>(Request);
+        var (department, person, targetProblem) = await PassTargetAsync(data);
+        if (targetProblem is not null) return targetProblem;
+        if (person?.UserId == access.Viewer.UserId)
+        {
+            return Error("validation_error", "Forward it to someone else.", 422, "assigned_to_user_id");
+        }
+        var message = Clean(data.Note, 4000);
+        if (message is null)
+        {
+            return Error("validation_error", "Say what you need them to do.", 422, "note");
+        }
+        if (ticket.Status == TicketStatus.Open)
+        {
+            ticket.Status = TicketStatus.InProgress;
+            ticket.ClaimedByUserId = access.Viewer.UserId;
+            ticket.ClaimedAt = Clock.UtcNow();
+        }
+        db.TicketForwards.Add(new TicketForward
+        {
+            TicketId = ticketId, FromUserId = access.Viewer.UserId,
+            ToDepartmentId = department!.DepartmentId, ToUserId = person?.UserId, Message = message,
+        });
+        AddEvent(ticket, access.Viewer, "forwarded", $"To {Who(department, person)}:\n{message}");
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+
+        var number = Ticket.FormatNumber(ticket.Number);
+        var sender = access.Viewer.Employee?.FullName ?? access.Viewer.Email;
+        List<string> to = person is not null
+            ? [person.UserId]
+            : await AssignableUsers(department.DepartmentId).Select(u => u.UserId).ToListAsync();
+        to.Remove(access.Viewer.UserId);
+        push.Notify(to, ticketId, $"{sender} needs something on {number}", Short(message), TicketUrl(ticket));
+        if (person is not null)
+        {
+            mail.SendMailSafe(person.Email, $"{number}: {sender} needs something from you",
+                $"{sender} forwarded you a ticket: {ticket.Subject}\n\nWhat they need:\n{message}\n\n" +
+                "Do it, then send it back to them from the ticket (Forwarded to you).");
+        }
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>Done what was asked: back to whoever forwarded it, with a note.
+    /// The person it went to, anyone in the department when it went to the
+    /// whole department, or that department's Manager.</summary>
+    [HttpPost("/tickets/{ticketId}/forwards/{forwardId}/return")]
+    public async Task<IActionResult> ReturnForward(string ticketId, string forwardId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        var forward = ticket!.Forwards.FirstOrDefault(f => f.ForwardId == forwardId);
+        if (forward is null || forward.Status != TicketForwardStatus.Pending)
+        {
+            return Error("forward_not_pending", "This has already been sent back or recalled.", 409, "status");
+        }
+        var inDepartment = access.DepartmentId == forward.ToDepartmentId;
+        if (!(forward.ToUserId == access.Viewer.UserId || (inDepartment && (forward.ToUserId is null || access.IsManager))))
+        {
+            return Error("not_forward_recipient", "Only whoever it was forwarded to can send it back.", 403);
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<ForwardReplyRequest>(Request);
+        var note = Clean(data.Note, 4000);
+        if (note is null)
+        {
+            return Error("validation_error", "Say what you did, so they can finish it.", 422, "note");
+        }
+        forward.Status = TicketForwardStatus.Returned;
+        forward.ReplyNote = note;
+        forward.RepliedByUserId = access.Viewer.UserId;
+        forward.RepliedAt = Clock.UtcNow();
+        AddEvent(ticket, access.Viewer, "forward_returned", note);
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+
+        var number = Ticket.FormatNumber(ticket.Number);
+        var by = access.Viewer.Employee?.FullName ?? access.Viewer.Email;
+        push.Notify([forward.FromUserId], ticketId, $"{by} sent {number} back", Short(note), TicketUrl(ticket));
+        if (forward.FromUser is not null)
+        {
+            mail.SendMailSafe(forward.FromUser.Email, $"{number} is back with you: {ticket.Subject}",
+                $"{by} sent back the ticket you forwarded.\n\nWhat you asked:\n{forward.Message}\n\nTheir note:\n{note}\n\n" +
+                "Open it to finish and resolve it.");
+        }
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>The handler takes a forward back before it's answered — e.g.
+    /// sent to the wrong place, or no longer needed.</summary>
+    [HttpPost("/tickets/{ticketId}/forwards/{forwardId}/recall")]
+    public async Task<IActionResult> RecallForward(string ticketId, string forwardId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        var forward = ticket!.Forwards.FirstOrDefault(f => f.ForwardId == forwardId);
+        if (forward is null || forward.Status != TicketForwardStatus.Pending)
+        {
+            return Error("forward_not_pending", "This has already been sent back or recalled.", 409, "status");
+        }
+        if (forward.FromUserId != access.Viewer.UserId && !CanClose(access, ticket))
+        {
+            return Error("not_ticket_owner", "Only whoever forwarded it, or their Manager, can recall it.", 403);
+        }
+        forward.Status = TicketForwardStatus.Recalled;
+        forward.RepliedAt = Clock.UtcNow();
+        AddEvent(ticket, access.Viewer, "forward_recalled", $"From {Who(forward.ToDepartment!, forward.ToUser)}.");
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
         return Ok(new { data = saved.ToDict() });
     }
 

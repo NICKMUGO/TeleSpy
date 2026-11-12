@@ -38,6 +38,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketEvent> TicketEvents => Set<TicketEvent>();
+    public DbSet<TicketForward> TicketForwards => Set<TicketForward>();
     public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
     public DbSet<TicketRead> TicketReads => Set<TicketRead>();
     public DbSet<PushDevice> PushDevices => Set<PushDevice>();
@@ -298,6 +299,30 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.LastReadAt).HasColumnName("last_read_at");
             e.HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketForward>(e =>
+        {
+            e.ToTable("ticket_forwards");
+            e.HasKey(x => x.ForwardId);
+            e.Property(x => x.ForwardId).HasColumnName("forward_id").HasMaxLength(36);
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.FromUserId).HasColumnName("from_user_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.ToDepartmentId).HasColumnName("to_department_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.ToUserId).HasColumnName("to_user_id").HasMaxLength(36);
+            e.Property(x => x.Message).HasColumnName("message").HasMaxLength(4000).IsRequired();
+            e.Property(x => x.Status).HasColumnName("status").HasMaxLength(10).IsRequired();
+            e.Property(x => x.ReplyNote).HasColumnName("reply_note").HasMaxLength(4000);
+            e.Property(x => x.RepliedByUserId).HasColumnName("replied_by_user_id").HasMaxLength(36);
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.RepliedAt).HasColumnName("replied_at");
+            e.HasIndex(x => new { x.ToDepartmentId, x.Status });
+            e.HasIndex(x => new { x.ToUserId, x.Status });
+            e.HasOne(x => x.Ticket).WithMany(t => t.Forwards).HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.FromUser).WithMany().HasForeignKey(x => x.FromUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.ToDepartment).WithMany().HasForeignKey(x => x.ToDepartmentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.ToUser).WithMany().HasForeignKey(x => x.ToUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.RepliedBy).WithMany().HasForeignKey(x => x.RepliedByUserId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TicketEvent>(e =>

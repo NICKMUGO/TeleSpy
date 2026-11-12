@@ -26,6 +26,7 @@ import {
   ticketsApi,
   tutorialApi,
   usageApi,
+  type TicketPassBody,
   type TicketScope,
 } from "@/lib/api/resources";
 import type {
@@ -756,6 +757,41 @@ export function useRejectTicket() {
       reasonCode: TicketRejectReason;
       reason?: string;
     }) => ticketsApi.reject(id, reasonCode, reason),
+  );
+}
+
+export function useTransferTicket() {
+  return useTicketMutation(
+    ({ id, body }: { id: string; body: TicketPassBody }) =>
+      ticketsApi.transfer(id, body),
+  );
+}
+
+export function useForwardTicket() {
+  return useTicketMutation(
+    ({ id, body }: { id: string; body: TicketPassBody }) =>
+      ticketsApi.forward(id, body),
+  );
+}
+
+export function useReturnForward() {
+  return useTicketMutation(
+    ({
+      id,
+      forwardId,
+      note,
+    }: {
+      id: string;
+      forwardId: string;
+      note: string;
+    }) => ticketsApi.returnForward(id, forwardId, note),
+  );
+}
+
+export function useRecallForward() {
+  return useTicketMutation(
+    ({ id, forwardId }: { id: string; forwardId: string }) =>
+      ticketsApi.recallForward(id, forwardId),
   );
 }
 

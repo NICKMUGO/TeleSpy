@@ -30,6 +30,24 @@ export function TicketStatusBadge({ status }: { status: TicketStatus }) {
   );
 }
 
+/** Out with someone else right now, waiting to come back. */
+export function ForwardedBadge({ ticket }: { ticket: Ticket }) {
+  const out = ticket.forwards.filter((f) => f.status === "pending");
+  if (out.length === 0) return null;
+  const to = out
+    .map((f) => f.to_user_name ?? f.to_department_name ?? "another team")
+    .join(", ");
+  return (
+    <Badge
+      variant="outline"
+      className="border-info/50 text-info shrink-0"
+      title={`Forwarded to ${to}`}
+    >
+      Forwarded
+    </Badge>
+  );
+}
+
 export const PRIORITY_LABELS: Record<TicketPriority, string> = {
   high: "High",
   medium: "Medium",

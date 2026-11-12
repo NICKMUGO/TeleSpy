@@ -1064,6 +1064,81 @@ namespace TeleSpy.Migrations
                     b.ToTable("ticket_feedback", (string)null);
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.TicketForward", b =>
+                {
+                    b.Property<string>("ForwardId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("forward_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FromUserId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("from_user_id");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("message");
+
+                    b.Property<DateTime?>("RepliedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("replied_at");
+
+                    b.Property<string>("RepliedByUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("replied_by_user_id");
+
+                    b.Property<string>("ReplyNote")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("reply_note");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TicketId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ticket_id");
+
+                    b.Property<string>("ToDepartmentId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("to_department_id");
+
+                    b.Property<string>("ToUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("to_user_id");
+
+                    b.HasKey("ForwardId");
+
+                    b.HasIndex("FromUserId");
+
+                    b.HasIndex("RepliedByUserId");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ToDepartmentId", "Status");
+
+                    b.HasIndex("ToUserId", "Status");
+
+                    b.ToTable("ticket_forwards", (string)null);
+                });
+
             modelBuilder.Entity("TeleSpy.Models.TicketRead", b =>
                 {
                     b.Property<string>("TicketId")
@@ -1545,6 +1620,47 @@ namespace TeleSpy.Migrations
                     b.Navigation("Ticket");
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.TicketForward", b =>
+                {
+                    b.HasOne("TeleSpy.Models.User", "FromUser")
+                        .WithMany()
+                        .HasForeignKey("FromUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.User", "RepliedBy")
+                        .WithMany()
+                        .HasForeignKey("RepliedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeleSpy.Models.Ticket", "Ticket")
+                        .WithMany("Forwards")
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.Department", "ToDepartment")
+                        .WithMany()
+                        .HasForeignKey("ToDepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.User", "ToUser")
+                        .WithMany()
+                        .HasForeignKey("ToUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("FromUser");
+
+                    b.Navigation("RepliedBy");
+
+                    b.Navigation("Ticket");
+
+                    b.Navigation("ToDepartment");
+
+                    b.Navigation("ToUser");
+                });
+
             modelBuilder.Entity("TeleSpy.Models.TicketRead", b =>
                 {
                     b.HasOne("TeleSpy.Models.Ticket", null)
@@ -1655,6 +1771,8 @@ namespace TeleSpy.Migrations
                     b.Navigation("Events");
 
                     b.Navigation("Feedback");
+
+                    b.Navigation("Forwards");
                 });
 
             modelBuilder.Entity("TeleSpy.Models.UsageEvent", b =>

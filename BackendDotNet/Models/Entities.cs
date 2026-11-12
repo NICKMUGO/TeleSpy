@@ -890,7 +890,12 @@ public class Ticket
     public User? ClaimedBy { get; set; }
     public User? ResolvedBy { get; set; }
     public List<TicketEvent> Events { get; set; } = [];
+    public List<TicketForward> Forwards { get; set; } = [];
     public TicketFeedback? Feedback { get; set; }
+
+    /// <summary>Out with someone else right now (TicketForward): the handler
+    /// waits for it to come back before closing it.</summary>
+    public bool IsForwarded => Forwards.Any(f => f.Status == TicketForwardStatus.Pending);
 
     public static string FormatNumber(int number) => $"TKT-{number:D6}";
 
@@ -936,6 +941,8 @@ public class Ticket
             ["resolution_minutes"] = ResolutionMinutes(),
             ["resolution_note"] = ResolutionNote,
             ["return_count"] = ReturnCount,
+            ["forwarded"] = IsForwarded,
+            ["forwards"] = Forwards.OrderBy(f => f.CreatedAt).Select(f => f.ToDict()).ToList(),
             ["created_at"] = UtcTime.Iso(CreatedAt),
             ["updated_at"] = UtcTime.Iso(UpdatedAt),
         };
@@ -1000,6 +1007,61 @@ public class TicketRead
 /// <summary>One line of a ticket's history: raised, assigned, claimed, a
 /// note, rejected ("returned"), handed back ("released"), sent again,
 /// resolved.</summary>
+public static class TicketForwardStatus
+{
+    /// <summary>With the person or department it was sent to.</summary>
+    public const string Pending = "pending";
+    /// <summary>They did what was asked and sent it back.</summary>
+    public const string Returned = "returned";
+    /// <summary>The handler took it back before they answered.</summary>
+    public const string Recalled = "recalled";
+}
+
+/// <summary>The handler sends a ticket to someone else — a person, or a
+/// whole department — for something they need done (a booking changed, a
+/// refund confirmed, a detail checked). The ticket stays the handler's: the
+/// other side does it and sends it back with a note, and the handler then
+/// resolves it. Kept after it comes back, as history; and the people it
+/// went to can still open the ticket.</summary>
+public class TicketForward
+{
+    public string ForwardId { get; set; } = Guid.NewGuid().ToString();
+    public string TicketId { get; set; } = "";
+    public string FromUserId { get; set; } = "";
+    public string ToDepartmentId { get; set; } = "";
+    /// <summary>Null: anyone in ToDepartment can do it and send it back.</summary>
+    public string? ToUserId { get; set; }
+    public string Message { get; set; } = "";
+    public string Status { get; set; } = TicketForwardStatus.Pending;
+    public string? ReplyNote { get; set; }
+    public string? RepliedByUserId { get; set; }
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+    public DateTime? RepliedAt { get; set; }
+
+    public Ticket? Ticket { get; set; }
+    public User? FromUser { get; set; }
+    public Department? ToDepartment { get; set; }
+    public User? ToUser { get; set; }
+    public User? RepliedBy { get; set; }
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = ForwardId,
+        ["from_user_id"] = FromUserId,
+        ["from_name"] = FromUser?.Employee?.FullName ?? FromUser?.Email,
+        ["to_department_id"] = ToDepartmentId,
+        ["to_department_name"] = ToDepartment?.Name,
+        ["to_user_id"] = ToUserId,
+        ["to_user_name"] = ToUser?.Employee?.FullName ?? ToUser?.Email,
+        ["message"] = Message,
+        ["status"] = Status,
+        ["reply_note"] = ReplyNote,
+        ["replied_by_name"] = RepliedBy?.Employee?.FullName ?? RepliedBy?.Email,
+        ["created_at"] = UtcTime.Iso(CreatedAt),
+        ["replied_at"] = UtcTime.Iso(RepliedAt),
+    };
+}
+
 public class TicketEvent
 {
     public string EventId { get; set; } = Guid.NewGuid().ToString();

@@ -441,7 +441,15 @@ export const invoicesApi = {
 };
 
 // --- Customer service tickets --------------------------------------------
-export type TicketScope = "mine" | "desk" | "team" | "all";
+export type TicketScope = "mine" | "desk" | "team" | "forwarded" | "all";
+
+/** Where a transfer or forward goes: a department, optionally one person. */
+export interface TicketPassBody {
+  department_id: string;
+  assigned_to_user_id?: string;
+  /** Transfer: optional context. Forward: what's needed (required). */
+  note?: string;
+}
 
 // --- Customer feedback (public: the emailed rating link) ------------------
 export const feedbackApi = {
@@ -520,6 +528,28 @@ export const ticketsApi = {
       body: { reason_code: reasonCode, reason },
     }),
   /** Put a claimed ticket back in its department's queue. */
+  /** Moves it for good: they own it and resolve it. */
+  transfer: (id: string, body: TicketPassBody) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/transfer`, {
+      method: "POST",
+      body,
+    }),
+  /** Sends it for something to be done; it comes back to the sender. */
+  forward: (id: string, body: TicketPassBody) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/forward`, {
+      method: "POST",
+      body,
+    }),
+  returnForward: (id: string, forwardId: string, note: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(
+      `/tickets/${id}/forwards/${forwardId}/return`,
+      { method: "POST", body: { note } },
+    ),
+  recallForward: (id: string, forwardId: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(
+      `/tickets/${id}/forwards/${forwardId}/recall`,
+      { method: "POST" },
+    ),
   release: (id: string) =>
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/release`, {
       method: "POST",

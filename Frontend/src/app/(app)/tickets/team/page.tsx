@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CircleCheckBig, Inbox, Plus, UserCheck } from "lucide-react";
+import { CircleCheckBig, Forward, Inbox, Plus, UserCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { SectionCard } from "@/components/data/section-card";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,9 @@ export default function TeamTicketsPage() {
   const waiting = useTickets("team", "open", hasTeam);
   const working = useTickets("team", "in_progress", hasTeam);
   const resolved = useTickets("team", "resolved", hasTeam);
+  // Other teams' tickets sent here for something to be done, then sent back.
+  const forwarded = useTickets("forwarded", undefined, true);
+  const forwardedCount = forwarded.data?.data.length ?? 0;
   const [creating, setCreating] = useState(false);
 
   // Anyone can raise a ticket, so the queue offers it too: for a phone,
@@ -63,6 +66,23 @@ export default function TeamTicketsPage() {
         actions={newTicket}
       />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
+        {forwardedCount > 0 ? (
+          <SectionCard
+            title={`Forwarded to you (${forwardedCount})`}
+            description="Another team needs something done on these. Do it, then send it back from the ticket."
+            bodyClassName="px-0 pb-0"
+          >
+            <TicketList
+              tickets={byDeadline(forwarded.data?.data)}
+              isLoading={forwarded.isLoading}
+              error={forwarded.error}
+              onRetry={() => forwarded.refetch()}
+              perspective="desk"
+              emptyIcon={Forward}
+              emptyTitle="Nothing forwarded to you"
+            />
+          </SectionCard>
+        ) : null}
         <SectionCard
           title={`Waiting for someone${waiting.data ? ` (${waiting.data.data.length})` : ""}`}
           description="Due soonest first — open one to take it."

@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/data/empty-state";
 import { ErrorBanner } from "@/components/data/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  ForwardedBadge,
   PriorityBadge,
   SlaBadge,
   TicketStatusBadge,
@@ -92,6 +93,7 @@ export function TicketList({
               </span>
               <span className="shrink-0">{timeAgo(ticket.updated_at)}</span>
               <SlaBadge ticket={ticket} />
+              <ForwardedBadge ticket={ticket} />
               <TicketStatusBadge status={ticket.status} />
             </div>
           </Link>

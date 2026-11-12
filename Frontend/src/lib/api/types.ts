@@ -484,6 +484,25 @@ export interface TicketRead {
   read_at: string;
 }
 
+/** The handler sent the ticket to someone for something they need done;
+ * it comes back when they send it back with a note. */
+export interface TicketForward {
+  id: string;
+  from_user_id: string;
+  from_name: string | null;
+  to_department_id: string;
+  to_department_name: string | null;
+  /** Null: anyone in the department can do it. */
+  to_user_id: string | null;
+  to_user_name: string | null;
+  message: string;
+  status: "pending" | "returned" | "recalled";
+  reply_note: string | null;
+  replied_by_name: string | null;
+  created_at: string;
+  replied_at: string | null;
+}
+
 export interface TicketEvent {
   id: string;
   kind:
@@ -494,7 +513,11 @@ export interface TicketEvent {
     | "returned"
     | "released"
     | "resent"
-    | "resolved";
+    | "resolved"
+    | "transferred"
+    | "forwarded"
+    | "forward_returned"
+    | "forward_recalled";
   body: string | null;
   /** Absent on a message still being sent (shown at once, before the
    * server confirms it). */
@@ -537,6 +560,10 @@ export interface Ticket {
   resolution_minutes: number | null;
   resolution_note: string | null;
   return_count: number;
+  /** Out with someone else right now (a pending forward). */
+  forwarded: boolean;
+  /** Every time it was forwarded, oldest first. */
+  forwards: TicketForward[];
   created_at: string;
   updated_at: string;
   /** Only on GET /tickets/{id}. */

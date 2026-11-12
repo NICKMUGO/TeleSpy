@@ -9,14 +9,17 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Check,
   CheckCheck,
   CircleCheckBig,
   CircleX,
+  CornerUpLeft,
+  Forward,
   Hand,
+  MoveRight,
   Send,
   Undo2,
   Users,
@@ -52,18 +55,24 @@ import {
   useAddTicketNote,
   useClaimTicket,
   useDepartments,
+  useForwardTicket,
+  useRecallForward,
   useRejectTicket,
   useReleaseTicket,
   useResendTicket,
   useResolveTicket,
+  useReturnForward,
   useTicket,
   useTicketAccess,
+  useTicketAssignees,
   useTicketCategories,
+  useTransferTicket,
 } from "@/lib/api/hooks";
 import {
   REJECT_REASON_LABELS,
   type Ticket,
   type TicketEvent,
+  type TicketForward,
   type TicketRead,
   type TicketRejectReason,
 } from "@/lib/api/types";
@@ -80,6 +89,10 @@ const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   released: "handed it back to the team",
   resent: "sent it again",
   resolved: "resolved it",
+  transferred: "transferred it",
+  forwarded: "forwarded it",
+  forward_returned: "sent it back",
+  forward_recalled: "recalled it",
 };
 
 function errorMessage(error: unknown, fallback: string) {
@@ -119,8 +132,24 @@ export default function TicketPage() {
     onTeam && (t.claimed_by_id === user?.id || user?.role === "Manager");
   const isRaiser = t.raised_by_id === user?.id;
   const canResend = isRaiser || me.desk_manager || me.is_admin;
-  const backToTeam = onTeam && !isRaiser;
+  // The team queue, or (forwarded here) where "Forwarded to you" lists it.
+  const sentToMe = t.forwards.some(
+    (f) =>
+      f.to_user_id === user?.id ||
+      (!!me.department_id && f.to_department_id === me.department_id),
+  );
+  const backToTeam = (onTeam || sentToMe) && !isRaiser;
   const deskLabel = me.on_desk || me.is_admin ? "Ticket desk" : "My tickets";
+  // Forwarded here for something to be done: to me, to my whole
+  // department, or (as its Manager) to anyone in my department.
+  const forMe = t.forwards.filter(
+    (f) =>
+      f.status === "pending" &&
+      (f.to_user_id === user?.id ||
+        (!!me.department_id &&
+          f.to_department_id === me.department_id &&
+          (f.to_user_id === null || user?.role === "Manager"))),
+  );
 
   return (
     <>
@@ -170,11 +199,16 @@ export default function TicketPage() {
               <p className="text-sm whitespace-pre-wrap">{t.description}</p>
             </SectionCard>
 
+            {forMe.map((f) => (
+              <SendBackForm key={f.id} ticket={t} forward={f} />
+            ))}
+
             <TicketActions
               ticket={t}
               onTeam={onTeam}
               canClose={canClose}
               canResend={canResend}
+              isRaiser={isRaiser}
             />
 
             <Conversation
@@ -265,6 +299,16 @@ export default function TicketPage() {
                 {t.department_name}
                 {t.claimed_by_name ? ` · ${t.claimed_by_name}` : ""}
               </Detail>
+              {t.forwards
+                .filter((f) => f.status === "pending")
+                .map((f) => (
+                  <Detail key={f.id} label="Forwarded to">
+                    {forwardTarget(f)}
+                    <span className="text-muted-foreground block text-xs">
+                      Since {dateTime(f.created_at)}
+                    </span>
+                  </Detail>
+                ))}
               {t.return_count > 0 ? (
                 <Detail label="Sent back">
                   {t.return_count === 1 ? "Once" : `${t.return_count} times`}
@@ -295,15 +339,19 @@ function TicketActions({
   onTeam,
   canClose,
   canResend,
+  isRaiser,
 }: {
   ticket: Ticket;
   onTeam: boolean;
   canClose: boolean;
   canResend: boolean;
+  isRaiser: boolean;
 }) {
   const claim = useClaimTicket();
   const release = useReleaseTicket();
-  const [mode, setMode] = useState<"resolve" | "return" | null>(null);
+  const [mode, setMode] = useState<
+    "resolve" | "return" | "transfer" | "forward" | null
+  >(null);
 
   if (ticket.status === "returned" && canResend) {
     return <ResendForm ticket={ticket} />;
@@ -314,6 +362,9 @@ function TicketActions({
 
   const open = ticket.status === "open";
   const canAct = open || canClose;
+  if (canAct && ticket.forwarded) {
+    return <OutWithOthers ticket={ticket} />;
+  }
   if (!canAct) {
     return (
       <p className="text-muted-foreground text-sm">
@@ -376,6 +427,24 @@ function TicketActions({
               </Button>
             </>
           ) : null}
+          <Button
+            type="button"
+            variant={mode === "forward" ? "default" : "outline"}
+            onClick={() => setMode(mode === "forward" ? null : "forward")}
+            aria-expanded={mode === "forward"}
+          >
+            <Forward aria-hidden="true" />
+            Forward
+          </Button>
+          <Button
+            type="button"
+            variant={mode === "transfer" ? "default" : "outline"}
+            onClick={() => setMode(mode === "transfer" ? null : "transfer")}
+            aria-expanded={mode === "transfer"}
+          >
+            <MoveRight aria-hidden="true" />
+            Transfer
+          </Button>
           {!open && canClose ? (
             <Button
               type="button"
@@ -402,7 +471,301 @@ function TicketActions({
             onDone={() => setMode(null)}
           />
         ) : null}
+        {mode === "forward" || mode === "transfer" ? (
+          <PassForm
+            key={mode}
+            ticket={ticket}
+            kind={mode}
+            stillSees={isRaiser}
+            onDone={() => setMode(null)}
+          />
+        ) : null}
       </div>
+    </SectionCard>
+  );
+}
+
+function forwardTarget(f: TicketForward) {
+  return f.to_user_name
+    ? `${f.to_user_name} (${f.to_department_name ?? "another team"})`
+    : `Everyone in ${f.to_department_name ?? "another team"}`;
+}
+
+/** Forward: it goes to someone for something to be done and comes back to
+ * you to resolve. Transfer: it's theirs from now on. */
+function PassForm({
+  ticket,
+  kind,
+  stillSees,
+  onDone,
+}: {
+  ticket: Ticket;
+  kind: "forward" | "transfer";
+  /** The sender can still open it after a transfer (they raised it). */
+  stillSees: boolean;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  const departments = useDepartments();
+  const forward = useForwardTicket();
+  const transfer = useTransferTicket();
+  const [departmentId, setDepartmentId] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [note, setNote] = useState("");
+  const assignees = useTicketAssignees(departmentId);
+  const myId = useSession((s) => s.user?.id);
+  const pending = forward.isPending || transfer.isPending;
+  const isForward = kind === "forward";
+  const ready = !!departmentId && (!isForward || !!note.trim());
+  const department = departments.data?.data.find((d) => d.id === departmentId);
+  const person = assignees.data?.data.find((p) => p.user_id === assigneeId);
+  const to = person
+    ? person.name
+    : department
+      ? `everyone in ${department.name}`
+      : "";
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!ready) return;
+    const body = {
+      department_id: departmentId,
+      assigned_to_user_id: assigneeId || undefined,
+      note: note.trim() || undefined,
+    };
+    try {
+      if (isForward) {
+        await forward.mutateAsync({ id: ticket.id, body });
+        toast.success(`${ticket.number} forwarded to ${to}.`);
+        onDone();
+      } else {
+        await transfer.mutateAsync({ id: ticket.id, body });
+        toast.success(`${ticket.number} transferred to ${to}.`);
+        // It's theirs now: unless it's still ours to follow, leave it.
+        if (!stillSees) router.push("/tickets/team");
+        else onDone();
+      }
+    } catch (error) {
+      toast.error(
+        errorMessage(
+          error,
+          isForward ? "Couldn't forward it." : "Couldn't transfer it.",
+        ),
+      );
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <p className="text-muted-foreground text-sm">
+        {isForward
+          ? "Send it to someone for something you need done. They do it and send it back to you, and you resolve it."
+          : "Hand it over for good: they own it from now on and resolve it."}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`pass-${kind}-department`}>Department</Label>
+          <SelectNative
+            id={`pass-${kind}-department`}
+            value={departmentId}
+            onChange={(e) => {
+              setDepartmentId(e.target.value);
+              setAssigneeId("");
+            }}
+            required
+          >
+            <option value="" disabled>
+              Choose a department
+            </option>
+            {departments.data?.data.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </SelectNative>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={`pass-${kind}-person`}>Person</Label>
+          <SelectNative
+            id={`pass-${kind}-person`}
+            value={assigneeId}
+            onChange={(e) => setAssigneeId(e.target.value)}
+            disabled={!departmentId}
+          >
+            <option value="">
+              {department ? `Everyone in ${department.name}` : "—"}
+            </option>
+            {assignees.data?.data
+              .filter((p) => !isForward || p.user_id !== myId)
+              .map((p) => (
+                <option key={p.user_id} value={p.user_id}>
+                  {p.name}
+                </option>
+              ))}
+          </SelectNative>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor={`pass-${kind}-note`}>
+          {isForward ? "What do you need them to do?" : "Note (optional)"}
+        </Label>
+        <Textarea
+          id={`pass-${kind}-note`}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          maxLength={4000}
+          required={isForward}
+          placeholder={
+            isForward
+              ? "e.g. Please change the booking to KQ100 tomorrow and confirm the new e-ticket number."
+              : "e.g. This is a refund, Finance handles it from here."
+          }
+        />
+      </div>
+      <Button
+        type="submit"
+        className="w-fit"
+        disabled={!ready || pending}
+        variant={isForward ? "default" : "outline"}
+      >
+        {isForward ? (
+          <Forward aria-hidden="true" />
+        ) : (
+          <MoveRight aria-hidden="true" />
+        )}
+        {pending
+          ? isForward
+            ? "Forwarding…"
+            : "Transferring…"
+          : to
+            ? `${isForward ? "Forward" : "Transfer"} to ${to}`
+            : isForward
+              ? "Forward"
+              : "Transfer"}
+      </Button>
+    </form>
+  );
+}
+
+/** For the handler while the ticket is out with someone: who has it, what
+ * was asked, and a way to take it back. */
+function OutWithOthers({ ticket }: { ticket: Ticket }) {
+  const recall = useRecallForward();
+  const out = ticket.forwards.filter((f) => f.status === "pending");
+
+  async function takeBack(f: TicketForward) {
+    try {
+      await recall.mutateAsync({ id: ticket.id, forwardId: f.id });
+      toast.success(`${ticket.number} is back with you.`);
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't recall it."));
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Waiting for it to come back"
+      description="You can resolve it once it's back with you."
+    >
+      <ul className="flex flex-col gap-3">
+        {out.map((f) => (
+          <li key={f.id} className="flex flex-col gap-2">
+            <p className="text-sm">
+              <span className="font-medium">With {forwardTarget(f)}</span>
+              <span className="text-muted-foreground">
+                {" "}
+                · since {dateTime(f.created_at)}
+              </span>
+            </p>
+            <p className="text-muted-foreground text-sm whitespace-pre-wrap">
+              {f.message}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={() => void takeBack(f)}
+              disabled={recall.isPending}
+            >
+              <Undo2 aria-hidden="true" />
+              Recall
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
+  );
+}
+
+/** For whoever it was forwarded to: what's needed, and sending it back
+ * once done. */
+function SendBackForm({
+  ticket,
+  forward,
+}: {
+  ticket: Ticket;
+  forward: TicketForward;
+}) {
+  const sendBack = useReturnForward();
+  const [note, setNote] = useState("");
+  const id = `send-back-${forward.id}`;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!note.trim()) return;
+    try {
+      await sendBack.mutateAsync({
+        id: ticket.id,
+        forwardId: forward.id,
+        note: note.trim(),
+      });
+      toast.success(
+        `${ticket.number} sent back to ${forward.from_name ?? "them"}.`,
+      );
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't send it back."));
+    }
+  }
+
+  return (
+    <SectionCard
+      title={`${forward.from_name ?? "Someone"} needs something from you`}
+      className="border-info/50"
+    >
+      <form onSubmit={submit} className="flex flex-col gap-3">
+        <Alert>
+          <Forward aria-hidden="true" />
+          <AlertTitle>
+            Forwarded to {forwardTarget(forward)} ·{" "}
+            {dateTime(forward.created_at)}
+          </AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap">
+            {forward.message}
+          </AlertDescription>
+        </Alert>
+        <Label htmlFor={id}>What did you do?</Label>
+        <Textarea
+          id={id}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          maxLength={4000}
+          required
+          placeholder="e.g. Changed to KQ100 tomorrow 10:25, new e-ticket 706-1234567890."
+        />
+        <Button
+          type="submit"
+          className="w-fit"
+          disabled={!note.trim() || sendBack.isPending}
+        >
+          <CornerUpLeft aria-hidden="true" />
+          {sendBack.isPending
+            ? "Sending back…"
+            : `Send back to ${forward.from_name ?? "them"}`}
+        </Button>
+      </form>
     </SectionCard>
   );
 }
