@@ -15,11 +15,13 @@ using TeleSpy.Core;
 
 namespace TeleSpy.Services;
 
-public record OutgoingMail(string To, string Subject, string Body);
+/// <summary>Html, when given, is what mail apps show; Body stays as the
+/// plain-text version for those that don't show HTML.</summary>
+public record OutgoingMail(string To, string Subject, string Body, string? Html = null);
 
 public interface IMailService
 {
-    void SendMailSafe(string to, string subject, string body);
+    void SendMailSafe(string to, string subject, string body, string? html = null);
 }
 
 /// <summary>The in-memory queue between requests and MailSender.</summary>
@@ -35,14 +37,14 @@ public class MailQueue
 
 public class MailService(MailQueue queue, ILogger<MailService> logger) : IMailService
 {
-    public void SendMailSafe(string to, string subject, string body)
+    public void SendMailSafe(string to, string subject, string body, string? html = null)
     {
         if (Config.MailSuppressSend)
         {
             logger.LogInformation("[email suppressed] to={To} subject={Subject}\n{Body}", to, subject, body);
             return;
         }
-        queue.Enqueue(new OutgoingMail(to, subject, body));
+        queue.Enqueue(new OutgoingMail(to, subject, body, html));
     }
 }
 
@@ -61,6 +63,11 @@ public class MailSender(MailQueue queue, ILogger<MailSender> logger) : Backgroun
                     client.Credentials = new System.Net.NetworkCredential(Config.MailUsername, Config.MailPassword);
                 }
                 using var message = new MailMessage(Config.MailDefaultSender, mail.To, mail.Subject, mail.Body);
+                if (mail.Html is not null)
+                {
+                    message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(
+                        mail.Html, System.Text.Encoding.UTF8, "text/html"));
+                }
                 await client.SendMailAsync(message, stoppingToken);
             }
             catch (Exception exc) when (exc is not OperationCanceledException)
