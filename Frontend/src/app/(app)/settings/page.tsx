@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import { DisplaySettingsForm } from "@/components/layout/display-settings-form";
 import { PageHeader } from "@/components/layout/page-header";
 import { StubNotice } from "@/components/layout/stub-notice";
@@ -9,6 +9,7 @@ import { SpendingLimitsCard } from "@/features/billing/spending-limits-card";
 import { LocalRateCard } from "@/features/billing/local-rate-card";
 import { InternationalRatesTable } from "@/features/billing/international-rates-table";
 import { DepartmentsCard } from "@/features/settings/departments-card";
+import { NotificationsCard } from "@/features/settings/notifications-card";
 import { NumberFormatCard } from "@/features/settings/number-format-card";
 import { SlaTargetsCard } from "@/features/settings/sla-targets-card";
 import { TicketCategoriesCard } from "@/features/settings/ticket-categories-card";
@@ -29,10 +30,7 @@ export default function SettingsPage() {
 
         <section>
           <h2 className="mb-4 text-lg font-semibold">Notifications</h2>
-          <StubNotice icon={Bell}>
-            Notification preferences are built once the data layer and mock API
-            are wired up.
-          </StubNotice>
+          <NotificationsCard />
         </section>
 
         {isAdmin ? (

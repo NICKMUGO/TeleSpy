@@ -21,7 +21,7 @@ let installed = false;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((listener) => listener());
 
-function isStandalone() {
+export function isStandalone() {
   return (
     window.matchMedia("(display-mode: standalone)").matches ||
     // iOS Safari's own flag for a home-screen app.
@@ -29,7 +29,7 @@ function isStandalone() {
   );
 }
 
-function isIos() {
+export function isIos() {
   return (
     /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     // iPadOS reports itself as a Mac, but Macs have no touch screen.

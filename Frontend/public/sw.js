@@ -10,8 +10,13 @@
 // - API calls (/api/…, or another origin) and anything else pass straight
 //   through: no customer or billing data is ever stored here.
 //
+// It also shows push notifications (BackendDotNet Services/Push.cs) — a new
+// ticket for you or your team, or a new message on a ticket you're on — but
+// only when no TeleSpy tab is in front of you: if you're on the app, you
+// already see it there. Tapping one opens that ticket.
+//
 // Bump VERSION to throw every cached file away on the next visit.
-const VERSION = "v2";
+const VERSION = "v3";
 const STATIC_CACHE = `telespy-static-${VERSION}`;
 const OFFLINE_CACHE = `telespy-offline-${VERSION}`;
 const OFFLINE_URL = "/offline.html";
@@ -99,4 +104,55 @@ self.addEventListener("fetch", (event) => {
   } else if (OFFLINE_FILES.includes(url.pathname)) {
     event.respondWith(networkThenCache(request));
   }
+});
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    return;
+  }
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((windows) => {
+        // On the app right now: it shows the change itself.
+        const onApp = windows.some(
+          (w) => w.visibilityState === "visible" && w.focused,
+        );
+        if (onApp) return undefined;
+        return self.registration.showNotification(data.title || "TeleSpy", {
+          body: data.body || "",
+          tag: data.tag,
+          renotify: !!data.tag,
+          icon: "/icons/icon-192.png",
+          badge: "/icons/icon-192.png",
+          data: { url: data.url || "/tickets" },
+        });
+      }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL(
+    (event.notification.data && event.notification.data.url) || "/tickets",
+    self.location.origin,
+  );
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then(async (windows) => {
+        // Reuse an open TeleSpy window rather than opening another.
+        const existing = windows.find(
+          (w) => new URL(w.url).origin === url.origin,
+        );
+        if (existing) {
+          await existing.focus();
+          return existing.navigate(url.href);
+        }
+        return self.clients.openWindow(url.href);
+      }),
+  );
 });

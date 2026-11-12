@@ -18,6 +18,12 @@ public static class Legal
         4. Misuse of the system, including attempting to access data outside your
            role's authorization, may result in account suspension and disciplinary
            action.
+        5. Notifications: TeleSpy sends notifications to the browsers and devices
+           where you allow them, only about your work in it — a new ticket sent
+           to you or your team, and new messages on tickets you raised or are
+           working on — and only when you don't have TeleSpy open in front of
+           you. You can turn them off at any time in your profile or in your
+           browser's settings.
         """;
 
     public static string DpaNoticeText() => $"""

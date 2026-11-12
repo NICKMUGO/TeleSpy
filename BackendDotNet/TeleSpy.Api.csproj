@@ -30,6 +30,10 @@
     <!-- Fake data generation for Seed.cs, mirroring Python's Faker (Bogus is
          its long-established C# counterpart — same API shape, same idea). -->
     <PackageReference Include="Bogus" Version="35.6.1" />
+
+    <!-- Browser push notifications (Web Push: VAPID signing + payload
+         encryption). Delivered free by the browsers' own push services. -->
+    <PackageReference Include="WebPush" Version="1.0.12" />
   </ItemGroup>
 
 </Project>

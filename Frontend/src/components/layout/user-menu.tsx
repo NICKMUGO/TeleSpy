@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { logout as apiLogout } from "@/lib/api/auth";
+import { disablePush } from "@/lib/push";
 import { useSession } from "@/lib/auth/session-store";
 
 function initialsFor(name: string) {
@@ -50,6 +51,9 @@ export function UserMenu({
   const initials = initialsFor(name).toUpperCase() || "?";
 
   async function handleLogout() {
+    // This device stops getting the person's notifications (needs their
+    // session, so before signing out).
+    await disablePush().catch(() => undefined);
     try {
       await apiLogout();
     } catch {
