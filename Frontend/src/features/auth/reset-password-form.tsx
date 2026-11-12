@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { ArrowLeft, CircleAlert, CircleCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,7 +15,7 @@ import {
   type ResetPasswordValues,
 } from "@/features/auth/schemas";
 import { ApiError } from "@/lib/api/client";
-import { resetPassword } from "@/lib/api/auth";
+import { legalNotice, resetPassword, resetPasswordInfo } from "@/lib/api/auth";
 import { cn } from "@/lib/utils";
 
 // Landing page for the emailed /reset-password?token=… link. One link
@@ -35,11 +36,54 @@ export function ResetPasswordForm({
   const form = useForm<ResetPasswordValues>({
     resolver: zodResolver(resetPasswordSchema),
   });
+  // A brand-new account accepts the Terms once, here, with its first
+  // password (AuthController.ResetPassword). A later reset doesn't ask.
+  const [terms, setTerms] = useState<{ terms: string; dpa: string } | null>(
+    null,
+  );
+  const [accepted, setAccepted] = useState(false);
+  const [termsError, setTermsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    resetPasswordInfo(token)
+      .then(async (info) => {
+        if (!info.data.first_setup) return;
+        const legal = await legalNotice();
+        if (!cancelled) {
+          setTerms({
+            terms: legal.data.terms_and_conditions,
+            dpa: legal.data.dpa_notice,
+          });
+        }
+      })
+      .catch((error) => {
+        if (
+          !cancelled &&
+          error instanceof ApiError &&
+          error.errorType === "invalid_reset_token"
+        ) {
+          setLinkInvalid(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   async function onSubmit(values: ResetPasswordValues) {
     if (!token) return;
+    if (terms && !accepted) {
+      setTermsError("Accept the terms to set up your account.");
+      return;
+    }
     try {
-      await resetPassword(token, values.newPassword);
+      await resetPassword(
+        token,
+        values.newPassword,
+        terms ? accepted : undefined,
+      );
       setDone(true);
     } catch (error) {
       if (
@@ -47,6 +91,10 @@ export function ResetPasswordForm({
         error.errorType === "invalid_reset_token"
       ) {
         setLinkInvalid(true);
+        return;
+      }
+      if (error instanceof ApiError && error.errorType === "terms_required") {
+        setTermsError(error.message);
         return;
       }
       // validation_error / password_reused both come back pinned to
@@ -161,13 +209,58 @@ export function ResetPasswordForm({
         ) : null}
       </div>
 
+      {terms ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Terms and data protection</p>
+          <div
+            className="border-border bg-muted/40 max-h-48 overflow-y-auto rounded-md border p-3 text-xs leading-relaxed whitespace-pre-wrap"
+            tabIndex={0}
+            aria-label="Terms and Conditions and Data Protection notice"
+          >
+            {terms.terms.trim()}
+            {"\n\n"}
+            {terms.dpa.trim()}
+          </div>
+          <div className="flex items-start gap-2.5">
+            <Checkbox
+              id="accept-terms"
+              checked={accepted}
+              onCheckedChange={(value) => {
+                setAccepted(value === true);
+                setTermsError(null);
+              }}
+              aria-invalid={!!termsError}
+              aria-describedby={termsError ? "accept-terms-error" : undefined}
+              className="mt-0.5"
+            />
+            <Label htmlFor="accept-terms" className="leading-snug font-normal">
+              I accept the Terms and Conditions, including notifications, and
+              the Data Protection notice.
+            </Label>
+          </div>
+          {termsError ? (
+            <p
+              id="accept-terms-error"
+              role="alert"
+              className="text-destructive text-sm"
+            >
+              {termsError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       <Button
         type="submit"
         size="lg"
         disabled={form.formState.isSubmitting}
         className="h-11 w-full"
       >
-        {form.formState.isSubmitting ? "Saving…" : "Set password"}
+        {form.formState.isSubmitting
+          ? "Saving…"
+          : terms
+            ? "Accept and set password"
+            : "Set password"}
       </Button>
 
       <Button asChild variant="link" size="sm" className="mx-auto">

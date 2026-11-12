@@ -32,8 +32,25 @@ public static class Config
     // --- JWT ---------------------------------------------------------------
     public static string JwtSecretKey { get; } = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? "";
     public static TimeSpan JwtAccessTokenExpires { get; } = TimeSpan.FromMinutes(ToInt("JWT_ACCESS_TOKEN_EXPIRES_MINUTES", "15"));
-    public static TimeSpan JwtRefreshTokenExpires { get; } = TimeSpan.FromDays(ToInt("JWT_REFRESH_TOKEN_EXPIRES_DAYS", "7"));
+    // A sign-in lasts while it's in use: every refresh (about every 15
+    // minutes of activity) pushes the end out to this many days from now,
+    // so someone is only asked for their password + OTP again after this
+    // long without opening the app...
+    public static TimeSpan JwtRefreshTokenExpires { get; } = TimeSpan.FromDays(ToInt("JWT_REFRESH_TOKEN_EXPIRES_DAYS", "30"));
+    // ...or once this long has passed since they signed in, however active —
+    // so a stolen or forgotten device can't stay signed in forever.
+    public static TimeSpan SessionMaxLifetime { get; } = TimeSpan.FromDays(ToInt("SESSION_MAX_DAYS", "90"));
     public static int JwtMfaTokenExpiresMinutes { get; } = ToInt("JWT_MFA_TOKEN_EXPIRES_MINUTES", "5");
+
+    // --- Push notifications (Web Push) ----------------------------------------
+    // Generate once with `dotnet run -- --vapid-keys`. Left empty, push is
+    // simply off: nothing is offered to browsers and nothing is sent.
+    public static string VapidPublicKey { get; } = Environment.GetEnvironmentVariable("VAPID_PUBLIC_KEY") ?? "";
+    public static string VapidPrivateKey { get; } = Environment.GetEnvironmentVariable("VAPID_PRIVATE_KEY") ?? "";
+    /// <summary>Who push services contact about misbehaving pushes.</summary>
+    public static string VapidSubject { get; } =
+        Environment.GetEnvironmentVariable("VAPID_SUBJECT") is { Length: > 0 } subject ? subject : "mailto:admin@localhost";
+    public static bool PushEnabled => VapidPublicKey.Length > 0 && VapidPrivateKey.Length > 0;
 
     // --- Field-level encryption --------------------------------------------
     public static string FieldEncryptionKey { get; } = Environment.GetEnvironmentVariable("FIELD_ENCRYPTION_KEY") ?? "";
@@ -57,6 +74,16 @@ public static class Config
 
     // --- CORS ----------------------------------------------------------------
     public static List<string> FrontendOrigins { get; } = ToList("FRONTEND_ORIGINS", "http://localhost:3000");
+
+    /// <summary>Where the API is reachable from outside, for links in emails
+    /// that open a page the API serves itself (the customer rating page).
+    /// Production serves the API under the site's /api (deploy/Caddyfile);
+    /// local dev runs it on its own port.</summary>
+    public static string PublicApiUrl { get; } = (Environment.GetEnvironmentVariable("PUBLIC_API_URL") is { Length: > 0 } url
+        ? url
+        : FrontendOrigins.FirstOrDefault() is { } origin && !origin.Contains("localhost")
+            ? $"{origin.TrimEnd('/')}/api"
+            : "http://localhost:5299").TrimEnd('/');
 
     // --- Mail ------------------------------------------------------------------
     public static string MailServer { get; } = Environment.GetEnvironmentVariable("MAIL_SERVER") ?? "localhost";

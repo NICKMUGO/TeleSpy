@@ -15,6 +15,7 @@ interface SessionState {
     user: CurrentUser;
   }) => void;
   setAccessToken: (token: string) => void;
+  setRefreshToken: (token: string) => void;
   clear: () => void;
   setHasHydrated: (value: boolean) => void;
 }
@@ -36,6 +37,7 @@ export const useSession = create<SessionState>()(
       setSession: ({ accessToken, refreshToken, user }) =>
         set({ accessToken, refreshToken, user }),
       setAccessToken: (accessToken) => set({ accessToken }),
+      setRefreshToken: (refreshToken) => set({ refreshToken }),
       clear: () => set({ accessToken: null, refreshToken: null, user: null }),
       setHasHydrated: (hasHydrated) => set({ hasHydrated }),
     }),

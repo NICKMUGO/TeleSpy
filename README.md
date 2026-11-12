@@ -175,7 +175,8 @@ Optional settings and their defaults:
 | Variable                               | Default   | Purpose                                  |
 | -------------------------------------- | --------- | ---------------------------------------- |
 | `JWT_ACCESS_TOKEN_EXPIRES_MINUTES`     | `15`      | Access token lifetime                    |
-| `JWT_REFRESH_TOKEN_EXPIRES_DAYS`       | `7`       | Refresh token and session lifetime       |
+| `JWT_REFRESH_TOKEN_EXPIRES_DAYS`       | `30`      | Signed out after this many idle days     |
+| `SESSION_MAX_DAYS`                     | `90`      | Signed out this long after sign-in       |
 | `JWT_MFA_TOKEN_EXPIRES_MINUTES`        | `5`       | Token issued between password and OTP    |
 | `MFA_OTP_EXPIRES_MINUTES`              | `5`       | Login code lifetime                      |
 | `PASSWORD_RESET_TOKEN_EXPIRES_MINUTES` | `30`      | Password reset link lifetime             |

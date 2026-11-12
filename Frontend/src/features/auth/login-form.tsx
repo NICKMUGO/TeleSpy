@@ -9,7 +9,6 @@ import { CircleAlert, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -327,20 +326,6 @@ export function LoginForm({ className }: { className?: string }) {
             {passwordForm.formState.errors.password.message}
           </p>
         ) : null}
-      </div>
-
-      {/* Presentational only for now: the refresh-token lifetime is fixed
-       * server-side (JwtRefreshTokenExpiresDays) and /auth/login takes no
-       * "remember me" flag, so this cannot yet change session length.
-       * Disabled rather than silently inert — see the caption below. */}
-      <div className="flex items-center gap-2.5">
-        <Checkbox id="login-remember" disabled />
-        <Label
-          htmlFor="login-remember"
-          className="text-muted-foreground font-normal"
-        >
-          Keep me signed in on this device
-        </Label>
       </div>
 
       <Button

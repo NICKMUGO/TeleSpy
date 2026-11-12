@@ -42,6 +42,10 @@ public class ResetPasswordRequest
 {
     public string? Token { get; set; }
     public string? NewPassword { get; set; }
+    /// <summary>Required the first time an account sets its password (see
+    /// ResetPassword): the person accepts the Terms and the Data Protection
+    /// notice.</summary>
+    public bool? AcceptTerms { get; set; }
 }
 
 public class ChangePasswordRequest
@@ -388,9 +392,23 @@ public class AuthController(
             });
         }
 
-        var access = jwtService.CreateAccessToken(userId, role, roleId, departmentId, sessionId: sessionId);
+        // A sign-in renews while it's in use: each refresh pushes the end out
+        // to JwtRefreshTokenExpires (30 days) from now, but never past
+        // SessionMaxLifetime (90 days) after the person actually signed in.
+        var now = DateTime.UtcNow;
+        var hardEnd = DateTime.SpecifyKind(activeSession!.SignedInAtUtc, DateTimeKind.Utc) + Config.SessionMaxLifetime;
+        if (now >= hardEnd)
+        {
+            await cache.ClearActiveSessionAsync(userId);
+            return StatusCode(401, new { error = "token_expired", message = "Your session has expired. Please sign in again." });
+        }
+        var lifetime = hardEnd - now < Config.JwtRefreshTokenExpires ? hardEnd - now : Config.JwtRefreshTokenExpires;
+        await cache.ExtendActiveSessionAsync(userId, lifetime);
 
-        return Ok(new { data = new { access_token = access.Value } });
+        var access = jwtService.CreateAccessToken(userId, role, roleId, departmentId, sessionId: sessionId);
+        var refresh = jwtService.CreateRefreshToken(userId, role, roleId, departmentId, sessionId, lifetime);
+
+        return Ok(new { data = new { access_token = access.Value, refresh_token = refresh.Value } });
     }
 
     [HttpPost("/auth/forgot-password")]
@@ -502,6 +520,24 @@ public class AuthController(
             });
         }
 
+        // The Terms are accepted once, when someone first sets up their
+        // account (the link from "account created" or an Admin changing an
+        // unset-up account's email) — never on a later password reset.
+        var firstSetup = user.MustChangePassword;
+        if (firstSetup && data.AcceptTerms != true)
+        {
+            return StatusCode(422, new
+            {
+                error_type = "terms_required",
+                message = "Accept the Terms and Conditions and the Data Protection notice to set up your account.",
+                field = "accept_terms",
+                status = 422,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+
         try
         {
             await RotatePasswordAsync(user, newPassword);
@@ -522,9 +558,46 @@ public class AuthController(
         }
 
         record.Consumed = true;
+        if (firstSetup)
+        {
+            db.Consents.Add(new Consent
+            {
+                UserId = user.UserId,
+                AcceptedTerms = true,
+                AcceptedDpaNotice = true,
+                DpaPolicyVersion = Config.DpaKePolicyVersion,
+            });
+        }
         await db.SaveChangesAsync();
         await db.Entry(user).Reference(u => u.Role).LoadAsync();
         return Ok(new { message = "Password reset. You can now sign in with your new password." });
+    }
+
+    /// <summary>What the set-password page needs to know about its link:
+    /// whether it's an account's first setup (so it shows the Terms to
+    /// accept). Public; the token in the body is the only credential, and
+    /// it says nothing else about the account.</summary>
+    [HttpPost("/auth/reset-password/info")]
+    public async Task<IActionResult> ResetPasswordInfo()
+    {
+        var data = await RequestBody.ReadJsonSilentAsync<ResetPasswordRequest>(Request);
+        var tokenHash = Security.HashToken(data.Token ?? "");
+        var record = await db.PasswordResetTokens.FirstOrDefaultAsync(t => t.TokenHash == tokenHash && !t.Consumed);
+        var user = record is null || record.ExpiresAt < Clock.UtcNow() ? null : await db.Users.FindAsync(record.UserId);
+        if (user is null)
+        {
+            return StatusCode(400, new
+            {
+                error_type = "invalid_reset_token",
+                message = "This reset link is invalid or has expired.",
+                field = "token",
+                status = 400,
+                path = Request.Path.Value,
+                method = Request.Method,
+                timestamp = NowIso(),
+            });
+        }
+        return Ok(new { data = new { first_setup = user.MustChangePassword } });
     }
 
     [HttpPost("/auth/change-password")]

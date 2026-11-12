@@ -39,7 +39,14 @@ async function refreshAccessToken(): Promise<string | null> {
     })
       .then(async (res) => {
         if (!res.ok) return null;
-        const body = (await res.json()) as { data: { access_token: string } };
+        const body = (await res.json()) as {
+          data: { access_token: string; refresh_token?: string };
+        };
+        // The sign-in renews while in use: each refresh hands back a new
+        // refresh token good for another 30 days (AuthController.Refresh).
+        if (body.data.refresh_token) {
+          useSession.getState().setRefreshToken(body.data.refresh_token);
+        }
         return body.data.access_token;
       })
       .catch(() => null)
@@ -48,6 +55,33 @@ async function refreshAccessToken(): Promise<string | null> {
       });
   }
   return refreshPromise;
+}
+
+/** Seconds until a JWT's `exp`, or 0 when unreadable. */
+function secondsLeft(token: string) {
+  try {
+    const payload = JSON.parse(
+      atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+    ) as { exp?: number };
+    return (payload.exp ?? 0) - Date.now() / 1000;
+  } catch {
+    return 0;
+  }
+}
+
+/** An access token good for at least another minute, refreshing first if
+ * needed — for connections that don't go through apiRequest's
+ * retry-on-401, like the live ticket chat (use-ticket-live.ts), which may
+ * reconnect hours after the page was opened. */
+export async function freshAccessToken(): Promise<string> {
+  const current = useSession.getState().accessToken;
+  if (current && secondsLeft(current) > 60) return current;
+  const renewed = await refreshAccessToken();
+  if (renewed) {
+    useSession.getState().setAccessToken(renewed);
+    return renewed;
+  }
+  return current ?? "";
 }
 
 interface RequestOptions {
@@ -71,6 +105,12 @@ function buildUrl(path: string, query?: RequestOptions["query"]) {
     }
   }
   return url.toString();
+}
+
+/** Full URL of an API path — for clients that aren't apiRequest, like the
+ * live-chat connection (features/tickets/use-ticket-live.ts). */
+export function apiUrl(path: string) {
+  return buildUrl(path);
 }
 
 async function rawRequest<T>(

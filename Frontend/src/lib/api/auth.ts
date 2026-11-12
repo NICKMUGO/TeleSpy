@@ -71,10 +71,34 @@ export async function forgotPassword(email: string) {
 // a forgotten password and a brand-new account's first password (see
 // EmployeesController.Create, which issues it on creation). 400
 // invalid_reset_token when expired/used; 422 for a weak or reused password.
-export async function resetPassword(token: string, newPassword: string) {
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+  acceptTerms?: boolean,
+) {
   return apiRequest<ApiEnvelope<null>>("/auth/reset-password", {
     method: "POST",
-    body: { token, new_password: newPassword },
+    body: { token, new_password: newPassword, accept_terms: acceptTerms },
     unauthenticated: true,
   });
+}
+
+/** Is this link an account's first setup? Then the Terms must be accepted
+ * along with the password (once, never on a later reset). */
+export async function resetPasswordInfo(token: string) {
+  return apiRequest<ApiEnvelope<{ first_setup: boolean }>>(
+    "/auth/reset-password/info",
+    { method: "POST", body: { token }, unauthenticated: true },
+  );
+}
+
+/** The Terms and Conditions and the Data Protection notice, as text. */
+export async function legalNotice() {
+  return apiRequest<
+    ApiEnvelope<{
+      terms_and_conditions: string;
+      dpa_notice: string;
+      dpa_policy_version: string;
+    }>
+  >("/auth/legal-notice", { unauthenticated: true });
 }

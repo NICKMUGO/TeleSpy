@@ -19,7 +19,8 @@ public interface IJwtService
     IssuedToken CreateAccessToken(string userId, string? role = null, string? roleId = null,
         string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null, string? sessionId = null);
 
-    IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId);
+    IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId,
+        TimeSpan? expiresIn = null);
 
     /// <summary>Validates signature + expiry + `type` claim. Throws
     /// SecurityTokenExpiredException / SecurityTokenException on failure —
@@ -78,8 +79,9 @@ public class JwtService : IJwtService
         string? departmentId = null, string? purpose = null, TimeSpan? expiresIn = null, string? sessionId = null) =>
         Create(userId, TypeAccess, expiresIn ?? Config.JwtAccessTokenExpires, role, roleId, departmentId, purpose, sessionId);
 
-    public IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId) =>
-        Create(userId, TypeRefresh, Config.JwtRefreshTokenExpires, role, roleId, departmentId, purpose: null, sessionId);
+    public IssuedToken CreateRefreshToken(string userId, string? role, string? roleId, string? departmentId, string? sessionId,
+        TimeSpan? expiresIn = null) =>
+        Create(userId, TypeRefresh, expiresIn ?? Config.JwtRefreshTokenExpires, role, roleId, departmentId, purpose: null, sessionId);
 
     private static TokenValidationParameters BaseValidationParameters() => new()
     {

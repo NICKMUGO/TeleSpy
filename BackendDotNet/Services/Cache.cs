@@ -27,6 +27,8 @@ public interface ICacheService
     Task SetActiveSessionAsync(string userId, string sessionId, string? device, long ttlSeconds);
     Task<ActiveSessionInfo?> GetActiveSessionAsync(string userId);
     Task ClearActiveSessionAsync(string userId);
+    /// <summary>Push the active session's expiry out (a refresh while in use).</summary>
+    Task ExtendActiveSessionAsync(string userId, TimeSpan ttl);
 }
 
 public class CacheService : ICacheService
@@ -116,4 +118,7 @@ public class CacheService : ICacheService
     }
 
     public Task ClearActiveSessionAsync(string userId) => Db().KeyDeleteAsync($"{ActiveSessionPrefix}{userId}");
+
+    public Task ExtendActiveSessionAsync(string userId, TimeSpan ttl) =>
+        Db().KeyExpireAsync($"{ActiveSessionPrefix}{userId}", ttl);
 }
