@@ -230,7 +230,14 @@ export function useUpdateDepartment() {
         queryKeys.departments,
         (old) => ({
           ...old,
-          data: old.data.map((d) => (d.id === id ? { ...d, ...body } : d)),
+          data: old.data.map((d) =>
+            d.id === id
+              ? { ...d, ...body }
+              : // Only one department is the desk.
+                body.handles_customer_service
+                ? { ...d, handles_customer_service: false }
+                : d,
+          ),
         }),
         true,
       ),

@@ -289,11 +289,18 @@ public class DepartmentsController(TeleSpyDbContext db, IViewerContext viewerCon
             }
             dept.Name = nameVal;
         }
-        // Its people work the customer service ticket desk.
+        // Its people work the customer service ticket desk. There is only
+        // one desk: switching it on here switches it off everywhere else.
         if (data.TryGetValue("handles_customer_service", out var deskEl) &&
             deskEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
             dept.HandlesCustomerService = deskEl.GetBoolean();
+            if (dept.HandlesCustomerService)
+            {
+                await db.Departments
+                    .Where(d => d.DepartmentId != dept.DepartmentId && d.HandlesCustomerService)
+                    .ForEachAsync(d => d.HandlesCustomerService = false);
+            }
         }
         if (data.TryGetValue("cost_centre_code", out var codeEl))
         {

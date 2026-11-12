@@ -15,7 +15,7 @@ import type { Department } from "@/lib/api/types";
 
 const TITLE = "Departments";
 const DESCRIPTION =
-  "Rename a department, and choose which one is the customer service desk — its people raise tickets for the other departments.";
+  "Rename a department, and choose which one is the customer service desk — its people raise tickets for the other departments. Only one department can be the desk.";
 
 /** Admin: department names, and the customer service desk switch. */
 export function DepartmentsCard() {
