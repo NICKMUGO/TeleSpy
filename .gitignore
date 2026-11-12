@@ -174,3 +174,6 @@ ML/data/archive/*
 
 # Windows download markers left behind when files are copied into WSL
 *:Zone.Identifier
+
+
+CLAUDE.md
