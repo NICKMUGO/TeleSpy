@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
   open: "Waiting",
   in_progress: "In progress",
-  returned: "Returned",
+  returned: "Rejected",
   resolved: "Resolved",
 };
 
@@ -71,7 +71,7 @@ export function slaSummary(ticket: Ticket, now: number = Date.now()) {
     case "overdue":
       return `${duration(left)} overdue`;
     case "paused":
-      return "SLA paused while returned";
+      return "SLA paused while rejected";
     case "met":
     case "missed": {
       const late =

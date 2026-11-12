@@ -11,6 +11,8 @@ import type {
   DepartmentForecast,
   DepartmentsOverview,
   DirectoryEntry,
+  FeedbackView,
+  TicketRejectReason,
   Employee,
   HandoverFields,
   InternationalCallRate,
@@ -441,6 +443,22 @@ export const invoicesApi = {
 // --- Customer service tickets --------------------------------------------
 export type TicketScope = "mine" | "desk" | "team" | "all";
 
+// --- Customer feedback (public: the emailed rating link) ------------------
+export const feedbackApi = {
+  lookup: (token: string) =>
+    apiRequest<ApiEnvelope<FeedbackView>>("/feedback/lookup", {
+      method: "POST",
+      body: { token },
+      unauthenticated: true,
+    }),
+  submit: (body: { token: string; rating: number; comment?: string }) =>
+    apiRequest<ApiEnvelope<FeedbackView>>("/feedback", {
+      method: "POST",
+      body,
+      unauthenticated: true,
+    }),
+};
+
 export const ticketsApi = {
   me: () => apiRequest<ApiEnvelope<TicketAccess>>("/tickets/me"),
   list: (scope: TicketScope, status?: TicketStatus) =>
@@ -448,6 +466,9 @@ export const ticketsApi = {
       query: { scope, status },
     }),
   get: (id: string) => apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}`),
+  /** I've read the conversation up to its newest message. */
+  markRead: (id: string) =>
+    apiRequest<void>(`/tickets/${id}/read`, { method: "POST" }),
   stats: (month?: string) =>
     apiRequest<ApiEnvelope<TicketStats>>("/tickets/stats", {
       query: { month },
@@ -467,6 +488,9 @@ export const ticketsApi = {
     /** One person in the department; left out, the whole department. */
     assigned_to_user_id?: string;
     priority?: TicketPriority;
+    /** Hours from now until it breaches the SLA, instead of the
+     * priority's target (the server counts from its own clock). */
+    sla_hours?: number;
     /** ISO deadline instead of the priority's SLA target. */
     due_at?: string;
   }) =>
@@ -488,10 +512,17 @@ export const ticketsApi = {
       method: "POST",
       body: { resolution_note: resolutionNote },
     }),
-  returnToDesk: (id: string, reason: string) =>
+  /** Reject back to the raiser: wrong department, duplicate or invalid.
+   * Missing details are asked in the chat instead. */
+  reject: (id: string, reasonCode: TicketRejectReason, reason?: string) =>
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/return`, {
       method: "POST",
-      body: { reason },
+      body: { reason_code: reasonCode, reason },
+    }),
+  /** Put a claimed ticket back in its department's queue. */
+  release: (id: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/release`, {
+      method: "POST",
     }),
   resend: (
     id: string,

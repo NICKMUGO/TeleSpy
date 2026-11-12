@@ -13,9 +13,47 @@ import { TicketList } from "@/features/tickets/ticket-list";
 import { TICKET_STATUS_LABELS } from "@/features/tickets/ticket-status";
 import { useTicketAccess, useTickets, useTicketStats } from "@/lib/api/hooks";
 import type { TicketScope } from "@/lib/api/resources";
-import type { TicketAccess, TicketStatus } from "@/lib/api/types";
+import type {
+  TicketAccess,
+  TicketAgentStats,
+  TicketStatus,
+} from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session-store";
-import { monthKey, monthLabel } from "@/lib/format";
+import { duration, monthKey, monthLabel } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+/** This month and the five before it, newest first. */
+function recentMonths() {
+  const now = new Date();
+  return Array.from({ length: 6 }, (_, i) =>
+    monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)),
+  );
+}
+
+const rating = (value: number | null | undefined) =>
+  value == null ? "—" : `${value.toFixed(1)} / 5`;
+
+/** 1 → "1st", 2 → "2nd", 13 → "13th". */
+function ordinal(n: number) {
+  const tens = n % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? "th"
+      : (({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ??
+        "th");
+  return `${n}${suffix}`;
+}
+
+/** Average of the agents' ratings, weighted by how many each got. */
+function weightedRating(agents: TicketAgentStats[]) {
+  const responses = agents.reduce((n, a) => n + a.csat_responses, 0);
+  if (responses === 0) return { avg: null, responses };
+  const total = agents.reduce(
+    (n, a) => n + (a.csat_avg ?? 0) * a.csat_responses,
+    0,
+  );
+  return { avg: Math.round((100 * total) / responses) / 100, responses };
+}
 
 /** The customer service desk's home: raise a ticket, see what came back,
  * follow everything raised, and the escalation score for the month. Anyone
@@ -47,22 +85,51 @@ function Desk({ me }: { me: TicketAccess }) {
   // the tickets they raised.
   const [scope, setScope] = useState<TicketScope>(overseer ? "desk" : "mine");
   const [status, setStatus] = useState<TicketStatus | "">("");
-  const month = monthKey(new Date());
+  const months = recentMonths();
+  const [month, setMonth] = useState(months[0]);
 
   const stats = useTicketStats(month, desk);
   const returned = useTickets("mine", "returned");
   const tickets = useTickets(scope, status || undefined);
-  const mine = stats.data?.data.agents.find((a) => a.user_id === userId);
-  const deskTotals = stats.data?.data.agents.reduce(
+  const agents = stats.data?.data.agents ?? [];
+  const team = stats.data?.data.team;
+  const ranks = stats.data?.data.me?.ranks;
+  const mine = agents.find((a) => a.user_id === userId);
+  // The desk Manager sees the whole desk's totals; an agent their own
+  // figures, against the team average and their place on the desk.
+  const totals = agents.reduce(
     (sum, a) => ({
       raised: sum.raised + a.raised,
       resolved: sum.resolved + a.resolved,
+      successful: sum.successful + a.successful,
       returned: sum.returned + a.returned,
-      open: sum.open + a.open,
     }),
-    { raised: 0, resolved: 0, returned: 0, open: 0 },
+    { raised: 0, resolved: 0, successful: 0, returned: 0 },
   );
-  const figures = overseer ? deskTotals : mine;
+  const figures = overseer
+    ? {
+        ...totals,
+        success_pct: totals.resolved
+          ? Math.round((1000 * totals.successful) / totals.resolved) / 10
+          : null,
+      }
+    : mine;
+  const ratingFigures = overseer
+    ? weightedRating(agents)
+    : { avg: mine?.csat_avg ?? null, responses: mine?.csat_responses ?? 0 };
+  /** "Team avg 31 · 3rd of 12" under an agent's own figure. */
+  const versus = (
+    avg: number | null | undefined,
+    rank: number | null | undefined,
+    format: (n: number) => string = (n) => String(n),
+  ) => {
+    if (overseer || !team) return undefined;
+    const parts = [];
+    if (avg != null) parts.push(`Team avg ${format(avg)}`);
+    if (rank != null && team.agents > 1)
+      parts.push(`${ordinal(rank)} of ${team.agents}`);
+    return parts.join(" · ") || undefined;
+  };
   const returnedTickets = returned.data?.data ?? [];
 
   return (
@@ -76,50 +143,101 @@ function Desk({ me }: { me: TicketAccess }) {
               : "Customer service desk"
         }
         actions={
-          <Button
-            type="button"
-            size="lg"
-            onClick={() => setCreating(true)}
-            data-tour="desk-new-ticket"
-          >
-            <Plus aria-hidden="true" />
-            New ticket
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {desk ? (
+              <SelectNative
+                aria-label="Month for the scores"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+              >
+                {months.map((m) => (
+                  <option key={m} value={m}>
+                    {monthLabel(m)}
+                  </option>
+                ))}
+              </SelectNative>
+            ) : null}
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => setCreating(true)}
+              data-tour="desk-new-ticket"
+            >
+              <Plus aria-hidden="true" />
+              New ticket
+            </Button>
+          </div>
         }
       />
 
       <div className="flex flex-col gap-4 p-4 sm:p-6">
         <div
           data-tour="desk-score"
-          className={desk ? "grid grid-cols-2 gap-4 lg:grid-cols-4" : "hidden"}
+          className={
+            desk
+              ? "grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5"
+              : "hidden"
+          }
         >
           {!desk ? null : stats.isLoading ? (
-            Array.from({ length: 4 }).map((_, i) => (
+            Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-24 w-full rounded-xl" />
             ))
           ) : (
             <>
               <StatCard
                 label="Successful escalations"
-                value={String(figures?.resolved ?? 0)}
+                value={String(figures?.successful ?? 0)}
                 tone="success"
-                hint={`Resolved in ${monthLabel(month)}`}
+                hint={
+                  versus(team?.successful, ranks?.successful) ??
+                  "Resolved, never rejected"
+                }
+              />
+              <StatCard
+                label="Success rate"
+                value={
+                  figures?.success_pct == null ? "—" : `${figures.success_pct}%`
+                }
+                hint={
+                  versus(
+                    team?.success_pct,
+                    ranks?.success_pct,
+                    (n) => `${n}%`,
+                  ) ?? "Of tickets resolved this month"
+                }
               />
               <StatCard
                 label="Raised"
                 value={String(figures?.raised ?? 0)}
-                hint={monthLabel(month)}
+                hint={versus(team?.raised, null) ?? monthLabel(month)}
               />
               <StatCard
-                label="Returned"
+                label="Rejected"
                 value={String(figures?.returned ?? 0)}
                 tone={(figures?.returned ?? 0) > 0 ? "warning" : "default"}
-                hint="Sent back to the desk"
+                hint="Wrong department, duplicate or invalid"
               />
               <StatCard
-                label="Still open"
-                value={String(figures?.open ?? 0)}
-                hint="Waiting or in progress"
+                label="Customer rating"
+                value={rating(ratingFigures.avg)}
+                tone={
+                  ratingFigures.avg == null
+                    ? "default"
+                    : ratingFigures.avg >= 4
+                      ? "success"
+                      : ratingFigures.avg >= 3
+                        ? "warning"
+                        : "destructive"
+                }
+                hint={
+                  versus(team?.csat_avg, ranks?.csat_avg, (n) =>
+                    n.toFixed(1),
+                  ) ??
+                  (ratingFigures.responses
+                    ? `${ratingFigures.responses} rating${ratingFigures.responses === 1 ? "" : "s"} in ${monthLabel(month)}`
+                    : "No customer ratings yet")
+                }
               />
             </>
           )}
@@ -127,7 +245,7 @@ function Desk({ me }: { me: TicketAccess }) {
 
         {returnedTickets.length > 0 ? (
           <SectionCard
-            title={`Returned to you (${returnedTickets.length})`}
+            title={`Rejected — fix and resend (${returnedTickets.length})`}
             description="The team sent these back. Open one to see why, fix it and send it again."
             bodyClassName="px-0 pb-0"
             className="border-warning/50"
@@ -141,10 +259,10 @@ function Desk({ me }: { me: TicketAccess }) {
           </SectionCard>
         ) : null}
 
-        {overseer && (stats.data?.data.agents.length ?? 0) > 0 ? (
+        {overseer && agents.length > 0 ? (
           <SectionCard
-            title="Agents"
-            description={`${monthLabel(month)} — successful escalations first`}
+            title="Agent scorecard"
+            description={`Customer service desk · ${monthLabel(month)}. Successful = resolved without being rejected. SLA and time are for tickets they raised that were resolved this month — shown for context, mostly down to the handling team.`}
             bodyClassName="px-0 pb-0"
           >
             <div className="overflow-x-auto">
@@ -154,7 +272,16 @@ function Desk({ me }: { me: TicketAccess }) {
                     <th scope="col" className="px-4 py-2 text-left font-medium">
                       Agent
                     </th>
-                    {["Resolved", "Raised", "Returned", "Open"].map((h) => (
+                    {[
+                      "Raised",
+                      "Successful",
+                      "Success rate",
+                      "Rejected",
+                      "Open",
+                      "Met SLA",
+                      "Avg time",
+                      "Customer rating",
+                    ].map((h) => (
                       <th
                         key={h}
                         scope="col"
@@ -166,20 +293,77 @@ function Desk({ me }: { me: TicketAccess }) {
                   </tr>
                 </thead>
                 <tbody className="divide-border-subtle divide-y">
-                  {stats.data?.data.agents.map((a) => (
+                  {agents.map((a) => (
                     <tr key={a.user_id}>
-                      <td className="px-4 py-2">{a.name}</td>
-                      <td className="text-success font-tabular px-4 py-2 text-right font-medium">
-                        {a.resolved}
+                      <td data-label="Agent" className="px-4 py-2">
+                        {a.name}
                       </td>
-                      <td className="font-tabular px-4 py-2 text-right">
+                      <td
+                        data-label="Raised"
+                        className="font-tabular px-4 py-2 text-right"
+                      >
                         {a.raised}
                       </td>
-                      <td className="font-tabular px-4 py-2 text-right">
+                      <td
+                        data-label="Successful"
+                        className="text-success font-tabular px-4 py-2 text-right font-medium"
+                      >
+                        {a.successful}
+                      </td>
+                      <td
+                        data-label="Success rate"
+                        className="font-tabular px-4 py-2 text-right"
+                      >
+                        {a.success_pct == null ? "—" : `${a.success_pct}%`}
+                      </td>
+                      <td
+                        data-label="Rejected"
+                        className={cn(
+                          "font-tabular px-4 py-2 text-right",
+                          a.returned > 0 && "text-warning",
+                        )}
+                      >
                         {a.returned}
                       </td>
-                      <td className="font-tabular px-4 py-2 text-right">
+                      <td
+                        data-label="Open"
+                        className="font-tabular px-4 py-2 text-right"
+                      >
                         {a.open}
+                      </td>
+                      <td
+                        data-label="Met SLA"
+                        className={cn(
+                          "font-tabular px-4 py-2 text-right",
+                          a.sla_met_pct != null &&
+                            (a.sla_met_pct >= 90
+                              ? "text-success"
+                              : a.sla_met_pct >= 75
+                                ? "text-warning"
+                                : "text-destructive"),
+                        )}
+                      >
+                        {a.sla_met_pct == null ? "—" : `${a.sla_met_pct}%`}
+                      </td>
+                      <td
+                        data-label="Avg time"
+                        className="font-tabular px-4 py-2 text-right whitespace-nowrap"
+                      >
+                        {a.avg_resolution_minutes == null
+                          ? "—"
+                          : duration(a.avg_resolution_minutes)}
+                      </td>
+                      <td
+                        data-label="Customer rating"
+                        className="font-tabular px-4 py-2 text-right whitespace-nowrap"
+                      >
+                        {rating(a.csat_avg)}
+                        {a.csat_responses ? (
+                          <span className="text-muted-foreground text-xs">
+                            {" "}
+                            ({a.csat_responses})
+                          </span>
+                        ) : null}
                       </td>
                     </tr>
                   ))}

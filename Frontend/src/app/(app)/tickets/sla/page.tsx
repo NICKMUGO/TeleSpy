@@ -2,7 +2,12 @@
 
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { AlarmClock, CircleCheckBig } from "lucide-react";
+import {
+  AlarmClock,
+  CircleCheckBig,
+  MessageSquareQuote,
+  Star,
+} from "lucide-react";
 import { EmptyState } from "@/components/data/empty-state";
 import { ErrorBanner } from "@/components/data/error-banner";
 import { SectionCard } from "@/components/data/section-card";
@@ -17,7 +22,7 @@ import {
   SlaBadge,
 } from "@/features/tickets/ticket-status";
 import { useSlaReport } from "@/lib/api/hooks";
-import type { SlaFigures } from "@/lib/api/types";
+import type { CsatFigures, CsatReport, SlaFigures } from "@/lib/api/types";
 import { dateTime, duration, monthKey, monthLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +37,8 @@ function recentMonths() {
 const pct = (value: number | null) => (value === null ? "—" : `${value}%`);
 const avg = (minutes: number | null) =>
   minutes === null ? "—" : duration(minutes);
+const stars = (value: number | null) =>
+  value === null ? "—" : `${value.toFixed(1)} / 5`;
 
 function complianceTone(value: number | null) {
   if (value === null) return "default" as const;
@@ -108,6 +115,8 @@ export default function SlaReportPage() {
               />
             </div>
 
+            <CsatSection csat={r.csat} />
+
             <SectionCard
               title="By priority"
               description="Targets are set by an Admin in Settings."
@@ -144,6 +153,7 @@ export default function SlaReportPage() {
                     first: row.department_name ?? "—",
                     overdue: row.overdue_open,
                     figures: row,
+                    csat: row,
                   }))}
                 />
               )}
@@ -163,6 +173,7 @@ export default function SlaReportPage() {
                     first: row.name ?? "—",
                     extra: row.department_name ?? "—",
                     figures: row,
+                    csat: row,
                   }))}
                 />
               </SectionCard>
@@ -282,9 +293,12 @@ function FiguresTable({
     /** Left out where it doesn't apply (people). */
     overdue?: number;
     figures: SlaFigures;
+    /** Customer rating, where it applies (departments, people). */
+    csat?: CsatFigures;
   }[];
 }) {
   const showOverdue = rows.some((row) => row.overdue !== undefined);
+  const showCsat = rows.some((row) => row.csat !== undefined);
   const numeric = [
     "Resolved",
     "Met",
@@ -292,6 +306,7 @@ function FiguresTable({
     "Met SLA",
     "Avg time",
     ...(showOverdue ? ["Overdue now"] : []),
+    ...(showCsat ? ["Customer rating"] : []),
   ];
   return (
     <div className="overflow-x-auto">
@@ -383,11 +398,142 @@ function FiguresTable({
                     {row.overdue ?? 0}
                   </td>
                 ) : null}
+                {showCsat ? (
+                  <td
+                    data-label="Customer rating"
+                    className="font-tabular px-4 py-2 text-right whitespace-nowrap"
+                  >
+                    {row.csat?.csat_avg != null ? (
+                      <>
+                        {stars(row.csat.csat_avg)}
+                        <span className="text-muted-foreground text-xs">
+                          {" "}
+                          ({row.csat.csat_responses})
+                        </span>
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                ) : null}
               </tr>
             );
           })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** Customer satisfaction (CSAT) for the month: customers are emailed once
+ * when their ticket is resolved and rate it 1-5. */
+function CsatSection({ csat }: { csat: CsatReport }) {
+  const most = Math.max(1, ...csat.distribution.map((d) => d.count));
+  const responseRate =
+    csat.asked > 0 ? Math.round((100 * csat.responses) / csat.asked) : null;
+  return (
+    <SectionCard
+      title="Customer satisfaction"
+      description="Customers rate their resolved ticket 1-5 from a one-click email link."
+    >
+      {csat.responses === 0 ? (
+        <EmptyState
+          icon={Star}
+          title="No ratings yet this month"
+          description={
+            csat.asked > 0
+              ? `${csat.asked} customer${csat.asked === 1 ? " was" : "s were"} asked; their ratings show up here.`
+              : "When a customer ticket with an email address is resolved, the customer is asked to rate it."
+          }
+        />
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-3 gap-3">
+              <StatCard
+                label="Average"
+                value={stars(csat.average)}
+                tone={
+                  (csat.average ?? 0) >= 4
+                    ? "success"
+                    : (csat.average ?? 0) >= 3
+                      ? "warning"
+                      : "destructive"
+                }
+              />
+              <StatCard
+                label="Satisfied"
+                value={pct(csat.satisfied_pct)}
+                hint="Rated 4 or 5"
+              />
+              <StatCard
+                label="Responded"
+                value={responseRate === null ? "—" : `${responseRate}%`}
+                hint={`${csat.responses} of ${csat.asked} asked`}
+              />
+            </div>
+            <ul className="flex flex-col gap-1.5" aria-label="Ratings">
+              {[...csat.distribution].reverse().map((d) => (
+                <li key={d.rating} className="flex items-center gap-2 text-sm">
+                  <span className="font-tabular w-6 text-right">
+                    {d.rating}
+                  </span>
+                  <Star
+                    aria-hidden="true"
+                    className="fill-warning text-warning size-3.5"
+                  />
+                  <span className="bg-muted h-2 flex-1 overflow-hidden rounded-full">
+                    <span
+                      className="bg-warning block h-full rounded-full"
+                      style={{ width: `${(100 * d.count) / most}%` }}
+                    />
+                  </span>
+                  <span className="text-muted-foreground font-tabular w-8 text-right">
+                    {d.count}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">
+              Recent comments
+            </h3>
+            {csat.recent.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No written comments this month.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {csat.recent.map((c) => (
+                  <li key={c.ticket_id} className="flex gap-2 text-sm">
+                    <MessageSquareQuote
+                      aria-hidden="true"
+                      className="text-muted-foreground mt-0.5 size-4 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <p className="break-words whitespace-pre-wrap">
+                        {c.comment}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 text-xs">
+                        {c.rating}/5 ·{" "}
+                        <Link
+                          href={`/tickets/${c.ticket_id}`}
+                          className="underline-offset-2 hover:underline"
+                        >
+                          {c.number}
+                        </Link>
+                        {c.department_name ? ` · ${c.department_name}` : ""} ·{" "}
+                        {dateTime(c.responded_at)}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }

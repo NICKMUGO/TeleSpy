@@ -890,6 +890,7 @@ public class Ticket
     public User? ClaimedBy { get; set; }
     public User? ResolvedBy { get; set; }
     public List<TicketEvent> Events { get; set; } = [];
+    public TicketFeedback? Feedback { get; set; }
 
     public static string FormatNumber(int number) => $"TKT-{number:D6}";
 
@@ -946,8 +947,59 @@ public class Ticket
     }
 }
 
+/// <summary>Customer satisfaction (CSAT) for one resolved customer ticket.
+/// Made when the ticket is resolved and the customer emailed a link to rate
+/// it 1-5; Rating stays null until they answer. Only the token's hash is
+/// stored, like a password-reset token.</summary>
+public class TicketFeedback
+{
+    public string FeedbackId { get; set; } = Guid.NewGuid().ToString();
+    public string TicketId { get; set; } = "";
+    public string TokenHash { get; set; } = "";
+    public int? Rating { get; set; }
+    public string? Comment { get; set; }
+    public DateTime SentAt { get; set; } = Clock.UtcNow();
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? RespondedAt { get; set; }
+
+    public Ticket? Ticket { get; set; }
+}
+
+/// <summary>One browser or device someone allowed notifications on (a Web
+/// Push subscription). Removed when they turn notifications off there, or
+/// when the browser's push service says it's gone.</summary>
+public class PushDevice
+{
+    public string DeviceId { get; set; } = Guid.NewGuid().ToString();
+    public string UserId { get; set; } = "";
+    public string Endpoint { get; set; } = "";
+    public string P256dh { get; set; } = "";
+    public string Auth { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+}
+
+/// <summary>How far one person has read a ticket's conversation — for the
+/// chat's read ticks (two blue ticks once someone else has read up to a
+/// message). One row per person per ticket, moved forward as they read.</summary>
+public class TicketRead
+{
+    public string TicketId { get; set; } = "";
+    public string UserId { get; set; } = "";
+    public DateTime LastReadAt { get; set; }
+
+    public User? User { get; set; }
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["user_id"] = UserId,
+        ["name"] = User?.Employee?.FullName ?? User?.Email,
+        ["read_at"] = UtcTime.Iso(LastReadAt),
+    };
+}
+
 /// <summary>One line of a ticket's history: raised, assigned, claimed, a
-/// note, returned, sent again, resolved.</summary>
+/// note, rejected ("returned"), handed back ("released"), sent again,
+/// resolved.</summary>
 public class TicketEvent
 {
     public string EventId { get; set; } = Guid.NewGuid().ToString();
@@ -964,6 +1016,7 @@ public class TicketEvent
         ["id"] = EventId,
         ["kind"] = Kind,
         ["body"] = Body,
+        ["actor_user_id"] = ActorUserId,
         ["actor_name"] = Actor?.Employee?.FullName ?? Actor?.Email,
         ["created_at"] = UtcTime.Iso(CreatedAt),
     };

@@ -1,21 +1,37 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  Check,
+  CheckCheck,
   CircleCheckBig,
+  CircleX,
   Hand,
-  MessageSquare,
   Send,
   Undo2,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ErrorBanner } from "@/components/data/error-banner";
 import { SectionCard } from "@/components/data/section-card";
 import { PageHeader } from "@/components/layout/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarGroup,
+  AvatarGroupCount,
+} from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,28 +45,39 @@ import {
   slaSummary,
   TicketStatusBadge,
 } from "@/features/tickets/ticket-status";
+import { useTicketLive } from "@/features/tickets/use-ticket-live";
 import { ApiError } from "@/lib/api/client";
+import { ticketsApi } from "@/lib/api/resources";
 import {
   useAddTicketNote,
   useClaimTicket,
   useDepartments,
+  useRejectTicket,
+  useReleaseTicket,
   useResendTicket,
   useResolveTicket,
-  useReturnTicket,
   useTicket,
   useTicketAccess,
   useTicketCategories,
 } from "@/lib/api/hooks";
-import type { Ticket, TicketEvent } from "@/lib/api/types";
+import {
+  REJECT_REASON_LABELS,
+  type Ticket,
+  type TicketEvent,
+  type TicketRead,
+  type TicketRejectReason,
+} from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session-store";
 import { dateTime, duration } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   raised: "raised the ticket",
   assigned: "assigned the ticket",
   claimed: "took the ticket",
   note: "added a note",
-  returned: "sent it back to the desk",
+  returned: "rejected it",
+  released: "handed it back to the team",
   resent: "sent it again",
   resolved: "resolved it",
 };
@@ -64,6 +91,7 @@ export default function TicketPage() {
   const ticket = useTicket(id);
   const access = useTicketAccess();
   const user = useSession((s) => s.user);
+  const live = useTicketLive(id);
 
   if (ticket.error) {
     return (
@@ -149,29 +177,41 @@ export default function TicketPage() {
               canResend={canResend}
             />
 
+            <Conversation
+              ticketId={t.id}
+              messages={(t.events ?? []).filter((e) => e.kind === "note")}
+              reads={t.reads ?? []}
+              myId={user?.id}
+              live={live}
+            />
+
             <SectionCard title="History" bodyClassName="px-0 pb-0">
               <ol className="divide-border-subtle border-border-subtle divide-y border-t">
-                {(t.events ?? []).map((event) => (
-                  <li key={event.id} className="flex flex-col gap-1 px-4 py-3">
-                    <p className="text-sm">
-                      <span className="font-medium">
-                        {event.actor_name ?? "Someone"}
-                      </span>{" "}
-                      {EVENT_LABELS[event.kind]}
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · {dateTime(event.created_at)}
-                      </span>
-                    </p>
-                    {event.body ? (
-                      <p className="text-muted-foreground text-sm whitespace-pre-wrap">
-                        {event.body}
+                {(t.events ?? [])
+                  .filter((e) => e.kind !== "note")
+                  .map((event) => (
+                    <li
+                      key={event.id}
+                      className="flex flex-col gap-1 px-4 py-3"
+                    >
+                      <p className="text-sm">
+                        <span className="font-medium">
+                          {event.actor_name ?? "Someone"}
+                        </span>{" "}
+                        {EVENT_LABELS[event.kind]}
+                        <span className="text-muted-foreground">
+                          {" "}
+                          · {dateTime(event.created_at)}
+                        </span>
                       </p>
-                    ) : null}
-                  </li>
-                ))}
+                      {event.body ? (
+                        <p className="text-muted-foreground text-sm whitespace-pre-wrap">
+                          {event.body}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
               </ol>
-              <NoteComposer ticketId={t.id} />
             </SectionCard>
           </div>
 
@@ -247,8 +287,9 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** The next step for whoever is looking: take it, resolve or return it
- * (handling team), or fix and resend it (the desk, once returned). */
+/** The next step for whoever is looking: take it, resolve, reject or hand
+ * it back (handling team), or fix and resend it (the desk, once rejected).
+ * Missing details aren't a reason to reject — they're asked in the chat. */
 function TicketActions({
   ticket,
   onTeam,
@@ -261,6 +302,7 @@ function TicketActions({
   canResend: boolean;
 }) {
   const claim = useClaimTicket();
+  const release = useReleaseTicket();
   const [mode, setMode] = useState<"resolve" | "return" | null>(null);
 
   if (ticket.status === "returned" && canResend) {
@@ -286,6 +328,15 @@ function TicketActions({
       toast.success(`You've taken ${ticket.number}.`);
     } catch (error) {
       toast.error(errorMessage(error, "Couldn't take the ticket."));
+    }
+  }
+
+  async function handBack() {
+    try {
+      await release.mutateAsync(ticket.id);
+      toast.success(`${ticket.number} is back in the team's queue.`);
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't hand the ticket back."));
     }
   }
 
@@ -320,10 +371,21 @@ function TicketActions({
                 onClick={() => setMode(mode === "return" ? null : "return")}
                 aria-expanded={mode === "return"}
               >
-                <Undo2 aria-hidden="true" />
-                Send back to the desk
+                <CircleX aria-hidden="true" />
+                Reject
               </Button>
             </>
+          ) : null}
+          {!open && canClose ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => void handBack()}
+              disabled={release.isPending}
+            >
+              <Users aria-hidden="true" />
+              {release.isPending ? "Handing back…" : "Hand back to team"}
+            </Button>
           ) : null}
         </div>
         {mode === "resolve" ? (
@@ -355,21 +417,27 @@ function CloseForm({
   onDone: () => void;
 }) {
   const resolve = useResolveTicket();
-  const giveBack = useReturnTicket();
+  const reject = useRejectTicket();
   const [text, setText] = useState("");
-  const pending = resolve.isPending || giveBack.isPending;
+  const [reasonCode, setReasonCode] = useState<TicketRejectReason | "">("");
+  const pending = resolve.isPending || reject.isPending;
   const id = `ticket-${kind}-text`;
+  const ready = kind === "resolve" ? !!text.trim() : !!reasonCode;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!text.trim()) return;
+    if (!ready) return;
     try {
       if (kind === "resolve") {
         await resolve.mutateAsync({ id: ticket.id, note: text.trim() });
         toast.success(`${ticket.number} resolved. The desk has been told.`);
       } else {
-        await giveBack.mutateAsync({ id: ticket.id, reason: text.trim() });
-        toast.success(`${ticket.number} sent back to the desk.`);
+        await reject.mutateAsync({
+          id: ticket.id,
+          reasonCode: reasonCode as TicketRejectReason,
+          reason: text.trim() || undefined,
+        });
+        toast.success(`${ticket.number} rejected.`);
       }
       onDone();
     } catch (error) {
@@ -379,18 +447,42 @@ function CloseForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
+      {kind === "return" ? (
+        <>
+          <Label htmlFor="ticket-reject-reason">Why reject it?</Label>
+          <SelectNative
+            id="ticket-reject-reason"
+            value={reasonCode}
+            onChange={(e) =>
+              setReasonCode(e.target.value as TicketRejectReason | "")
+            }
+            required
+          >
+            <option value="">Choose a reason</option>
+            {Object.entries(REJECT_REASON_LABELS).map(([code, label]) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </SelectNative>
+          <p className="text-muted-foreground text-xs">
+            Need more details? Ask in the conversation below instead of
+            rejecting.
+          </p>
+        </>
+      ) : null}
       <Label htmlFor={id}>
         {kind === "resolve"
           ? "How was it resolved?"
-          : "Why is it going back? (wrong department, or what's missing)"}
+          : "Anything to add? (optional — e.g. which department it belongs to)"}
       </Label>
       <Textarea
         id={id}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        rows={4}
+        rows={kind === "resolve" ? 4 : 2}
         maxLength={4000}
-        required
+        required={kind === "resolve"}
         placeholder={
           kind === "resolve"
             ? "e.g. Rebooked on KQ100 tomorrow 10:25, seat 14C, no fare difference. Customer confirmed by phone."
@@ -400,14 +492,14 @@ function CloseForm({
       <Button
         type="submit"
         className="w-fit"
-        disabled={!text.trim() || pending}
+        disabled={!ready || pending}
         variant={kind === "return" ? "outline" : "default"}
       >
         {pending
           ? "Saving…"
           : kind === "resolve"
             ? "Resolve ticket"
-            : "Send back"}
+            : "Reject ticket"}
       </Button>
     </form>
   );
@@ -457,7 +549,7 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
           <Alert>
             <Undo2 aria-hidden="true" />
             <AlertTitle>
-              {lastReturn.actor_name ?? "The team"} sent it back
+              {lastReturn.actor_name ?? "The team"} rejected it
             </AlertTitle>
             <AlertDescription className="whitespace-pre-wrap">
               {lastReturn.body}
@@ -537,51 +629,257 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
   );
 }
 
-function NoteComposer({ ticketId }: { ticketId: string }) {
+/** The ticket's conversation: messages between the desk and the handling
+ * team, live — a message shows up for everyone viewing the ticket at once
+ * (useTicketLive), with "… is typing". Enter sends; Shift+Enter is a new
+ * line. Stored as the ticket's notes, so it's also kept with the ticket. */
+function Conversation({
+  ticketId,
+  messages,
+  reads,
+  myId,
+  live,
+}: {
+  ticketId: string;
+  messages: TicketEvent[];
+  reads: TicketRead[];
+  myId: string | undefined;
+  live: ReturnType<typeof useTicketLive>;
+}) {
   const addNote = useAddTicketNote();
   const [body, setBody] = useState("");
+  const endRef = useRef<HTMLDivElement>(null);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const note = body.trim();
-    if (!note) return;
-    // The note appears on the ticket at once; it comes back into the box
-    // only if the server refuses it.
+  // Keep the newest message in view as they arrive.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "nearest" });
+  }, [messages.length]);
+
+  // Read ticks: tell the others I've read up to the newest message — when
+  // it arrives while I'm looking, or when I come back to this tab.
+  const newestId = messages.at(-1)?.id;
+  useEffect(() => {
+    if (!newestId || newestId.startsWith("pending-")) return;
+    const markRead = () => {
+      if (document.visibilityState !== "visible") return;
+      void ticketsApi.markRead(ticketId).catch(() => undefined);
+    };
+    markRead();
+    document.addEventListener("visibilitychange", markRead);
+    return () => document.removeEventListener("visibilitychange", markRead);
+  }, [ticketId, newestId]);
+
+  /** Who other than the sender has read up to this message. */
+  function seenBy(message: TicketEvent) {
+    return reads
+      .filter(
+        (r) =>
+          r.user_id !== message.actor_user_id &&
+          Date.parse(r.read_at) >= Date.parse(message.created_at),
+      )
+      .map((r) => r.name ?? "Someone");
+  }
+
+  async function send(event?: FormEvent) {
+    event?.preventDefault();
+    const text = body.trim();
+    if (!text) return;
+    // The message appears at once; it comes back into the box only if the
+    // server refuses it.
     setBody("");
     try {
-      await addNote.mutateAsync({ id: ticketId, body: note });
+      await addNote.mutateAsync({ id: ticketId, body: text });
     } catch (error) {
-      setBody(note);
-      toast.error(errorMessage(error, "Couldn't add the note."));
+      setBody(text);
+      toast.error(errorMessage(error, "Couldn't send the message."));
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      void send();
     }
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="border-border-subtle flex flex-col gap-2 border-t p-4"
+    <SectionCard
+      title="Conversation"
+      description="Messages between the desk and the team working this ticket."
+      bodyClassName="px-0 pb-0"
+      action={
+        <div className="flex items-center gap-3">
+          <ViewingNow viewers={live.viewers} />
+          <span
+            className="text-muted-foreground flex items-center gap-1.5 text-xs"
+            title={
+              live.connected
+                ? "Your connection is live: new messages appear by themselves."
+                : "Reconnecting — refresh to see new messages."
+            }
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-2 rounded-full",
+                live.connected ? "bg-success" : "bg-muted-foreground/40",
+              )}
+            />
+            {live.connected ? "Live updates on" : "Live updates off"}
+          </span>
+        </div>
+      }
     >
-      <Label htmlFor="ticket-note" className="sr-only">
-        Add a note
-      </Label>
-      <Textarea
-        id="ticket-note"
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        rows={2}
-        maxLength={4000}
-        placeholder="Add a note for everyone on this ticket…"
-      />
-      <Button
-        type="submit"
-        variant="outline"
-        size="sm"
-        className="w-fit"
-        disabled={!body.trim()}
+      <div
+        className="border-border-subtle flex max-h-[28rem] flex-col gap-3 overflow-y-auto border-t px-4 py-4"
+        role="log"
+        aria-live="polite"
+        aria-label="Conversation"
       >
-        <MessageSquare aria-hidden="true" />
-        Add note
-      </Button>
-    </form>
+        {messages.length === 0 ? (
+          <p className="text-muted-foreground py-6 text-center text-sm">
+            No messages yet. Ask a question or give an update — everyone on this
+            ticket sees it straight away.
+          </p>
+        ) : (
+          messages.map((message) => {
+            const mine = !!myId && message.actor_user_id === myId;
+            const pending = message.id.startsWith("pending-");
+            return (
+              <div
+                key={message.id}
+                className={cn(
+                  "flex max-w-[85%] flex-col gap-1",
+                  mine ? "items-end self-end" : "items-start self-start",
+                )}
+              >
+                <span className="text-muted-foreground flex items-center gap-1 text-xs">
+                  {mine ? "You" : (message.actor_name ?? "Someone")} ·{" "}
+                  {pending ? "sending…" : dateTime(message.created_at)}
+                  {mine && !pending ? (
+                    <ReadTicks seenBy={seenBy(message)} />
+                  ) : null}
+                </span>
+                <p
+                  className={cn(
+                    "rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
+                    mine
+                      ? "bg-primary text-primary-foreground rounded-br-sm"
+                      : "bg-muted rounded-bl-sm",
+                    pending && "opacity-70",
+                  )}
+                >
+                  {message.body}
+                </p>
+              </div>
+            );
+          })
+        )}
+        <div ref={endRef} />
+      </div>
+      <p className="text-muted-foreground h-5 px-4 text-xs" aria-live="polite">
+        {live.typingName ? `${live.typingName} is typing…` : ""}
+      </p>
+      <form
+        onSubmit={send}
+        className="border-border-subtle flex items-end gap-2 border-t p-4"
+      >
+        <Label htmlFor="ticket-message" className="sr-only">
+          Message
+        </Label>
+        <Textarea
+          id="ticket-message"
+          value={body}
+          onChange={(e) => {
+            setBody(e.target.value);
+            if (e.target.value.trim()) live.sendTyping();
+          }}
+          onKeyDown={onKeyDown}
+          rows={2}
+          maxLength={4000}
+          placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
+          className="min-h-11 flex-1"
+        />
+        <Button
+          type="submit"
+          size="lg"
+          disabled={!body.trim()}
+          aria-label="Send message"
+        >
+          <Send aria-hidden="true" />
+        </Button>
+      </form>
+    </SectionCard>
+  );
+}
+
+function initials(name: string) {
+  return name
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/** Who else has this ticket open in front of them right now. */
+function ViewingNow({
+  viewers,
+}: {
+  viewers: ReturnType<typeof useTicketLive>["viewers"];
+}) {
+  if (viewers.length === 0) return null;
+  const names = viewers.map((v) => v.name);
+  const label =
+    names.length === 1
+      ? `${names[0]} is viewing`
+      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} are viewing`;
+  const shown = viewers.slice(0, 3);
+  return (
+    <div className="flex items-center gap-1.5" title={label}>
+      <AvatarGroup>
+        {shown.map((v) => (
+          <Avatar key={v.user_id} size="sm">
+            <AvatarFallback className="text-[0.625rem]">
+              {initials(v.name)}
+            </AvatarFallback>
+          </Avatar>
+        ))}
+        {viewers.length > shown.length ? (
+          <AvatarGroupCount className="text-[0.625rem]">
+            +{viewers.length - shown.length}
+          </AvatarGroupCount>
+        ) : null}
+      </AvatarGroup>
+      <span className="text-muted-foreground sr-only text-xs sm:not-sr-only">
+        {viewers.length === 1
+          ? `${names[0]} viewing`
+          : `${viewers.length} viewing`}
+      </span>
+    </div>
+  );
+}
+
+/** WhatsApp-style ticks on my own message: one grey tick = sent, two blue
+ * ticks = someone else on the ticket has read it. */
+function ReadTicks({ seenBy }: { seenBy: string[] }) {
+  if (seenBy.length === 0) {
+    return (
+      <span title="Sent" className="inline-flex">
+        <Check aria-hidden="true" className="size-3.5" />
+        <span className="sr-only">Sent</span>
+      </span>
+    );
+  }
+  const label = `Seen by ${seenBy.join(", ")}`;
+  return (
+    <span title={label} className="text-info inline-flex">
+      <CheckCheck aria-hidden="true" className="size-3.5" />
+      <span className="sr-only">{label}</span>
+    </span>
   );
 }

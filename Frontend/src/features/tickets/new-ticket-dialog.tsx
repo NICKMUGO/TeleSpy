@@ -55,9 +55,28 @@ const EMPTY = {
   subject: "",
   description: "",
   priority: "medium" as TicketPriority,
-  /** A datetime-local value; "" = the priority's SLA target. */
+  /** How long until it breaches the SLA: "" = the priority's target, a
+   * number of hours from SLA_WINDOWS, or CUSTOM for a picked time. */
+  window: "",
+  /** A datetime-local value, used when window is CUSTOM. */
   dueAt: "",
 };
+
+/** The "Breaches SLA after" choice for picking an exact date and time. */
+const CUSTOM = "custom";
+
+/** How long the handling team has before the ticket breaches its SLA. */
+const SLA_WINDOWS: { hours: number; label: string }[] = [
+  { hours: 4, label: "4 hours · high / emergency" },
+  { hours: 8, label: "8 hours" },
+  { hours: 12, label: "12 hours" },
+  { hours: 24, label: "24 hours" },
+  { hours: 48, label: "2 days" },
+  { hours: 72, label: "3 days" },
+  { hours: 24 * 7, label: "1 week" },
+  { hours: 24 * 14, label: "2 weeks" },
+  { hours: 24 * 30, label: "1 month" },
+];
 
 /** "2026-11-02T14:30" for a datetime-local input, in the browser's time. */
 function localInputValue(date: Date) {
@@ -105,11 +124,21 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
 
   const targetHours = (p: TicketPriority) =>
     slaTargets ? slaTargets[`${p}_hours`] : undefined;
-  const hours = targetHours(form.priority);
-  // Re-read on each render so the default deadline shown keeps up.
+  // The chosen window, or else the priority's own SLA target.
+  const hours =
+    form.window && form.window !== CUSTOM
+      ? Number(form.window)
+      : targetHours(form.priority);
+  // Re-read on each render so the deadline shown keeps up.
   const now = new Date();
-  const defaultDue =
-    hours === undefined ? null : new Date(now.getTime() + hours * 3_600_000);
+  const due =
+    form.window === CUSTOM
+      ? form.dueAt
+        ? new Date(form.dueAt)
+        : null
+      : hours === undefined
+        ? null
+        : new Date(now.getTime() + hours * 3_600_000);
 
   const custom = form.categoryId === OTHER;
   const category = categories.data?.data.find((c) => c.id === form.categoryId);
@@ -135,7 +164,8 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
     (!forCustomer || (form.customerName.trim() && reachable)) &&
     (custom ? form.customReason.trim() && departmentId : category) &&
     form.subject.trim() &&
-    form.description.trim();
+    form.description.trim() &&
+    (form.window !== CUSTOM || form.dueAt);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -154,7 +184,14 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
         subject: form.subject.trim(),
         description: form.description.trim(),
         priority: form.priority,
-        due_at: form.dueAt ? new Date(form.dueAt).toISOString() : undefined,
+        sla_hours:
+          form.window && form.window !== CUSTOM
+            ? Number(form.window)
+            : undefined,
+        due_at:
+          form.window === CUSTOM && form.dueAt
+            ? new Date(form.dueAt).toISOString()
+            : undefined,
       });
       toast.success(result.message ?? "Ticket raised.");
       onDone();
@@ -185,7 +222,7 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
         <DialogDescription>
           For an issue another department has to handle. It goes straight to
           their queue, or to the person you choose, and you&apos;re emailed when
-          it&apos;s resolved or sent back.
+          it&apos;s resolved or rejected.
         </DialogDescription>
       </DialogHeader>
 
@@ -419,31 +456,61 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
               {errorFor("priority")}
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="ticket-due">
-                Resolve by{" "}
-                <span className="text-muted-foreground font-normal">
-                  (optional)
-                </span>
-              </Label>
+              <Label htmlFor="ticket-window">Breaches SLA after</Label>
+              <SelectNative
+                id="ticket-window"
+                value={form.window}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setForm((f) => ({ ...f, window: value }));
+                  if (value === CUSTOM)
+                    requestAnimationFrame(() =>
+                      document.getElementById("ticket-due")?.focus(),
+                    );
+                }}
+                aria-describedby="ticket-due-note"
+              >
+                <option value="">
+                  {PRIORITY_LABELS[form.priority]} priority target
+                  {targetHours(form.priority) === undefined
+                    ? ""
+                    : ` · ${duration(targetHours(form.priority)! * 60)}`}
+                </option>
+                {SLA_WINDOWS.map((w) => (
+                  <option key={w.hours} value={String(w.hours)}>
+                    {w.label}
+                  </option>
+                ))}
+                <option value={CUSTOM}>Pick a date and time…</option>
+              </SelectNative>
+              {errorFor("sla_hours")}
+            </div>
+          </div>
+          {form.window === CUSTOM ? (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="ticket-due">Resolve by</Label>
               <Input
                 id="ticket-due"
                 type="datetime-local"
                 value={form.dueAt}
                 min={localInputValue(now)}
+                max={localInputValue(new Date(now.getTime() + 30 * 86_400_000))}
                 onChange={(e) => set("dueAt")(e.target.value)}
                 aria-describedby="ticket-due-note"
+                required
+                className="sm:w-64"
               />
               {errorFor("due_at")}
             </div>
-          </div>
+          ) : null}
           <p
             id="ticket-due-note"
             className="text-muted-foreground -mt-1 text-xs"
           >
-            {form.dueAt
-              ? `Your own deadline replaces the ${PRIORITY_LABELS[form.priority].toLowerCase()} priority SLA.`
-              : defaultDue
-                ? `SLA target: resolved by ${dateTime(defaultDue.toISOString())}. Set a time to give it your own deadline.`
+            {due
+              ? `Must be resolved by ${dateTime(due.toISOString())}; after that it breaches the SLA.`
+              : form.window === CUSTOM
+                ? "Pick when it must be resolved by (up to 30 days)."
                 : "The priority sets how long they have to resolve it."}
           </p>
         </fieldset>

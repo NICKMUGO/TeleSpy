@@ -38,6 +38,9 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<TicketCategory> TicketCategories => Set<TicketCategory>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketEvent> TicketEvents => Set<TicketEvent>();
+    public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
+    public DbSet<TicketRead> TicketReads => Set<TicketRead>();
+    public DbSet<PushDevice> PushDevices => Set<PushDevice>();
 
     // All DateTime values in this app are naive UTC wall-clock (see
     // Core/Time.cs's Clock.UtcNow(), Kind=Unspecified) — mirroring
@@ -251,6 +254,50 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.ResolvedBy).WithMany().HasForeignKey(x => x.ResolvedByUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasMany(x => x.Events).WithOne().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketFeedback>(e =>
+        {
+            e.ToTable("ticket_feedback");
+            e.HasKey(x => x.FeedbackId);
+            e.Property(x => x.FeedbackId).HasColumnName("feedback_id").HasMaxLength(36);
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => x.TicketId).IsUnique();
+            e.Property(x => x.TokenHash).HasColumnName("token_hash").HasMaxLength(64).IsRequired();
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.Property(x => x.Rating).HasColumnName("rating");
+            e.Property(x => x.Comment).HasColumnName("comment").HasMaxLength(1000);
+            e.Property(x => x.SentAt).HasColumnName("sent_at");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.RespondedAt).HasColumnName("responded_at");
+            e.HasOne(x => x.Ticket).WithOne(t => t.Feedback).HasForeignKey<TicketFeedback>(x => x.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PushDevice>(e =>
+        {
+            e.ToTable("push_devices");
+            e.HasKey(x => x.DeviceId);
+            e.Property(x => x.DeviceId).HasColumnName("device_id").HasMaxLength(36);
+            e.Property(x => x.UserId).HasColumnName("user_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => x.UserId);
+            e.Property(x => x.Endpoint).HasColumnName("endpoint").HasMaxLength(1000).IsRequired();
+            e.HasIndex(x => x.Endpoint).IsUnique();
+            e.Property(x => x.P256dh).HasColumnName("p256dh").HasMaxLength(200).IsRequired();
+            e.Property(x => x.Auth).HasColumnName("auth").HasMaxLength(100).IsRequired();
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketRead>(e =>
+        {
+            e.ToTable("ticket_reads");
+            e.HasKey(x => new { x.TicketId, x.UserId });
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36);
+            e.Property(x => x.UserId).HasColumnName("user_id").HasMaxLength(36);
+            e.Property(x => x.LastReadAt).HasColumnName("last_read_at");
+            e.HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<TicketEvent>(e =>

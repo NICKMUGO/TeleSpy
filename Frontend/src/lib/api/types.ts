@@ -454,6 +454,15 @@ export interface ApiErrorBody {
 
 export type TicketStatus = "open" | "in_progress" | "returned" | "resolved";
 
+/** Why a handling team rejects a ticket (stored as status "returned"). */
+export type TicketRejectReason = "wrong_department" | "duplicate" | "invalid";
+
+export const REJECT_REASON_LABELS: Record<TicketRejectReason, string> = {
+  wrong_department: "Wrong department",
+  duplicate: "Duplicate of another ticket",
+  invalid: "Not a real issue",
+};
+
 export type TicketPriority = "high" | "medium" | "low";
 
 /** Where a ticket stands against its SLA deadline. "paused" while it's
@@ -468,6 +477,13 @@ export interface TicketCategory {
   is_active: boolean;
 }
 
+/** How far one person has read a ticket's conversation (read ticks). */
+export interface TicketRead {
+  user_id: string;
+  name: string | null;
+  read_at: string;
+}
+
 export interface TicketEvent {
   id: string;
   kind:
@@ -476,9 +492,13 @@ export interface TicketEvent {
     | "claimed"
     | "note"
     | "returned"
+    | "released"
     | "resent"
     | "resolved";
   body: string | null;
+  /** Absent on a message still being sent (shown at once, before the
+   * server confirms it). */
+  actor_user_id?: string;
   actor_name: string | null;
   created_at: string;
 }
@@ -521,6 +541,8 @@ export interface Ticket {
   updated_at: string;
   /** Only on GET /tickets/{id}. */
   events?: TicketEvent[];
+  /** Detail only: how far each person has read the conversation. */
+  reads?: TicketRead[];
 }
 
 /** GET /tickets/me — what the ticket desk means for the caller. */
@@ -544,15 +566,44 @@ export interface TicketAgentStats {
   user_id: string;
   name: string;
   raised: number;
-  /** Successful escalations: tickets they raised that were resolved. */
+  /** Tickets they raised that were resolved this month. */
   resolved: number;
+  /** Successful escalations: resolved without ever being rejected. */
+  successful: number;
+  /** successful ÷ resolved, %; null with nothing resolved. */
+  success_pct: number | null;
+  /** Times the handling team rejected one of their tickets this month. */
   returned: number;
   open: number;
+  /** Of their tickets resolved this month: % within the SLA deadline. */
+  sla_met_pct: number | null;
+  /** Of their tickets resolved this month: average raised → resolved. */
+  avg_resolution_minutes: number | null;
+  /** Customer rating (1-5) on their tickets, answered this month. */
+  csat_avg: number | null;
+  csat_responses: number;
 }
 
 export interface TicketStats {
   month: string;
+  /** Every agent for the desk Manager and Admin; only yourself otherwise. */
   agents: TicketAgentStats[];
+  /** The average agent on the desk this month. */
+  team: {
+    agents: number;
+    raised: number | null;
+    successful: number | null;
+    success_pct: number | null;
+    csat_avg: number | null;
+  };
+  /** Where you rank on each figure (1 = best), if you're on the desk. */
+  me: {
+    ranks: {
+      successful: number | null;
+      success_pct: number | null;
+      csat_avg: number | null;
+    };
+  } | null;
 }
 
 /** GET /tickets/sla-targets — hours to resolve, per priority. */
@@ -571,6 +622,41 @@ export interface SlaFigures {
   avg_resolution_minutes: number | null;
 }
 
+export interface CsatFigures {
+  csat_avg: number | null;
+  csat_responses: number;
+}
+
+/** Customer satisfaction for the month, in GET /tickets/sla. */
+export interface CsatReport {
+  /** Rating emails sent this month. */
+  asked: number;
+  responses: number;
+  average: number | null;
+  /** Share rating 4 or 5. */
+  satisfied_pct: number | null;
+  distribution: { rating: number; count: number }[];
+  recent: {
+    ticket_id: string;
+    number: string;
+    department_name: string | null;
+    rating: number;
+    comment: string;
+    responded_at: string;
+  }[];
+}
+
+/** POST /feedback/lookup and /feedback — the public rating page. */
+export interface FeedbackView {
+  number: string;
+  subject: string;
+  department_name: string | null;
+  rating: number | null;
+  comment: string | null;
+  responded: boolean;
+  expired: boolean;
+}
+
 /** GET /tickets/sla — the organisation against the SLA for a month. */
 export interface SlaReport {
   month: string;
@@ -581,16 +667,19 @@ export interface SlaReport {
     target_hours: number;
     overdue_open: number;
   })[];
-  by_department: (SlaFigures & {
-    department_id: string;
-    department_name: string | null;
-    overdue_open: number;
-  })[];
-  by_resolver: (SlaFigures & {
-    user_id: string;
-    name: string | null;
-    department_name: string | null;
-  })[];
+  by_department: (SlaFigures &
+    CsatFigures & {
+      department_id: string;
+      department_name: string | null;
+      overdue_open: number;
+    })[];
+  by_resolver: (SlaFigures &
+    CsatFigures & {
+      user_id: string;
+      name: string | null;
+      department_name: string | null;
+    })[];
+  csat: CsatReport;
   /** Resolved that month — only tickets the caller can open. */
   resolved: Ticket[];
   /** Open past the deadline right now — only tickets the caller can open. */

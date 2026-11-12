@@ -36,6 +36,7 @@ import type {
   Ticket,
   TicketCategory,
   TicketEvent,
+  TicketRejectReason,
   TicketStatus,
 } from "@/lib/api/types";
 import { useSession } from "@/lib/auth/session-store";
@@ -690,6 +691,7 @@ function patchTicket(
           {
             ...event,
             id: `pending-${now}`,
+            actor_user_id: useSession.getState().user?.id,
             actor_name: myName(),
             created_at: now,
           },
@@ -736,10 +738,22 @@ export function useResolveTicket() {
   );
 }
 
-export function useReturnTicket() {
-  return useTicketMutation(({ id, reason }: { id: string; reason: string }) =>
-    ticketsApi.returnToDesk(id, reason),
+export function useRejectTicket() {
+  return useTicketMutation(
+    ({
+      id,
+      reasonCode,
+      reason,
+    }: {
+      id: string;
+      reasonCode: TicketRejectReason;
+      reason?: string;
+    }) => ticketsApi.reject(id, reasonCode, reason),
   );
+}
+
+export function useReleaseTicket() {
+  return useTicketMutation((id: string) => ticketsApi.release(id));
 }
 
 export function useResendTicket() {

@@ -57,11 +57,15 @@ public static class Seed
     private static readonly (string Name, string Code, double Budget)[] Departments =
     [
         ("Engineering", "ENG", 8_500.0),
-        ("Sales", "SLS", 6_000.0),
+        // The customer service desk (HandlesCustomerService): raises tickets
+        // for customers' issues.
+        ("Customer Service", "CS", 6_000.0),
         ("Finance", "FIN", 7_500.0),
         ("Human Resources", "HR", 4_500.0),
         ("Operations", "OPS", 7_500.0),
     ];
+
+    private const string CustomerServiceCode = "CS";
 
     private static readonly (string Name, string Provider, double Rate)[] TelcoPlanSeeds =
     [
@@ -146,7 +150,11 @@ public static class Seed
         var departments = new List<Department>();
         foreach (var (name, code, budget) in Departments)
         {
-            var dept = new Department { Name = name, CostCentreCode = code, BudgetCeiling = budget };
+            var dept = new Department
+            {
+                Name = name, CostCentreCode = code, BudgetCeiling = budget,
+                HandlesCustomerService = code == CustomerServiceCode,
+            };
             db.Departments.Add(dept);
             departments.Add(dept);
         }

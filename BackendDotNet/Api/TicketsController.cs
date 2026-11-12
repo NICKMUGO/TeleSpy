@@ -5,16 +5,20 @@
 // or a reason the raiser writes themselves (and then picks the department).
 // It goes to the whole department by default, or straight to one person in
 // it. That department claims it, and either resolves it with a note — a
-// successful escalation for the agent who raised it — or returns it to the
-// raiser to fix and send again. Calls never create tickets on their own.
+// successful escalation for the agent who raised it — or rejects it back to
+// the raiser (wrong department, a duplicate, or not a real issue) to fix and
+// send again. Missing details aren't a reason to reject: they're asked in the
+// ticket's chat. Whoever is on a ticket can also hand it back to their
+// team's queue. Calls never create tickets on their own.
 //
 // Like an incident, every ticket has a priority (high/medium/low) and an
-// SLA deadline: raised + that priority's target hours (Admin-set), or a
-// deadline the raiser gives it. Resolved by the deadline meets the SLA,
+// SLA deadline: raised + that priority's target hours (Admin-set), or how
+// long the raiser gives it (4 hours to a month) or a time they pick. Resolved by the deadline meets the SLA,
 // after it misses it; time spent returned to the raiser doesn't count.
 // GET /tickets/sla reports how the whole organisation is doing against it.
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using TeleSpy.Core;
 using TeleSpy.Models;
@@ -42,6 +46,11 @@ public class CreateTicketRequest
     public string? AssignedToUserId { get; set; }
     /// <summary>high | medium | low; medium when left out.</summary>
     public string? Priority { get; set; }
+    /// <summary>Hours from now until it breaches the SLA, chosen by the
+    /// raiser (4 hours up to a month), instead of the priority's target.
+    /// Counted from the server's clock, so a wrong browser clock can't
+    /// shift it.</summary>
+    public int? SlaHours { get; set; }
     /// <summary>An ISO time to have it resolved by, instead of the
     /// priority's SLA target.</summary>
     public string? DueAt { get; set; }
@@ -66,7 +75,22 @@ public class ResolveTicketRequest
 
 public class ReturnTicketRequest
 {
+    /// <summary>wrong_department | duplicate | invalid (TicketRejectReason).</summary>
+    public string? ReasonCode { get; set; }
+    /// <summary>Optional detail, e.g. which department it belongs to.</summary>
     public string? Reason { get; set; }
+}
+
+/// <summary>Why a handling team rejects a ticket. Missing details are not one
+/// of them: those are asked for in the ticket's chat.</summary>
+public static class TicketRejectReason
+{
+    public static readonly IReadOnlyDictionary<string, string> Labels = new Dictionary<string, string>
+    {
+        ["wrong_department"] = "Wrong department",
+        ["duplicate"] = "Duplicate of another ticket",
+        ["invalid"] = "Not a real issue",
+    };
 }
 
 public class ResendTicketRequest
@@ -89,9 +113,14 @@ public class TicketCategoryRequest
 public class TicketsController(
     TeleSpyDbContext db,
     IViewerContext viewerContext,
-    IMailService mail) : ControllerBase
+    IMailService mail,
+    IHubContext<TicketsHub> hub,
+    IPushService push,
+    ILogger<TicketsController> logger) : ControllerBase
 {
     private const int MaxListed = 200;
+    /// <summary>How long a customer's rating link works.</summary>
+    private const int FeedbackLinkDays = 14;
 
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -140,11 +169,57 @@ public class TicketsController(
         .Where(u => u.Employee != null && u.Employee.Department != null && u.Employee.Department.HandlesCustomerService)
         .Select(u => u.UserId);
 
-    private bool CanSee(Access access, Ticket ticket) =>
-        access.IsAdmin ||
-        ticket.RaisedByUserId == access.Viewer.UserId ||
-        ticket.DepartmentId == access.DepartmentId ||
-        access.DeskManager;
+    private static bool CanSee(Access access, Ticket ticket) =>
+        TicketVisibility.CanSee(access.Viewer, access.Department, ticket);
+
+    /// <summary>Tell everyone with the ticket open (TicketsHub) that it
+    /// changed, so their page refetches it. Best effort: a failed broadcast
+    /// never fails the request — the page still catches up on its next load.</summary>
+    private async Task BroadcastChangedAsync(string ticketId)
+    {
+        try
+        {
+            await hub.Clients.Group(TicketsHub.Group(ticketId)).SendAsync("ticketChanged", new { ticket_id = ticketId });
+        }
+        catch (Exception exc)
+        {
+            logger.LogWarning(exc, "Couldn't broadcast a change to ticket {TicketId}", ticketId);
+        }
+    }
+
+    // --- Push notifications (Services/Push.cs) ----------------------------------
+
+    private static string TicketUrl(Ticket ticket) => $"/tickets/{ticket.TicketId}";
+
+    private static string Short(string text, int max = 120) =>
+        text.Length <= max ? text : text[..(max - 1)].TrimEnd() + "…";
+
+    /// <summary>A ticket arrived at a team: the one person it's assigned to,
+    /// or else everyone in the department. Never whoever sent it.</summary>
+    private async Task PushNewTicketAsync(Ticket ticket, string senderId, string? senderName)
+    {
+        List<string> to = ticket.ClaimedByUserId is { } assignee
+            ? [assignee]
+            : await AssignableUsers(ticket.DepartmentId).Select(u => u.UserId).ToListAsync();
+        to.Remove(senderId);
+        var number = Ticket.FormatNumber(ticket.Number);
+        var title = ticket.ClaimedByUserId is null ? $"New ticket for {ticket.Department?.Name ?? "your team"}" : "New ticket for you";
+        push.Notify(to, ticket.TicketId, $"{title} · {number}",
+            $"{(senderName is null ? "" : $"{senderName}: ")}{Short(ticket.Subject)} ({ticket.Priority} priority)", TicketUrl(ticket));
+    }
+
+    /// <summary>A new message: once someone has claimed the ticket, only they
+    /// and the person who raised it; before that, the raiser and the whole
+    /// handling team. Never the sender.</summary>
+    private async Task PushMessageAsync(Ticket ticket, User sender, string body)
+    {
+        var to = new HashSet<string> { ticket.RaisedByUserId };
+        if (ticket.ClaimedByUserId is { } claimer) to.Add(claimer);
+        else to.UnionWith(await AssignableUsers(ticket.DepartmentId).Select(u => u.UserId).ToListAsync());
+        to.Remove(sender.UserId);
+        push.Notify(to, ticket.TicketId,
+            $"{sender.Employee?.FullName ?? sender.Email} · {Ticket.FormatNumber(ticket.Number)}", Short(body), TicketUrl(ticket));
+    }
 
     /// <summary>Someone in the handling department: they claim and work it.</summary>
     private static bool OnHandlingTeam(Access access, Ticket ticket) =>
@@ -390,17 +465,46 @@ public class TicketsController(
         return Ok(new { data = tickets.Select(t => t.ToDict()) });
     }
 
-    /// <summary>Escalation scores for ?month=YYYY-MM (default this month):
-    /// per desk agent, tickets raised, resolved (successful escalations),
-    /// returned to them, and still open. An agent sees their own row; the
-    /// desk Manager and Admin see every agent's.</summary>
+    /// <summary>One customer service agent's month (GET /tickets/stats).</summary>
+    private sealed record AgentScore(
+        string UserId, string Name, int Raised, int Resolved, int Successful,
+        int Rejected, int Open, double? SuccessPct, double? SlaMetPct, int? AvgResolutionMinutes,
+        double? CsatAvg, int CsatResponses)
+    {
+        public Dictionary<string, object?> ToDict() => new()
+        {
+            ["user_id"] = UserId,
+            ["name"] = Name,
+            ["raised"] = Raised,
+            ["resolved"] = Resolved,
+            ["successful"] = Successful,
+            ["returned"] = Rejected,
+            ["open"] = Open,
+            ["success_pct"] = SuccessPct,
+            ["sla_met_pct"] = SlaMetPct,
+            ["avg_resolution_minutes"] = AvgResolutionMinutes,
+            ["csat_avg"] = CsatAvg,
+            ["csat_responses"] = CsatResponses,
+        };
+    }
+
+    /// <summary>The customer service scorecard for ?month=YYYY-MM (default
+    /// this month), per desk agent:
+    /// - escalations: tickets they raised; successful = resolved without
+    ///   ever being rejected; rejected and still open;
+    /// - stars: customers' ratings of tickets they raised.
+    /// SLA and time to resolve are shown alongside but don't decide success
+    /// (they're mostly the handling team's doing).
+    /// The desk Manager and Admin see every agent. An agent sees their own
+    /// scorecard next to the team average and where they rank on each
+    /// figure — never anyone else's numbers.</summary>
     [HttpGet("/tickets/stats")]
     public async Task<IActionResult> Stats()
     {
         var access = await LoadAccessAsync();
         if (!access.OnDesk && !access.IsAdmin)
         {
-            return Error("not_on_desk", "Escalation scores are for the customer service desk.", 403);
+            return Error("not_on_desk", "The scorecard is for the customer service desk.", 403);
         }
         var month = Request.Query["month"].ToString();
         if (!DateTime.TryParseExact(month, "yyyy-MM", null, System.Globalization.DateTimeStyles.None, out var start))
@@ -410,43 +514,95 @@ public class TicketsController(
         }
         var end = start.AddMonths(1);
 
-        List<string> agentIds = access.DeskManager || access.IsAdmin
-            ? await DeskUserIds().ToListAsync()
-            : [access.Viewer.UserId];
+        // Everyone's figures are worked out (the team average and ranks need
+        // them); only what the caller may see is returned.
+        var agents = await db.Users.Include(u => u.Employee)
+            .Where(u => u.IsActive && u.Employee != null && u.Employee.RemovedAt == null &&
+                        u.Employee.Department != null && u.Employee.Department.HandlesCustomerService)
+            .Select(u => new { u.UserId, Name = u.Employee!.FullName })
+            .ToListAsync();
+        var agentIds = agents.Select(a => a.UserId).ToList();
 
-        // Raised in the month; resolved / returned counted by when it
+        // Raised in the month; resolved / rejected counted by when it
         // happened, so a ticket raised last month and resolved this month
         // scores this month.
         var raised = await db.Tickets.Where(t => agentIds.Contains(t.RaisedByUserId) && t.CreatedAt >= start && t.CreatedAt < end)
             .GroupBy(t => t.RaisedByUserId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
-        var resolved = await db.Tickets.Where(t => agentIds.Contains(t.RaisedByUserId) && t.ResolvedAt >= start && t.ResolvedAt < end)
-            .GroupBy(t => t.RaisedByUserId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
-        var returned = await db.TicketEvents.Where(e => e.Kind == "returned" && e.CreatedAt >= start && e.CreatedAt < end)
+        var resolvedTickets = (await db.Tickets
+                .Where(t => agentIds.Contains(t.RaisedByUserId) && t.ResolvedAt >= start && t.ResolvedAt < end)
+                .Select(t => new { t.RaisedByUserId, t.CreatedAt, ResolvedAt = t.ResolvedAt!.Value, t.DueAt, t.ReturnCount })
+                .ToListAsync())
+            .GroupBy(t => t.RaisedByUserId).ToDictionary(g => g.Key, g => g.ToList());
+        var rejected = await db.TicketEvents.Where(e => e.Kind == "returned" && e.CreatedAt >= start && e.CreatedAt < end)
             .Join(db.Tickets, e => e.TicketId, t => t.TicketId, (e, t) => t.RaisedByUserId)
             .Where(id => agentIds.Contains(id))
             .GroupBy(id => id).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
         var open = await db.Tickets.Where(t => agentIds.Contains(t.RaisedByUserId) && t.Status != TicketStatus.Resolved)
             .GroupBy(t => t.RaisedByUserId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
+        var ratings = (await db.TicketFeedback
+                .Where(f => f.Rating != null && f.RespondedAt >= start && f.RespondedAt < end &&
+                            agentIds.Contains(f.Ticket!.RaisedByUserId))
+                .Select(f => new { f.Ticket!.RaisedByUserId, Rating = f.Rating!.Value })
+                .ToListAsync())
+            .GroupBy(f => f.RaisedByUserId)
+            .ToDictionary(g => g.Key, g => g.Select(f => f.Rating).ToList());
 
-        var agents = await db.Users.Include(u => u.Employee)
-            .Where(u => agentIds.Contains(u.UserId))
-            .Select(u => new { u.UserId, Name = u.Employee != null ? u.Employee.FullName : u.Email })
-            .ToListAsync();
-        var rows = agents
-            .Select(a => new
+        var scores = agents.Select(a =>
+        {
+            var done = resolvedTickets.GetValueOrDefault(a.UserId) ?? [];
+            var successful = done.Count(t => t.ReturnCount == 0);
+            var stars = ratings.GetValueOrDefault(a.UserId) ?? [];
+            return new AgentScore(
+                a.UserId, a.Name, raised.GetValueOrDefault(a.UserId),
+                done.Count, successful, rejected.GetValueOrDefault(a.UserId), open.GetValueOrDefault(a.UserId),
+                done.Count == 0 ? null : Math.Round(100.0 * successful / done.Count, 1),
+                done.Count == 0 ? null : Math.Round(100.0 * done.Count(t => t.ResolvedAt <= t.DueAt) / done.Count, 1),
+                done.Count == 0 ? null : (int)Math.Round(done.Average(t => (t.ResolvedAt - t.CreatedAt).TotalMinutes)),
+                stars.Count == 0 ? null : Math.Round(stars.Average(), 2), stars.Count);
+        }).ToList();
+
+        // The team average per agent (over everyone on the desk), and — for
+        // the caller — their place on each figure (1 = best; ties share).
+        double? Avg(Func<AgentScore, double?> pick)
+        {
+            var values = scores.Select(pick).Where(v => v is not null).Select(v => v!.Value).ToList();
+            return values.Count == 0 ? null : Math.Round(values.Average(), 1);
+        }
+        var team = new
+        {
+            agents = scores.Count,
+            raised = Avg(x => x.Raised),
+            successful = Avg(x => x.Successful),
+            success_pct = Avg(x => x.SuccessPct),
+            csat_avg = Avg(x => x.CsatAvg),
+        };
+        int? Rank(AgentScore me, Func<AgentScore, double?> pick) =>
+            pick(me) is { } mine ? 1 + scores.Count(x => pick(x) > mine) : null;
+        var me = scores.FirstOrDefault(x => x.UserId == access.Viewer.UserId);
+        var myRanks = me is null ? null : new
+        {
+            successful = Rank(me, x => x.Successful),
+            success_pct = Rank(me, x => x.SuccessPct),
+            csat_avg = Rank(me, x => x.CsatAvg),
+        };
+
+        var visible = access.DeskManager || access.IsAdmin
+            ? scores
+                // Agents with nothing at all this month only clutter the table.
+                .Where(x => x.Raised + x.Resolved + x.Rejected + x.Open > 0 || x.UserId == access.Viewer.UserId)
+                .OrderByDescending(x => x.Successful).ThenByDescending(x => x.Raised).ThenBy(x => x.Name)
+                .ToList()
+            : scores.Where(x => x.UserId == access.Viewer.UserId).ToList();
+        return Ok(new
+        {
+            data = new
             {
-                user_id = a.UserId,
-                name = a.Name,
-                raised = raised.GetValueOrDefault(a.UserId),
-                resolved = resolved.GetValueOrDefault(a.UserId),
-                returned = returned.GetValueOrDefault(a.UserId),
-                open = open.GetValueOrDefault(a.UserId),
-            })
-            // Agents with no ticket activity at all only clutter the table.
-            .Where(r => r.user_id == access.Viewer.UserId || r.raised + r.resolved + r.returned + r.open > 0)
-            .OrderByDescending(r => r.resolved).ThenBy(r => r.name)
-            .ToList();
-        return Ok(new { data = new { month = start.ToString("yyyy-MM"), agents = rows } });
+                month = start.ToString("yyyy-MM"),
+                agents = visible.Select(x => x.ToDict()),
+                team,
+                me = me is null ? null : new { ranks = myRanks },
+            },
+        });
     }
 
     // --- SLA report ------------------------------------------------------------
@@ -500,6 +656,15 @@ public class TicketsController(
             .OrderBy(t => t.DueAt)
             .ToListAsync();
         var settings = await SettingsAsync();
+        // Customer ratings answered this month, and how many were asked for.
+        var answered = await db.TicketFeedback
+            .Include(f => f.Ticket).ThenInclude(t => t!.Department)
+            .Include(f => f.Ticket).ThenInclude(t => t!.ResolvedBy).ThenInclude(u => u!.Employee)
+            .Where(f => f.Rating != null && f.RespondedAt >= start && f.RespondedAt < end)
+            .ToListAsync();
+        var asked = await db.TicketFeedback.CountAsync(f => f.SentAt >= start && f.SentAt < end);
+        double? AvgRating(IEnumerable<TicketFeedback> rows) =>
+            rows.Any() ? Math.Round(rows.Average(f => f.Rating!.Value), 2) : null;
 
         var byPriority = TicketPriority.All.Select(p =>
         {
@@ -517,6 +682,9 @@ public class TicketsController(
                 row["department_id"] = id;
                 row["department_name"] = mine.Concat(overdue).First(t => t.DepartmentId == id).Department?.Name;
                 row["overdue_open"] = overdue.Count(t => t.DepartmentId == id);
+                var rated = answered.Where(f => f.Ticket!.DepartmentId == id).ToList();
+                row["csat_avg"] = AvgRating(rated);
+                row["csat_responses"] = rated.Count;
                 return row;
             })
             .OrderBy(r => (double?)r["compliance_pct"] ?? 101).ThenBy(r => r["department_name"] as string);
@@ -528,12 +696,37 @@ public class TicketsController(
                 row["user_id"] = g.Key;
                 row["name"] = first.ResolvedBy?.Employee?.FullName ?? first.ResolvedBy?.Email;
                 row["department_name"] = first.Department?.Name;
+                var rated = answered.Where(f => f.Ticket!.ResolvedByUserId == g.Key).ToList();
+                row["csat_avg"] = AvgRating(rated);
+                row["csat_responses"] = rated.Count;
                 return row;
             })
             .OrderByDescending(r => (int)r["resolved"]!).ThenBy(r => r["name"] as string);
 
         var totals = RowDict(Summarise(resolved));
         totals["overdue_open"] = overdue.Count;
+        var csat = new
+        {
+            asked,
+            responses = answered.Count,
+            average = AvgRating(answered),
+            // Satisfied = rated 4 or 5, the usual CSAT %.
+            satisfied_pct = answered.Count == 0 ? (double?)null
+                : Math.Round(100.0 * answered.Count(f => f.Rating >= 4) / answered.Count, 1),
+            distribution = Enumerable.Range(1, 5).Select(r => new { rating = r, count = answered.Count(f => f.Rating == r) }),
+            // Comments only from tickets the caller could open anyway.
+            recent = answered.Where(f => f.Comment != null && CanSee(access, f.Ticket!))
+                .OrderByDescending(f => f.RespondedAt).Take(20)
+                .Select(f => new
+                {
+                    ticket_id = f.TicketId,
+                    number = Ticket.FormatNumber(f.Ticket!.Number),
+                    department_name = f.Ticket.Department?.Name,
+                    rating = f.Rating,
+                    comment = f.Comment,
+                    responded_at = UtcTime.Iso(f.RespondedAt!.Value),
+                }),
+        };
         return Ok(new
         {
             data = new
@@ -544,6 +737,7 @@ public class TicketsController(
                 by_priority = byPriority,
                 by_department = byDepartment,
                 by_resolver = byResolver,
+                csat,
                 resolved = resolved.Where(t => CanSee(access, t)).OrderByDescending(t => t.ResolvedAt)
                     .Take(MaxListed).Select(t => t.ToDict()),
                 overdue = overdue.Where(t => CanSee(access, t)).Take(MaxListed).Select(t => t.ToDict()),
@@ -556,7 +750,47 @@ public class TicketsController(
     {
         var (ticket, _, problem) = await LoadVisibleTicketAsync(ticketId);
         if (problem is not null) return problem;
-        return Ok(new { data = ticket!.ToDict(includeEvents: true) });
+        var dict = ticket!.ToDict(includeEvents: true);
+        var reads = await db.TicketReads.Include(r => r.User).ThenInclude(u => u!.Employee)
+            .Where(r => r.TicketId == ticketId).ToListAsync();
+        dict["reads"] = reads.Select(r => r.ToDict()).ToList();
+        return Ok(new { data = dict });
+    }
+
+    /// <summary>The caller has read the conversation up to now (their page
+    /// is open and in front of them). Tells the others on the ticket, so
+    /// their messages turn to two blue ticks.</summary>
+    [HttpPost("/tickets/{ticketId}/read")]
+    public async Task<IActionResult> MarkRead(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        // Up to the newest message, so a read never claims more than exists.
+        var upTo = ticket!.Events.Count == 0 ? Clock.UtcNow() : ticket.Events.Max(e => e.CreatedAt);
+        var row = await db.TicketReads.FindAsync(ticketId, access.Viewer.UserId);
+        if (row is not null && row.LastReadAt >= upTo) return NoContent();
+        if (row is null)
+        {
+            row = new TicketRead { TicketId = ticketId, UserId = access.Viewer.UserId };
+            db.TicketReads.Add(row);
+        }
+        row.LastReadAt = upTo;
+        await db.SaveChangesAsync();
+        try
+        {
+            await hub.Clients.Group(TicketsHub.Group(ticketId)).SendAsync("read", new
+            {
+                ticket_id = ticketId,
+                user_id = access.Viewer.UserId,
+                name = access.Viewer.Employee?.FullName ?? access.Viewer.Email,
+                read_at = UtcTime.Iso(upTo),
+            });
+        }
+        catch (Exception exc)
+        {
+            logger.LogWarning(exc, "Couldn't broadcast a read on ticket {TicketId}", ticketId);
+        }
+        return NoContent();
     }
 
     // --- Raising -------------------------------------------------------------
@@ -628,7 +862,15 @@ public class TicketsController(
         }
         var raisedAt = Clock.UtcNow();
         DateTime dueAt;
-        if (!string.IsNullOrEmpty(data.DueAt))
+        if (data.SlaHours is { } slaHours)
+        {
+            if (slaHours < 1 || slaHours > BillingConstants.SlaMaxHours)
+            {
+                return Error("validation_error", "Choose a deadline from 1 hour to 30 days.", 422, "sla_hours");
+            }
+            dueAt = raisedAt.AddHours(slaHours);
+        }
+        else if (!string.IsNullOrEmpty(data.DueAt))
         {
             if (!DateTime.TryParse(data.DueAt, null,
                     System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
@@ -705,6 +947,7 @@ public class TicketsController(
                 $"Priority: {saved.Priority}\nResolve by: {NairobiTime(saved.DueAt)}\n\n{saved.Description}\n\n" +
                 "Open it from Team tickets to work it.");
         }
+        await PushNewTicketAsync(saved, access.Viewer.UserId, access.Viewer.Employee?.FullName);
         var sentTo = assignee is null
             ? saved.Department?.Name
             : $"{assignee.Employee!.FullName} in {saved.Department?.Name}";
@@ -738,6 +981,7 @@ public class TicketsController(
         }
         db.TicketEvents.Add(new TicketEvent { TicketId = ticketId, ActorUserId = access.Viewer.UserId, Kind = "claimed" });
         await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
         // The update went straight to the database, so drop the copy loaded
         // above or the response would still say "open".
         db.ChangeTracker.Clear();
@@ -754,6 +998,8 @@ public class TicketsController(
         if (body is null) return Error("validation_error", "Write the note first.", 422, "body");
         AddEvent(ticket!, access.Viewer, "note", body);
         await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        await PushMessageAsync(ticket!, access.Viewer, body);
         return StatusCode(201, new { data = new { ticket_id = ticketId } });
     }
 
@@ -788,11 +1034,13 @@ public class TicketsController(
         ticket.ResolutionNote = note;
         AddEvent(ticket, access.Viewer, "resolved", note);
         await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
         if (ticket.RaisedBy is not null)
         {
             mail.SendMailSafe(ticket.RaisedBy.Email, $"{Ticket.FormatNumber(ticket.Number)} resolved: {ticket.Subject}",
                 $"{ticket.Department?.Name} resolved the ticket you raised{(ticket.CustomerName is null ? "" : $" for {ticket.CustomerName}")}.\n\nResolution:\n{note}");
         }
+        await SendFeedbackRequestAsync(ticket);
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
         return Ok(new { data = saved.ToDict() });
     }
@@ -804,36 +1052,66 @@ public class TicketsController(
         if (problem is not null) return problem;
         if (ticket!.Status is TicketStatus.Resolved or TicketStatus.Returned)
         {
-            return Error("ticket_not_active", "Only an open or in-progress ticket can be returned.", 409, "status");
+            return Error("ticket_not_active", "Only an open or in-progress ticket can be rejected.", 409, "status");
         }
         var canReturn = ticket.Status == TicketStatus.Open ? OnHandlingTeam(access, ticket) : CanClose(access, ticket);
         if (!canReturn)
         {
-            return Error("not_ticket_owner", "Only the person working this ticket, or their Manager, can return it.", 403);
+            return Error("not_ticket_owner", "Only the person working this ticket, or their Manager, can reject it.", 403);
         }
         var data = await RequestBody.ReadJsonSilentAsync<ReturnTicketRequest>(Request);
-        var reason = Clean(data.Reason, 4000);
-        if (reason is null)
+        if (data.ReasonCode is null || !TicketRejectReason.Labels.TryGetValue(data.ReasonCode, out var label))
         {
-            return Error("validation_error", "Tell the desk why — wrong department, or what's missing.", 422, "reason");
+            return Error("validation_error",
+                "Choose why: wrong department, a duplicate, or not a real issue. Ask for missing details in the chat instead.",
+                422, "reason_code");
         }
+        var note = Clean(data.Reason, 4000);
+        var reason = note is null ? label : $"{label}: {note}";
         ticket.Status = TicketStatus.Returned;
         ticket.ClaimedByUserId = null;
         ticket.ClaimedAt = null;
         ticket.ReturnCount++;
         AddEvent(ticket, access.Viewer, "returned", reason);
         await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
         if (ticket.RaisedBy is not null)
         {
-            mail.SendMailSafe(ticket.RaisedBy.Email, $"{Ticket.FormatNumber(ticket.Number)} returned: {ticket.Subject}",
-                $"{ticket.Department?.Name} sent back the ticket you raised{(ticket.CustomerName is null ? "" : $" for {ticket.CustomerName}")}.\n\nReason:\n{reason}\n\n" +
+            mail.SendMailSafe(ticket.RaisedBy.Email, $"{Ticket.FormatNumber(ticket.Number)} rejected: {ticket.Subject}",
+                $"{ticket.Department?.Name} rejected the ticket you raised{(ticket.CustomerName is null ? "" : $" for {ticket.CustomerName}")}.\n\nReason:\n{reason}\n\n" +
                 "Fix it and send it again from your tickets.");
         }
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
         return Ok(new { data = saved.ToDict() });
     }
 
-    /// <summary>The desk sends a returned ticket again — optionally to a
+    /// <summary>Whoever is on a ticket (or their Manager) puts it back in
+    /// their department's queue for anyone there to take — e.g. it was
+    /// assigned to the wrong person, or they're going on leave.</summary>
+    [HttpPost("/tickets/{ticketId}/release")]
+    public async Task<IActionResult> Release(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (ticket!.Status != TicketStatus.InProgress)
+        {
+            return Error("ticket_not_claimed", "Only a ticket someone is working can be handed back to the team.", 409, "status");
+        }
+        if (!CanClose(access, ticket))
+        {
+            return Error("not_ticket_owner", "Only the person working this ticket, or their Manager, can hand it back.", 403);
+        }
+        ticket.Status = TicketStatus.Open;
+        ticket.ClaimedByUserId = null;
+        ticket.ClaimedAt = null;
+        AddEvent(ticket, access.Viewer, "released", null);
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>The desk sends a rejected ticket again — optionally to a
     /// different category/department, with a note on what changed.</summary>
     [HttpPost("/tickets/{ticketId}/resend")]
     public async Task<IActionResult> Resend(string ticketId)
@@ -879,7 +1157,80 @@ public class TicketsController(
         ticket.Status = TicketStatus.Open;
         AddEvent(ticket, access.Viewer, "resent", Clean(data.Note, 4000));
         await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        // Sent again — possibly to a different department that's never seen
+        // it — so it's a new ticket in that team's queue.
+        await PushNewTicketAsync(saved, access.Viewer.UserId, access.Viewer.Employee?.FullName);
         return Ok(new { data = saved.ToDict() });
+    }
+
+    // --- Customer satisfaction (CSAT) -------------------------------------------
+
+    /// <summary>One email to the customer when their ticket is resolved,
+    /// saying so, with five stars inside it to rate us — one tap, like a
+    /// ride-hailing receipt. Each star opens a small page the API serves
+    /// (FeedbackController), never the app. Only for customer tickets with an
+    /// email, and only once per ticket — no reminders.</summary>
+    private async Task SendFeedbackRequestAsync(Ticket ticket)
+    {
+        if (string.IsNullOrWhiteSpace(ticket.CustomerEmail)) return;
+        if (await db.TicketFeedback.AnyAsync(f => f.TicketId == ticket.TicketId)) return;
+
+        var token = Security.GenerateResetToken();
+        db.TicketFeedback.Add(new TicketFeedback
+        {
+            TicketId = ticket.TicketId,
+            TokenHash = Security.HashToken(token),
+            ExpiresAt = Clock.UtcNow().AddDays(FeedbackLinkDays),
+        });
+        await db.SaveChangesAsync();
+
+        var page = $"{Config.PublicApiUrl}{FeedbackController.PagePath}?t={Uri.EscapeDataString(token)}";
+        string Link(int r) => $"{page}&s={r}";
+        var number = Ticket.FormatNumber(ticket.Number);
+        var greeting = ticket.CustomerName is null ? "Hello," : $"Hello {ticket.CustomerName},";
+        var team = ticket.Department?.Name is { } d ? $"our {d} team" : "our team";
+        var labels = FeedbackController.Labels;
+
+        var text =
+            $"{greeting}\n\nGood news: your request {number} (\"{ticket.Subject}\") has been resolved by {team}.\n\n" +
+            "How did we do? Tap a rating:\n\n" +
+            string.Join("\n", Enumerable.Range(1, 5).Select(r => $"  {new string('*', r)} {labels[r - 1]}: {Link(r)}")) +
+            $"\n\nIt takes one tap; you can add a comment after. Thank you for flying with us.\n\nCustomer Service";
+
+        static string H(string? s) => System.Net.WebUtility.HtmlEncode(s ?? "");
+        var starCells = string.Concat(Enumerable.Range(1, 5).Select(r => $"""
+            <td align="center" style="padding:0 4px;">
+              <a href="{H(Link(r))}" title="{r} — {H(labels[r - 1])}" style="text-decoration:none;color:#f5a623;font-size:40px;line-height:44px;display:block;">&#9733;</a>
+              <span style="font-size:12px;color:#5d6878;">{r}</span>
+            </td>
+            """));
+        var html = $"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+            <body style="margin:0;padding:0;background:#f6f7f9;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f7f9;">
+            <tr><td align="center" style="padding:24px 16px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border:1px solid #d9dee5;border-radius:12px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2430;">
+                <tr><td style="padding:24px 24px 8px;">
+                  <p style="margin:0 0 4px;font-size:13px;color:#5d6878;">Request {H(number)}</p>
+                  <h1 style="margin:0 0 12px;font-size:22px;">Your request is resolved</h1>
+                  <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">{H(greeting)}</p>
+                  <p style="margin:0 0 12px;font-size:15px;line-height:1.5;">Good news: your request &ldquo;{H(ticket.Subject)}&rdquo; has been resolved by {H(team)}.</p>
+                </td></tr>
+                <tr><td align="center" style="padding:8px 24px 4px;">
+                  <p style="margin:0 0 8px;font-size:17px;font-weight:600;">How did we do?</p>
+                  <table role="presentation" cellpadding="0" cellspacing="0"><tr>{starCells}</tr></table>
+                  <p style="margin:8px 0 0;font-size:12px;color:#5d6878;">Tap a star &mdash; 1 is very poor, 5 is excellent. You can add a comment after.</p>
+                </td></tr>
+                <tr><td style="padding:16px 24px 24px;font-size:14px;line-height:1.5;color:#5d6878;">
+                  Thank you for flying with us.<br>Customer Service
+                </td></tr>
+              </table>
+            </td></tr></table>
+            </body></html>
+            """;
+        mail.SendMailSafe(ticket.CustomerEmail!, $"Resolved: your request {number} — how did we do?", text, html);
     }
 }
