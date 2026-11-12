@@ -10,6 +10,7 @@
 //     dotnet run -- --migrate         # apply pending migrations and exit (run by the container on deploy)
 //     dotnet run -- --seed          # load demo data from the CDR dataset (mirrors `python seed.py`)
 //     dotnet run -- --reencrypt       # move stored encrypted values to the current algorithm/key
+//     dotnet run -- --vapid-keys      # print a new key pair for push notifications (VAPID_* in .env)
 //
 // The first Admin is created on boot from BOOTSTRAP_ADMIN_EMAIL while no
 // active Admin exists (see AdminBootstrap); everyone else is created by an
@@ -48,13 +49,26 @@ if (args.Contains("--reencrypt"))
     await ReEncrypt.RunAsync();
     return;
 }
+if (args.Contains("--vapid-keys"))
+{
+    var keys = WebPush.VapidHelper.GenerateVapidKeys();
+    Console.WriteLine($"VAPID_PUBLIC_KEY={keys.PublicKey}\nVAPID_PRIVATE_KEY={keys.PrivateKey}");
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 // Every SQL command at Information floods the console and slows each
 // request in Development; slow or failing queries still show as warnings.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+// Request-start/finish lines carry the full URL, and the live-chat hub's
+// WebSocket URL holds the access token (?access_token=) — keep them out of
+// the logs.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Http.Connections", LogLevel.Warning);
 
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<TeleSpy.Api.TicketPresence>();
 
 builder.Services.AddDbContext<TeleSpyDbContext>(options => DatabaseConfig.Configure(options, Config.DatabaseUrl));
 
@@ -64,6 +78,9 @@ builder.Services.AddSingleton<ICacheService, CacheService>();
 builder.Services.AddSingleton<MailQueue>();
 builder.Services.AddHostedService<MailSender>();
 builder.Services.AddScoped<IMailService, MailService>();
+builder.Services.AddSingleton<PushQueue>();
+builder.Services.AddHostedService<PushSender>();
+builder.Services.AddScoped<IPushService, PushService>();
 builder.Services.AddScoped<IAllocationService, AllocationService>();
 builder.Services.AddScoped<IStepUpService, StepUpService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
@@ -86,6 +103,7 @@ app.UseCors(CorsPolicy);
 app.UseMiddleware<RuleViolationMiddleware>();
 app.UseMiddleware<CurrentUserMiddleware>();
 app.MapControllers();
+app.MapHub<TeleSpy.Api.TicketsHub>(TeleSpy.Api.TicketsHub.Path);
 
 using (var scope = app.Services.CreateScope())
 {

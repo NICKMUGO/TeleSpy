@@ -23,9 +23,18 @@ public class CurrentUserMiddleware(RequestDelegate next)
         "/auth/refresh",
         "/auth/forgot-password",
         "/auth/reset-password",
+        "/auth/reset-password/info",
         "/auth/legal-notice",
         "/health",
+        // A customer rating a resolved ticket from the stars in its email:
+        // the link's token is the only credential (Api/FeedbackController).
+        "/feedback",
+        "/feedback/r",
     ];
+
+    /// <summary>HttpContext.Items key holding the signed-in user's id, for
+    /// code that runs outside a normal request scope (Api/TicketsHub).</summary>
+    public const string UserIdItem = "telespy.user_id";
 
     public async Task InvokeAsync(HttpContext context, ICurrentUserAccessor currentUserAccessor,
         IJwtService jwtService, ICacheService cache)
@@ -38,13 +47,25 @@ public class CurrentUserMiddleware(RequestDelegate next)
         }
 
         var header = context.Request.Headers.Authorization.ToString();
-        if (string.IsNullOrEmpty(header) || !header.StartsWith("Bearer ", StringComparison.Ordinal))
+        string token;
+        if (!string.IsNullOrEmpty(header) && header.StartsWith("Bearer ", StringComparison.Ordinal))
+        {
+            token = header["Bearer ".Length..];
+        }
+        // Live chat (SignalR): a browser can't set headers on a WebSocket,
+        // so the client sends the same access token as ?access_token=.
+        // Accepted for the hub only, nowhere else.
+        else if (context.Request.Path.StartsWithSegments(TeleSpy.Api.TicketsHub.Path) &&
+                 context.Request.Query["access_token"].ToString() is { Length: > 0 } queryToken)
+        {
+            token = queryToken;
+        }
+        else
         {
             await WriteError(context, "unauthenticated", "Authentication required.");
             return;
         }
 
-        var token = header["Bearer ".Length..];
         System.Security.Claims.ClaimsPrincipal principal;
         try
         {
@@ -96,6 +117,7 @@ public class CurrentUserMiddleware(RequestDelegate next)
             Jti: jti,
             ExpiresAtUtc: expiresAtUtc,
             SessionId: sessionId);
+        context.Items[UserIdItem] = userId;
 
         await next(context);
     }
