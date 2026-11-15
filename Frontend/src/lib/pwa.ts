@@ -29,6 +29,13 @@ export function isStandalone() {
   );
 }
 
+/** Android, where Chrome may hold back its install event (after a dismissed
+ * prompt, before enough use, or in Samsung Internet and in-app browsers) —
+ * but its own menu can still install the app. */
+export function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
+}
+
 export function isIos() {
   return (
     /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -61,6 +68,9 @@ export type InstallMode =
   | "prompt"
   /** iPhone/iPad: show how to Add to Home Screen. */
   | "ios"
+  /** Android without the install event: show how to install from the
+   * browser's own menu. */
+  | "android"
   /** This browser can't install, or hasn't offered it yet. */
   | "unavailable";
 
@@ -68,6 +78,7 @@ function snapshot(): InstallMode {
   if (installed) return "installed";
   if (deferredPrompt) return "prompt";
   if (isIos()) return "ios";
+  if (isAndroid()) return "android";
   return "unavailable";
 }
 

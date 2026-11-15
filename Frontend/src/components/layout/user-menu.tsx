@@ -6,7 +6,8 @@ import { GraduationCap, Keyboard, LogOut, Settings } from "lucide-react";
 import { toast } from "sonner";
 import {
   InstallAppMenuItem,
-  IosInstallDialog,
+  InstallHelpDialog,
+  type InstallHelpPlatform,
 } from "@/components/pwa/install-app";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,9 @@ export function UserMenu({
   const router = useRouter();
   const user = useSession((state) => state.user);
   const clearSession = useSession((state) => state.clear);
-  const [iosInstallHelp, setIosInstallHelp] = useState(false);
+  const [installHelp, setInstallHelp] = useState<InstallHelpPlatform | null>(
+    null,
+  );
 
   const name = user?.full_name ?? user?.email ?? "Account";
   const initials = initialsFor(name).toUpperCase() || "?";
@@ -104,7 +107,7 @@ export function UserMenu({
             <span>Keyboard shortcuts</span>
             <DropdownMenuShortcut>?</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <InstallAppMenuItem onShowIosHelp={() => setIosInstallHelp(true)} />
+          <InstallAppMenuItem onShowHelp={setInstallHelp} />
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onSelect={handleLogout}>
             <LogOut aria-hidden="true" />
@@ -112,9 +115,11 @@ export function UserMenu({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <IosInstallDialog
-        open={iosInstallHelp}
-        onOpenChange={setIosInstallHelp}
+      <InstallHelpDialog
+        platform={installHelp}
+        onOpenChange={(open) => {
+          if (!open) setInstallHelp(null);
+        }}
       />
     </>
   );
