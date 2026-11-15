@@ -6,9 +6,11 @@ import { useSyncExternalStore } from "react";
  * Installing TeleSpy as an app (PWA). Chrome and Edge, on laptops and
  * Android, fire `beforeinstallprompt` once a page qualifies (manifest +
  * service worker); holding on to that event lets our own "Install app"
- * button open the browser's install dialog later. Safari never fires it —
- * on iPhone and iPad it's Share → Add to Home Screen, so we explain that
- * instead. Firefox on desktop can't install web apps at all.
+ * button open the browser's install dialog later. Everywhere else we show
+ * the steps by hand: on iPhone and iPad it's Share → Add to Home Screen (in
+ * Safari, and in Chrome or Edge since iOS 16.4); on a Mac in Safari it's
+ * File → Add to Dock (macOS Sonoma or later). Firefox on desktop can't
+ * install web apps, so we point to a browser that can.
  */
 
 interface BeforeInstallPromptEvent extends Event {
@@ -44,6 +46,23 @@ export function isIos() {
   );
 }
 
+/** Firefox on a laptop or desktop: it has no way to install web apps. */
+export function isDesktopFirefox() {
+  return /Firefox\//.test(navigator.userAgent) && !isAndroid() && !isIos();
+}
+
+/** Safari on a Mac (not Chrome, Edge, Firefox or Opera, which also say
+ * "Safari" in their user agent, and not an iPad posing as a Mac). */
+export function isMacSafari() {
+  const ua = navigator.userAgent;
+  return (
+    ua.includes("Macintosh") &&
+    !isIos() &&
+    /Safari\//.test(ua) &&
+    !/Chrome|Chromium|CriOS|Edg|Firefox|FxiOS|OPR/.test(ua)
+  );
+}
+
 // Listen from the moment this module loads: the event fires once, early,
 // and is gone if nobody catches it.
 if (typeof window !== "undefined") {
@@ -71,7 +90,14 @@ export type InstallMode =
   /** Android without the install event: show how to install from the
    * browser's own menu. */
   | "android"
-  /** This browser can't install, or hasn't offered it yet. */
+  /** Safari on a Mac: show how to Add to Dock. */
+  | "mac-safari"
+  /** Chrome or Edge on a laptop that hasn't offered its install dialog (it
+   * was dismissed before, say): show where its own install option is. */
+  | "desktop"
+  /** Firefox on a laptop: it can't install, so suggest another browser. */
+  | "unsupported"
+  /** Not known yet (rendering on the server). */
   | "unavailable";
 
 function snapshot(): InstallMode {
@@ -79,7 +105,9 @@ function snapshot(): InstallMode {
   if (deferredPrompt) return "prompt";
   if (isIos()) return "ios";
   if (isAndroid()) return "android";
-  return "unavailable";
+  if (isMacSafari()) return "mac-safari";
+  if (isDesktopFirefox()) return "unsupported";
+  return "desktop";
 }
 
 function subscribe(listener: () => void) {

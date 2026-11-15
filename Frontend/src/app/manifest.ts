@@ -17,7 +17,7 @@ const ICON_VERSION = 2;
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "TeleSpy — Kenya Airways",
+    name: "TeleSpy",
     short_name: "TeleSpy",
     description:
       "SIM management, telecom cost accountability and tickets for Kenya Airways",
