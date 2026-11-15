@@ -33,7 +33,7 @@ import {
   useTicketCategories,
 } from "@/lib/api/hooks";
 import type { TicketPriority } from "@/lib/api/types";
-import { dateTime, duration } from "@/lib/format";
+import { dateTime } from "@/lib/format";
 
 /** The "What is it about?" choice for a reason the raiser writes
  * themselves instead of a quick category. It's the default: most tickets
@@ -47,7 +47,6 @@ const EMPTY = {
   bookingReference: "",
   /** A quick category's id, or OTHER. */
   categoryId: OTHER,
-  customReason: "",
   /** "" = the category's own department. */
   departmentId: "",
   /** "" = the whole department. */
@@ -67,7 +66,7 @@ const CUSTOM = "custom";
 
 /** How long the handling team has before the ticket breaches its SLA. */
 const SLA_WINDOWS: { hours: number; label: string }[] = [
-  { hours: 4, label: "4 hours · high / emergency" },
+  { hours: 4, label: "4 hours (urgent)" },
   { hours: 8, label: "8 hours" },
   { hours: 12, label: "12 hours" },
   { hours: 24, label: "24 hours" },
@@ -84,11 +83,12 @@ function localInputValue(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Raising a ticket: who the customer is (the desk always; anyone else only
- * if it's for a customer), what it's about (a quick category, which picks
- * the department, or their own reason), who gets it, what's needed, and
- * how urgent it is — the priority sets the SLA deadline, unless the raiser
- * gives it one of their own. */
+/** Raising a ticket: who the customer is (the customer service desk only —
+ * nobody else raises tickets for customers), what it's about (a quick
+ * category, which picks the department, or "Other", where the subject says
+ * what it is), who gets it, what's needed, and how urgent it is — the
+ * priority sets the SLA deadline, unless the raiser gives it one of their
+ * own. */
 export function NewTicketDialog({
   open,
   onOpenChange,
@@ -153,16 +153,11 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
   const reachable =
     form.customerPhone.trim().length > 0 ||
     form.customerEmail.trim().length > 0;
-  // The desk's tickets are always for a customer; anyone else's only once
-  // they start filling the customer in.
-  const forCustomer =
-    onDesk ||
-    reachable ||
-    form.customerName.trim().length > 0 ||
-    form.bookingReference.trim().length > 0;
+  // Only the desk raises tickets for customers, and theirs always are.
+  const forCustomer = onDesk;
   const ready =
     (!forCustomer || (form.customerName.trim() && reachable)) &&
-    (custom ? form.customReason.trim() && departmentId : category) &&
+    (custom ? departmentId : category) &&
     form.subject.trim() &&
     form.description.trim() &&
     (form.window !== CUSTOM || form.dueAt);
@@ -172,13 +167,19 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
     if (!ready) return;
     setFieldError(null);
     try {
+      const customer = forCustomer
+        ? {
+            customer_name: form.customerName.trim() || undefined,
+            customer_phone: form.customerPhone.trim() || undefined,
+            customer_email: form.customerEmail.trim() || undefined,
+            booking_reference: form.bookingReference.trim() || undefined,
+          }
+        : {};
       const result = await createTicket.mutateAsync({
-        customer_name: form.customerName.trim() || undefined,
-        customer_phone: form.customerPhone.trim() || undefined,
-        customer_email: form.customerEmail.trim() || undefined,
-        booking_reference: form.bookingReference.trim() || undefined,
+        ...customer,
         category_id: custom ? undefined : form.categoryId,
-        custom_reason: custom ? form.customReason.trim() : undefined,
+        // "Other": the subject says what it's about.
+        custom_reason: custom ? form.subject.trim().slice(0, 80) : undefined,
         department_id: form.departmentId || undefined,
         assigned_to_user_id: form.assigneeId || undefined,
         subject: form.subject.trim(),
@@ -227,75 +228,67 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
       </DialogHeader>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <fieldset className="flex flex-col gap-3">
-          <legend className="mb-1 text-sm font-medium">
-            Customer
-            {onDesk ? null : (
-              <span className="text-muted-foreground font-normal">
-                {" "}
-                (only if it&apos;s for a customer)
-              </span>
-            )}
-          </legend>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="ticket-customer-name">Name</Label>
-            <Input
-              id="ticket-customer-name"
-              value={form.customerName}
-              onChange={(e) => set("customerName")(e.target.value)}
-              autoComplete="off"
-              required={forCustomer}
-            />
-            {errorFor("customer_name")}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+        {forCustomer ? (
+          <fieldset className="flex flex-col gap-3">
+            <legend className="mb-1 text-sm font-medium">Customer</legend>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="ticket-customer-phone">Phone</Label>
+              <Label htmlFor="ticket-customer-name">Name</Label>
               <Input
-                id="ticket-customer-phone"
-                type="tel"
-                value={form.customerPhone}
-                onChange={(e) => set("customerPhone")(e.target.value)}
+                id="ticket-customer-name"
+                value={form.customerName}
+                onChange={(e) => set("customerName")(e.target.value)}
                 autoComplete="off"
+                required
               />
-              {errorFor("customer_phone")}
+              {errorFor("customer_name")}
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ticket-customer-phone">Phone</Label>
+                <Input
+                  id="ticket-customer-phone"
+                  type="tel"
+                  value={form.customerPhone}
+                  onChange={(e) => set("customerPhone")(e.target.value)}
+                  autoComplete="off"
+                />
+                {errorFor("customer_phone")}
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="ticket-customer-email">Email</Label>
+                <Input
+                  id="ticket-customer-email"
+                  type="email"
+                  value={form.customerEmail}
+                  onChange={(e) => set("customerEmail")(e.target.value)}
+                  autoComplete="off"
+                />
+                {errorFor("customer_email")}
+              </div>
+            </div>
+            <p className="text-muted-foreground -mt-1 text-xs">
+              A phone number or an email, so the team can reach them.
+            </p>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="ticket-customer-email">Email</Label>
+              <Label htmlFor="ticket-booking-reference">
+                Booking reference{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
               <Input
-                id="ticket-customer-email"
-                type="email"
-                value={form.customerEmail}
-                onChange={(e) => set("customerEmail")(e.target.value)}
+                id="ticket-booking-reference"
+                value={form.bookingReference}
+                onChange={(e) =>
+                  set("bookingReference")(e.target.value.toUpperCase())
+                }
+                maxLength={16}
                 autoComplete="off"
+                className="font-tabular uppercase sm:w-48"
               />
-              {errorFor("customer_email")}
             </div>
-          </div>
-          <p className="text-muted-foreground -mt-1 text-xs">
-            {forCustomer
-              ? "A phone number or an email, so the team can reach them."
-              : "Leave these empty for an internal ticket."}
-          </p>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="ticket-booking-reference">
-              Booking reference{" "}
-              <span className="text-muted-foreground font-normal">
-                (optional)
-              </span>
-            </Label>
-            <Input
-              id="ticket-booking-reference"
-              value={form.bookingReference}
-              onChange={(e) =>
-                set("bookingReference")(e.target.value.toUpperCase())
-              }
-              maxLength={16}
-              autoComplete="off"
-              className="font-tabular uppercase sm:w-48"
-            />
-          </div>
-        </fieldset>
+          </fieldset>
+        ) : null}
 
         <fieldset className="flex flex-col gap-3">
           <legend className="mb-1 text-sm font-medium">Issue</legend>
@@ -313,11 +306,6 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
                     departmentId: "",
                     assigneeId: "",
                   }));
-                  // Picking "Other" goes straight to describing it.
-                  if (value === OTHER)
-                    requestAnimationFrame(() =>
-                      document.getElementById("ticket-custom-reason")?.focus(),
-                    );
                 }}
                 required
               >
@@ -363,20 +351,6 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
               {errorFor("department_id")}
             </div>
           </div>
-          {custom ? (
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="ticket-custom-reason">Short description</Label>
-              <Input
-                id="ticket-custom-reason"
-                value={form.customReason}
-                onChange={(e) => set("customReason")(e.target.value)}
-                maxLength={80}
-                placeholder="e.g. Office printer not working"
-                required
-              />
-              {errorFor("custom_reason")}
-            </div>
-          ) : null}
           <div className="flex flex-col gap-2">
             {/* The search box is labelled through cmdk, which owns its id. */}
             <Label asChild>
@@ -410,7 +384,11 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
               value={form.subject}
               onChange={(e) => set("subject")(e.target.value)}
               maxLength={160}
-              placeholder="e.g. Rebook NBO–LHR after missed connection"
+              placeholder={
+                custom
+                  ? "e.g. Office printer not working"
+                  : "e.g. Rebook NBO–LHR after missed connection"
+              }
               required
             />
             {errorFor("subject")}
@@ -443,15 +421,11 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
                 value={form.priority}
                 onChange={(e) => set("priority")(e.target.value)}
               >
-                {(Object.keys(PRIORITY_LABELS) as TicketPriority[]).map((p) => {
-                  const h = targetHours(p);
-                  return (
-                    <option key={p} value={p}>
-                      {PRIORITY_LABELS[p]}
-                      {h === undefined ? "" : ` · within ${duration(h * 60)}`}
-                    </option>
-                  );
-                })}
+                {(Object.keys(PRIORITY_LABELS) as TicketPriority[]).map((p) => (
+                  <option key={p} value={p}>
+                    {PRIORITY_LABELS[p]}
+                  </option>
+                ))}
               </SelectNative>
               {errorFor("priority")}
             </div>
@@ -470,12 +444,7 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
                 }}
                 aria-describedby="ticket-due-note"
               >
-                <option value="">
-                  {PRIORITY_LABELS[form.priority]} priority target
-                  {targetHours(form.priority) === undefined
-                    ? ""
-                    : ` · ${duration(targetHours(form.priority)! * 60)}`}
-                </option>
+                <option value="">Standard for the priority</option>
                 {SLA_WINDOWS.map((w) => (
                   <option key={w.hours} value={String(w.hours)}>
                     {w.label}

@@ -442,16 +442,19 @@ public class TicketsController(
     // --- Assigning ------------------------------------------------------------
 
     /// <summary>The active people in a department, for sending a ticket to
-    /// one of them instead of the whole department.</summary>
+    /// one of them instead of the whole department. Never the viewer: you
+    /// don't raise, forward or pass a ticket to yourself.</summary>
     [HttpGet("/tickets/assignees")]
     public async Task<IActionResult> Assignees()
     {
+        var viewerId = (await viewerContext.LoadedUserAsync())!.UserId;
         var departmentId = Request.Query["department_id"].ToString();
         if (string.IsNullOrEmpty(departmentId) || await db.Departments.FindAsync(departmentId) is null)
         {
             return Error("department_not_found", "Department not found.", 404, "department_id");
         }
         var people = await AssignableUsers(departmentId)
+            .Where(u => u.UserId != viewerId)
             .Select(u => new { user_id = u.UserId, name = u.Employee!.FullName })
             .OrderBy(p => p.name)
             .ToListAsync();
@@ -879,7 +882,9 @@ public class TicketsController(
         }
         else
         {
-            customReason = Clean(data.CustomReason, 80);
+            // The form no longer asks for a separate reason: the subject
+            // says what it's about.
+            customReason = Clean(data.CustomReason, 80) ?? Clean(subject, 80);
             if (customReason is null)
             {
                 return Error("validation_error", "Choose what the ticket is about, or write your own reason.", 422, "custom_reason");
@@ -934,6 +939,11 @@ public class TicketsController(
         }
 
         User? assignee = null;
+        if (data.AssignedToUserId == access.Viewer.UserId)
+        {
+            return Error("validation_error", "You can't raise a ticket for yourself. Send it to someone else, or to the whole department.", 422,
+                "assigned_to_user_id");
+        }
         if (!string.IsNullOrEmpty(data.AssignedToUserId))
         {
             assignee = await AssignableUsers(departmentId!).FirstOrDefaultAsync(u => u.UserId == data.AssignedToUserId);
