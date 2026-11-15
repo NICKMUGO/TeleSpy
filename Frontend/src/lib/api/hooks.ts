@@ -81,7 +81,6 @@ export const queryKeys = {
     ["tickets", "list", scope, status] as const,
   ticket: (id: string) => ["tickets", "detail", id] as const,
   ticketStats: (month?: string) => ["tickets", "stats", month] as const,
-  slaTargets: ["tickets", "sla-targets"] as const,
   slaReport: (month?: string) => ["tickets", "sla", month] as const,
   ticketAssignees: (departmentId: string) =>
     ["tickets", "assignees", departmentId] as const,
@@ -625,15 +624,6 @@ export function useTicketStats(month?: string, enabled = true) {
   });
 }
 
-/** Hours to resolve per priority — the new ticket form shows them. */
-export function useSlaTargets() {
-  return useQuery({
-    queryKey: queryKeys.slaTargets,
-    queryFn: ticketsApi.slaTargets,
-    staleTime: 5 * 60 * 1000,
-  });
-}
-
 export function useSlaReport(month?: string) {
   return useQuery({
     queryKey: queryKeys.slaReport(month),
@@ -795,6 +785,30 @@ export function useRecallForward() {
   );
 }
 
+export function useWithdrawTicket() {
+  return useTicketMutation(({ id, note }: { id: string; note?: string }) =>
+    ticketsApi.withdraw(id, note),
+  );
+}
+
+export function useReopenTicket() {
+  return useTicketMutation(
+    ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: Parameters<typeof ticketsApi.reopen>[1];
+    }) => ticketsApi.reopen(id, body),
+  );
+}
+
+export function useCloseTicket() {
+  return useTicketMutation(({ id, note }: { id: string; note: string }) =>
+    ticketsApi.close(id, note),
+  );
+}
+
 export function useReleaseTicket() {
   return useTicketMutation((id: string) => ticketsApi.release(id));
 }
@@ -809,10 +823,6 @@ export function useResendTicket() {
       body: Parameters<typeof ticketsApi.resend>[1];
     }) => ticketsApi.resend(id, body),
   );
-}
-
-export function useUpdateSlaTargets() {
-  return useTicketMutation(ticketsApi.updateSlaTargets);
 }
 
 export function useCreateTicketCategory() {

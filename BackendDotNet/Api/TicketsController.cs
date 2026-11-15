@@ -19,11 +19,21 @@
 //   back with a note; the handler then resolves it. While it's out the
 //   handler can only wait or recall it.
 //
+// A forward has its own reply-by deadline; past it, the forwarder and the
+// other side's Manager are told (TicketDeadlines).
+//
+// After it's done: the raiser can reopen a resolved ticket for a while (with
+// a reason and a new deadline — back to the department's queue), withdraw a
+// rejected or still-waiting one they no longer need, and an Admin can close
+// any ticket that's still going. Withdrawn and closed are final.
+//
 // Like an incident, every ticket has a priority (high/medium/low) and an
-// SLA deadline: raised + that priority's target hours (Admin-set), or how
-// long the raiser gives it (4 hours to a month) or a time they pick. Resolved by the deadline meets the SLA,
-// after it misses it; time spent returned to the raiser doesn't count.
-// GET /tickets/sla reports how the whole organisation is doing against it.
+// SLA deadline the raiser sets: how long they give it (an hour to a month)
+// or a time they pick. Resolved by the deadline meets the SLA, after it
+// misses it. The clock stops while it's rejected back to the raiser or out
+// on a forward. Past the deadline, the handling department's Manager is
+// alerted once (TicketDeadlines). GET /tickets/sla reports how the whole
+// organisation is doing against it.
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -55,20 +65,12 @@ public class CreateTicketRequest
     /// <summary>high | medium | low; medium when left out.</summary>
     public string? Priority { get; set; }
     /// <summary>Hours from now until it breaches the SLA, chosen by the
-    /// raiser (4 hours up to a month), instead of the priority's target.
+    /// raiser (4 hours up to a month). Either this or DueAt is required.
     /// Counted from the server's clock, so a wrong browser clock can't
     /// shift it.</summary>
     public int? SlaHours { get; set; }
-    /// <summary>An ISO time to have it resolved by, instead of the
-    /// priority's SLA target.</summary>
+    /// <summary>An ISO time to have it resolved by, instead of SlaHours.</summary>
     public string? DueAt { get; set; }
-}
-
-public class SlaTargetsRequest
-{
-    public int? HighHours { get; set; }
-    public int? MediumHours { get; set; }
-    public int? LowHours { get; set; }
 }
 
 public class TicketNoteRequest
@@ -117,6 +119,23 @@ public class PassTicketRequest
     public string? AssignedToUserId { get; set; }
     /// <summary>Transfer: optional context. Forward: what's needed (required).</summary>
     public string? Note { get; set; }
+    /// <summary>Forward only: hours they have to send it back (required).</summary>
+    public int? ReplyHours { get; set; }
+}
+
+public class ReopenTicketRequest
+{
+    /// <summary>Why it isn't actually fixed (required).</summary>
+    public string? Reason { get; set; }
+    /// <summary>The new deadline: hours from now, or DueAt (one is required).</summary>
+    public int? SlaHours { get; set; }
+    public string? DueAt { get; set; }
+}
+
+public class CloseTicketRequest
+{
+    /// <summary>Withdraw: optional. Admin close: required.</summary>
+    public string? Note { get; set; }
 }
 
 public class ForwardReplyRequest
@@ -143,6 +162,8 @@ public class TicketsController(
     private const int MaxListed = 200;
     /// <summary>How long a customer's rating link works.</summary>
     private const int FeedbackLinkDays = 14;
+    /// <summary>How long after it's resolved the raiser can still reopen it.</summary>
+    public const int ReopenDays = 14;
 
     private string NowIso() => DateTime.UtcNow.ToString("o");
 
@@ -184,6 +205,7 @@ public class TicketsController(
         .Include(t => t.RaisedBy).ThenInclude(u => u!.Employee)
         .Include(t => t.ClaimedBy).ThenInclude(u => u!.Employee)
         .Include(t => t.ResolvedBy).ThenInclude(u => u!.Employee)
+        .Include(t => t.ClosedBy).ThenInclude(u => u!.Employee)
         .Include(t => t.Forwards).ThenInclude(f => f.FromUser).ThenInclude(u => u!.Employee)
         .Include(t => t.Forwards).ThenInclude(f => f.ToUser).ThenInclude(u => u!.Employee)
         .Include(t => t.Forwards).ThenInclude(f => f.RepliedBy).ThenInclude(u => u!.Employee)
@@ -289,6 +311,38 @@ public class TicketsController(
     /// <summary>For emails: Kenya is UTC+3 all year.</summary>
     private static string NairobiTime(DateTime utc) => utc.AddHours(3).ToString("ddd d MMM yyyy, HH:mm") + " (Nairobi)";
 
+    /// <summary>The raiser's deadline: hours from now, or a time they picked
+    /// (a few minutes to 30 days away). One of the two is required.</summary>
+    private (DateTime DueAt, IActionResult? Problem) ParseDeadline(int? slaHours, string? dueAtText, DateTime from)
+    {
+        if (slaHours is { } hours)
+        {
+            return hours < 1 || hours > BillingConstants.SlaMaxHours
+                ? (default, Error("validation_error", "Choose a deadline from 1 hour to 30 days.", 422, "sla_hours"))
+                : (from.AddHours(hours), null);
+        }
+        if (!string.IsNullOrEmpty(dueAtText))
+        {
+            if (!DateTime.TryParse(dueAtText, null,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var parsed))
+            {
+                return (default, Error("validation_error", "That deadline isn't a date and time.", 422, "due_at"));
+            }
+            var dueAt = DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified);
+            return dueAt <= from.AddMinutes(5) || dueAt > from.AddHours(BillingConstants.SlaMaxHours)
+                ? (default, Error("validation_error", "Set a deadline from a few minutes to 30 days from now.", 422, "due_at"))
+                : (dueAt, null);
+        }
+        // The raiser sets the deadline; priority doesn't pick one.
+        return (default, Error("validation_error", "Choose when it must be resolved by.", 422, "sla_hours"));
+    }
+
+    /// <summary>The raiser — or the desk Manager or an Admin, covering for
+    /// them — decides what happens to a ticket once it's back with them.</summary>
+    private static bool ActsForRaiser(Access access, Ticket ticket) =>
+        ticket.RaisedByUserId == access.Viewer.UserId || access.DeskManager || access.IsAdmin;
+
     private static string? Clean(string? value, int maxLength)
     {
         var trimmed = value?.Trim();
@@ -389,54 +443,6 @@ public class TicketsController(
         await db.SaveChangesAsync();
         await db.Entry(category).Reference(c => c.Department).LoadAsync();
         return Ok(new { data = category.ToDict() });
-    }
-
-    // --- SLA targets -------------------------------------------------------
-
-    private async Task<BillingSettings> SettingsAsync() =>
-        await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId)
-        ?? throw new InvalidOperationException("Company settings have not been initialised.");
-
-    private static Dictionary<string, object?> TargetsDict(BillingSettings settings) => new()
-    {
-        ["high_hours"] = settings.SlaHighHours,
-        ["medium_hours"] = settings.SlaMediumHours,
-        ["low_hours"] = settings.SlaLowHours,
-    };
-
-    /// <summary>Hours to resolve, per priority. Anyone can read them — the
-    /// new ticket form shows them.</summary>
-    [HttpGet("/tickets/sla-targets")]
-    public async Task<IActionResult> SlaTargets() => Ok(new { data = TargetsDict(await SettingsAsync()) });
-
-    [HttpPatch("/tickets/sla-targets")]
-    [RoleIdRequired("admin")]
-    public async Task<IActionResult> UpdateSlaTargets()
-    {
-        var data = await RequestBody.ReadJsonSilentAsync<SlaTargetsRequest>(Request);
-        foreach (var (field, value) in new[] { ("high_hours", data.HighHours), ("medium_hours", data.MediumHours), ("low_hours", data.LowHours) })
-        {
-            if (value is < 1 or > BillingConstants.SlaMaxHours)
-            {
-                return Error("validation_error", $"Targets are 1 to {BillingConstants.SlaMaxHours} hours.", 422, field);
-            }
-        }
-        var settings = await SettingsAsync();
-        var high = data.HighHours ?? settings.SlaHighHours;
-        var medium = data.MediumHours ?? settings.SlaMediumHours;
-        var low = data.LowHours ?? settings.SlaLowHours;
-        if (high > medium || medium > low)
-        {
-            return Error("validation_error", "A higher priority needs a shorter (or equal) target.", 422, "high_hours",
-                "Keep High ≤ Medium ≤ Low.");
-        }
-        settings.SlaHighHours = high;
-        settings.SlaMediumHours = medium;
-        settings.SlaLowHours = low;
-        settings.UpdatedAt = Clock.UtcNow();
-        await db.SaveChangesAsync();
-        // Only tickets raised from now on — a deadline already given stands.
-        return Ok(new { data = TargetsDict(settings) });
     }
 
     // --- Assigning ------------------------------------------------------------
@@ -584,7 +590,7 @@ public class TicketsController(
             .Join(db.Tickets, e => e.TicketId, t => t.TicketId, (e, t) => t.RaisedByUserId)
             .Where(id => agentIds.Contains(id))
             .GroupBy(id => id).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
-        var open = await db.Tickets.Where(t => agentIds.Contains(t.RaisedByUserId) && t.Status != TicketStatus.Resolved)
+        var open = await db.Tickets.Where(t => agentIds.Contains(t.RaisedByUserId) && (t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress || t.Status == TicketStatus.Returned))
             .GroupBy(t => t.RaisedByUserId).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(g => g.Key, g => g.Count);
         var ratings = (await db.TicketFeedback
                 .Where(f => f.Rating != null && f.RespondedAt >= start && f.RespondedAt < end &&
@@ -699,10 +705,10 @@ public class TicketsController(
             .Where(t => t.Status == TicketStatus.Resolved && t.ResolvedAt >= start && t.ResolvedAt < end)
             .ToListAsync();
         var overdue = await TicketsWithIncludes()
-            .Where(t => (t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress) && t.DueAt < now)
+            .Where(t => (t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress) && t.DueAt < now &&
+                        t.PausedAt == null && !t.Forwards.Any(f => f.Status == TicketForwardStatus.Pending))
             .OrderBy(t => t.DueAt)
             .ToListAsync();
-        var settings = await SettingsAsync();
         // Customer ratings answered this month, and how many were asked for.
         var answered = await db.TicketFeedback
             .Include(f => f.Ticket).ThenInclude(t => t!.Department)
@@ -717,7 +723,6 @@ public class TicketsController(
         {
             var row = RowDict(Summarise(resolved.Where(t => t.Priority == p).ToList()));
             row["priority"] = p;
-            row["target_hours"] = settings.SlaHoursFor(p);
             row["overdue_open"] = overdue.Count(t => t.Priority == p);
             return row;
         });
@@ -779,7 +784,6 @@ public class TicketsController(
             data = new
             {
                 month = start.ToString("yyyy-MM"),
-                targets = TargetsDict(settings),
                 totals,
                 by_priority = byPriority,
                 by_department = byDepartment,
@@ -910,33 +914,8 @@ public class TicketsController(
             return Error("validation_error", "Priority is high, medium or low.", 422, "priority");
         }
         var raisedAt = Clock.UtcNow();
-        DateTime dueAt;
-        if (data.SlaHours is { } slaHours)
-        {
-            if (slaHours < 1 || slaHours > BillingConstants.SlaMaxHours)
-            {
-                return Error("validation_error", "Choose a deadline from 1 hour to 30 days.", 422, "sla_hours");
-            }
-            dueAt = raisedAt.AddHours(slaHours);
-        }
-        else if (!string.IsNullOrEmpty(data.DueAt))
-        {
-            if (!DateTime.TryParse(data.DueAt, null,
-                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
-                    out var parsed))
-            {
-                return Error("validation_error", "That deadline isn't a date and time.", 422, "due_at");
-            }
-            dueAt = DateTime.SpecifyKind(parsed, DateTimeKind.Unspecified);
-            if (dueAt <= raisedAt.AddMinutes(5) || dueAt > raisedAt.AddHours(BillingConstants.SlaMaxHours))
-            {
-                return Error("validation_error", "Set a deadline from a few minutes to 30 days from now.", 422, "due_at");
-            }
-        }
-        else
-        {
-            dueAt = raisedAt.AddHours((await SettingsAsync()).SlaHoursFor(priority));
-        }
+        var (dueAt, deadlineProblem) = ParseDeadline(data.SlaHours, data.DueAt, raisedAt);
+        if (deadlineProblem is not null) return deadlineProblem;
 
         User? assignee = null;
         if (data.AssignedToUserId == access.Viewer.UserId)
@@ -1062,7 +1041,7 @@ public class TicketsController(
     {
         var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
         if (problem is not null) return problem;
-        if (ticket!.Status is TicketStatus.Resolved or TicketStatus.Returned)
+        if (!TicketStatus.IsActive(ticket!.Status))
         {
             return Error("ticket_not_active", "Only an open or in-progress ticket can be resolved.", 409, "status");
         }
@@ -1108,7 +1087,7 @@ public class TicketsController(
     {
         var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
         if (problem is not null) return problem;
-        if (ticket!.Status is TicketStatus.Resolved or TicketStatus.Returned)
+        if (!TicketStatus.IsActive(ticket!.Status))
         {
             return Error("ticket_not_active", "Only an open or in-progress ticket can be rejected.", 409, "status");
         }
@@ -1134,6 +1113,8 @@ public class TicketsController(
         ticket.ClaimedByUserId = null;
         ticket.ClaimedAt = null;
         ticket.ReturnCount++;
+        // The clock stops until it's sent again.
+        ticket.PauseSla(Clock.UtcNow());
         AddEvent(ticket, access.Viewer, "returned", reason);
         await db.SaveChangesAsync();
         await BroadcastChangedAsync(ticketId);
@@ -1218,9 +1199,15 @@ public class TicketsController(
             ticket.DepartmentId = data.DepartmentId;
         }
         // The SLA clock stood still while it was back with the raiser.
-        var returnedAt = ticket.Events.Where(e => e.Kind == "returned").Max(e => (DateTime?)e.CreatedAt);
-        if (returnedAt is not null) ticket.DueAt += Clock.UtcNow() - returnedAt.Value;
+        var now = Clock.UtcNow();
+        if (ticket.PausedAt is null)
+        {
+            // Rejected before the clock was tracked on the ticket itself.
+            var returnedAt = ticket.Events.Where(e => e.Kind == "returned").Max(e => (DateTime?)e.CreatedAt);
+            if (returnedAt is not null) ticket.DueAt += now - returnedAt.Value;
+        }
         ticket.Status = TicketStatus.Open;
+        ticket.ResumeSla(now);
         AddEvent(ticket, access.Viewer, "resent", Clean(data.Note, 4000));
         await db.SaveChangesAsync();
         await BroadcastChangedAsync(ticketId);
@@ -1334,18 +1321,28 @@ public class TicketsController(
         {
             return Error("validation_error", "Say what you need them to do.", 422, "note");
         }
+        if (data.ReplyHours is not { } replyHours || replyHours < 1 || replyHours > BillingConstants.SlaMaxHours)
+        {
+            return Error("validation_error", "Choose when they need to send it back by.", 422, "reply_hours");
+        }
+        var now = Clock.UtcNow();
         if (ticket.Status == TicketStatus.Open)
         {
             ticket.Status = TicketStatus.InProgress;
             ticket.ClaimedByUserId = access.Viewer.UserId;
-            ticket.ClaimedAt = Clock.UtcNow();
+            ticket.ClaimedAt = now;
         }
+        var replyBy = now.AddHours(replyHours);
         db.TicketForwards.Add(new TicketForward
         {
             TicketId = ticketId, FromUserId = access.Viewer.UserId,
             ToDepartmentId = department!.DepartmentId, ToUserId = person?.UserId, Message = message,
+            CreatedAt = now, DueAt = replyBy,
         });
-        AddEvent(ticket, access.Viewer, "forwarded", $"To {Who(department, person)}:\n{message}");
+        // The ticket's own SLA stands still while it's out.
+        ticket.PauseSla(now);
+        AddEvent(ticket, access.Viewer, "forwarded",
+            $"To {Who(department, person)}, back by {NairobiTime(replyBy)}:\n{message}");
         await db.SaveChangesAsync();
         await BroadcastChangedAsync(ticketId);
 
@@ -1360,6 +1357,7 @@ public class TicketsController(
         {
             mail.SendMailSafe(person.Email, $"{number}: {sender} needs something from you",
                 $"{sender} forwarded you a ticket: {ticket.Subject}\n\nWhat they need:\n{message}\n\n" +
+                $"Send it back by: {NairobiTime(replyBy)}\n\n" +
                 "Do it, then send it back to them from the ticket (Forwarded to you).");
         }
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
@@ -1394,6 +1392,7 @@ public class TicketsController(
         forward.ReplyNote = note;
         forward.RepliedByUserId = access.Viewer.UserId;
         forward.RepliedAt = Clock.UtcNow();
+        ticket.ResumeSla(forward.RepliedAt.Value);
         AddEvent(ticket, access.Viewer, "forward_returned", note);
         await db.SaveChangesAsync();
         await BroadcastChangedAsync(ticketId);
@@ -1429,9 +1428,162 @@ public class TicketsController(
         }
         forward.Status = TicketForwardStatus.Recalled;
         forward.RepliedAt = Clock.UtcNow();
+        ticket.ResumeSla(forward.RepliedAt.Value);
         AddEvent(ticket, access.Viewer, "forward_recalled", $"From {Who(forward.ToDepartment!, forward.ToUser)}.");
         await db.SaveChangesAsync();
         await BroadcastChangedAsync(ticketId);
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    // --- After it's done: withdraw, reopen, close --------------------------------
+
+    /// <summary>The raiser no longer needs it: a rejected ticket they won't
+    /// send again, or one still waiting in the queue that nobody has taken.
+    /// Final.</summary>
+    [HttpPost("/tickets/{ticketId}/withdraw")]
+    public async Task<IActionResult> Withdraw(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (!ActsForRaiser(access, ticket!))
+        {
+            return Error("not_ticket_owner", "Only the person who raised this ticket, or the desk Manager, can withdraw it.", 403);
+        }
+        if (ticket!.Status is not (TicketStatus.Returned or TicketStatus.Open))
+        {
+            return Error("ticket_not_withdrawable",
+                "Only a rejected ticket, or one nobody has taken yet, can be withdrawn. Ask whoever is working it in the chat.",
+                409, "status");
+        }
+        var wasWaiting = ticket.Status == TicketStatus.Open;
+        var note = Clean((await RequestBody.ReadJsonSilentAsync<CloseTicketRequest>(Request)).Note, 4000);
+        var now = Clock.UtcNow();
+        ticket.Status = TicketStatus.Withdrawn;
+        ticket.ClosedByUserId = access.Viewer.UserId;
+        ticket.ClosedAt = now;
+        ticket.CloseNote = note;
+        ticket.PausedAt = null;
+        AddEvent(ticket, access.Viewer, "withdrawn", note);
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        if (wasWaiting)
+        {
+            // It was sitting in their queue: tell them it's gone.
+            var to = await AssignableUsers(ticket.DepartmentId).Select(u => u.UserId).ToListAsync();
+            to.Remove(access.Viewer.UserId);
+            push.Notify(to, ticketId, $"{Ticket.FormatNumber(ticket.Number)} withdrawn",
+                $"{access.Viewer.Employee?.FullName ?? access.Viewer.Email} no longer needs it: {Short(ticket.Subject)}", TicketUrl(ticket));
+        }
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>It isn't actually fixed: the raiser reopens a resolved ticket
+    /// (up to ReopenDays after) with a reason and a new deadline. It goes back
+    /// to the department's queue for anyone there to take.</summary>
+    [HttpPost("/tickets/{ticketId}/reopen")]
+    public async Task<IActionResult> Reopen(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (!ActsForRaiser(access, ticket!))
+        {
+            return Error("not_ticket_owner", "Only the person who raised this ticket, or the desk Manager, can reopen it.", 403);
+        }
+        if (ticket!.Status != TicketStatus.Resolved)
+        {
+            return Error("ticket_not_resolved", "Only a resolved ticket can be reopened.", 409, "status");
+        }
+        var now = Clock.UtcNow();
+        if (ticket.ResolvedAt < now.AddDays(-ReopenDays))
+        {
+            return Error("reopen_window_passed", $"It was resolved more than {ReopenDays} days ago. Raise a new ticket instead.", 409, "status");
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<ReopenTicketRequest>(Request);
+        var reason = Clean(data.Reason, 4000);
+        if (reason is null)
+        {
+            return Error("validation_error", "Say why it isn't fixed, so the team knows what's left.", 422, "reason");
+        }
+        var (dueAt, deadlineProblem) = ParseDeadline(data.SlaHours, data.DueAt, now);
+        if (deadlineProblem is not null) return deadlineProblem;
+
+        var resolver = ticket.ResolvedBy;
+        ticket.Status = TicketStatus.Open;
+        ticket.ClaimedByUserId = null;
+        ticket.ClaimedAt = null;
+        ticket.ResolvedByUserId = null;
+        ticket.ResolvedAt = null;
+        // The old resolution note stays in the history ("resolved" event).
+        ticket.ResolutionNote = null;
+        ticket.DueAt = dueAt;
+        ticket.PausedAt = null;
+        ticket.EscalatedAt = null;
+        ticket.ReopenCount++;
+        AddEvent(ticket, access.Viewer, "reopened", $"{reason}\nResolve by {NairobiTime(dueAt)}.");
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
+        var number = Ticket.FormatNumber(saved.Number);
+        var by = access.Viewer.Employee?.FullName ?? access.Viewer.Email;
+        if (resolver is not null && resolver.UserId != access.Viewer.UserId)
+        {
+            mail.SendMailSafe(resolver.Email, $"{number} reopened: {saved.Subject}",
+                $"{by} reopened a ticket you resolved. It's back in {saved.Department?.Name}'s queue.\n\n" +
+                $"Why:\n{reason}\n\nResolve by: {NairobiTime(dueAt)}");
+        }
+        await PushNewTicketAsync(saved, access.Viewer.UserId, by);
+        return Ok(new { data = saved.ToDict() });
+    }
+
+    /// <summary>An Admin closes a ticket that's still going (a duplicate
+    /// nobody rejected, gone stale, raised in error). Final; anything out on
+    /// a forward is called back.</summary>
+    [HttpPost("/tickets/{ticketId}/close")]
+    public async Task<IActionResult> Close(string ticketId)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (!access.IsAdmin)
+        {
+            return Error("forbidden", "Only an Admin can close a ticket.", 403);
+        }
+        if (ticket!.Status is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.Returned))
+        {
+            return Error("ticket_not_active", "It's already finished.", 409, "status");
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<CloseTicketRequest>(Request);
+        var note = Clean(data.Note, 4000);
+        if (note is null)
+        {
+            return Error("validation_error", "Say why it's being closed.", 422, "note");
+        }
+        var now = Clock.UtcNow();
+        foreach (var forward in ticket.Forwards.Where(f => f.Status == TicketForwardStatus.Pending))
+        {
+            forward.Status = TicketForwardStatus.Recalled;
+            forward.RepliedAt = now;
+        }
+        var handler = ticket.ClaimedByUserId;
+        ticket.Status = TicketStatus.Closed;
+        ticket.ClosedByUserId = access.Viewer.UserId;
+        ticket.ClosedAt = now;
+        ticket.CloseNote = note;
+        ticket.PausedAt = null;
+        AddEvent(ticket, access.Viewer, "closed", note);
+        await db.SaveChangesAsync();
+        await BroadcastChangedAsync(ticketId);
+        var number = Ticket.FormatNumber(ticket.Number);
+        if (ticket.RaisedBy is not null && ticket.RaisedByUserId != access.Viewer.UserId)
+        {
+            mail.SendMailSafe(ticket.RaisedBy.Email, $"{number} closed: {ticket.Subject}",
+                $"An Admin closed the ticket you raised.\n\nWhy:\n{note}");
+        }
+        if (handler is not null)
+        {
+            push.Notify([handler], ticketId, $"{number} closed by an Admin", Short(note), TicketUrl(ticket));
+        }
         var saved = await TicketsWithIncludes().FirstAsync(t => t.TicketId == ticketId);
         return Ok(new { data = saved.ToDict() });
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +28,6 @@ import { ApiError } from "@/lib/api/client";
 import {
   useCreateTicket,
   useDepartments,
-  useSlaTargets,
   useTicketAccess,
   useTicketAssignees,
   useTicketCategories,
@@ -54,8 +54,9 @@ const EMPTY = {
   subject: "",
   description: "",
   priority: "medium" as TicketPriority,
-  /** How long until it breaches the SLA: "" = the priority's target, a
-   * number of hours from SLA_WINDOWS, or CUSTOM for a picked time. */
+  /** How long until it breaches the SLA, which the raiser always sets: ""
+   * = not chosen yet, a number of hours from SLA_WINDOWS, or CUSTOM for a
+   * picked time. */
   window: "",
   /** A datetime-local value, used when window is CUSTOM. */
   dueAt: "",
@@ -65,7 +66,7 @@ const EMPTY = {
 const CUSTOM = "custom";
 
 /** How long the handling team has before the ticket breaches its SLA. */
-const SLA_WINDOWS: { hours: number; label: string }[] = [
+export const SLA_WINDOWS: { hours: number; label: string }[] = [
   { hours: 4, label: "4 hours (urgent)" },
   { hours: 8, label: "8 hours" },
   { hours: 12, label: "12 hours" },
@@ -111,7 +112,6 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
   const categories = useTicketCategories();
   const departments = useDepartments();
   const onDesk = useTicketAccess().data?.data.on_desk ?? false;
-  const slaTargets = useSlaTargets().data?.data;
   const createTicket = useCreateTicket();
   const [form, setForm] = useState(EMPTY);
   const [fieldError, setFieldError] = useState<{
@@ -122,13 +122,8 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
   const set = (key: keyof typeof EMPTY) => (value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  const targetHours = (p: TicketPriority) =>
-    slaTargets ? slaTargets[`${p}_hours`] : undefined;
-  // The chosen window, or else the priority's own SLA target.
   const hours =
-    form.window && form.window !== CUSTOM
-      ? Number(form.window)
-      : targetHours(form.priority);
+    form.window && form.window !== CUSTOM ? Number(form.window) : undefined;
   // Re-read on each render so the deadline shown keeps up.
   const now = new Date();
   const due =
@@ -160,6 +155,7 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
     (custom ? departmentId : category) &&
     form.subject.trim() &&
     form.description.trim() &&
+    form.window &&
     (form.window !== CUSTOM || form.dueAt);
 
   async function handleSubmit(event: FormEvent) {
@@ -443,8 +439,11 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
                     );
                 }}
                 aria-describedby="ticket-due-note"
+                required
               >
-                <option value="">Standard for the priority</option>
+                <option value="" disabled>
+                  Choose a deadline…
+                </option>
                 {SLA_WINDOWS.map((w) => (
                   <option key={w.hours} value={String(w.hours)}>
                     {w.label}
@@ -480,7 +479,7 @@ function NewTicketForm({ onDone }: { onDone: () => void }) {
               ? `Must be resolved by ${dateTime(due.toISOString())}; after that it breaches the SLA.`
               : form.window === CUSTOM
                 ? "Pick when it must be resolved by (up to 30 days)."
-                : "The priority sets how long they have to resolve it."}
+                : "You set how long they have to resolve it."}
           </p>
         </fieldset>
 
@@ -517,6 +516,27 @@ function AssigneePicker({
       <p className="border-input text-muted-foreground rounded-lg border border-dashed px-3 py-2 text-sm">
         Choose where it&apos;s going first.
       </p>
+    );
+  }
+  // Once someone is picked the list folds away to just their name.
+  const chosen = value ? people?.find((p) => p.user_id === value) : undefined;
+  if (chosen) {
+    return (
+      <div className="border-border flex items-center justify-between gap-2 rounded-lg border px-3 py-1.5">
+        <span className="flex min-w-0 items-center gap-2 text-sm">
+          <Check aria-hidden="true" className="text-success size-4 shrink-0" />
+          <span className="truncate font-medium">{chosen.name}</span>
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange("")}
+          aria-label={`Change from ${chosen.name}`}
+        >
+          Change
+        </Button>
+      </div>
     );
   }
   return (

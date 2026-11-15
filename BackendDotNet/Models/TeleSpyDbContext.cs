@@ -247,6 +247,12 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.ResolvedAt).HasColumnName("resolved_at");
             e.Property(x => x.ResolutionNote).HasColumnName("resolution_note").HasMaxLength(4000);
             e.Property(x => x.ReturnCount).HasColumnName("return_count");
+            e.Property(x => x.ReopenCount).HasColumnName("reopen_count").HasDefaultValue(0);
+            e.Property(x => x.PausedAt).HasColumnName("paused_at");
+            e.Property(x => x.EscalatedAt).HasColumnName("escalated_at");
+            e.Property(x => x.ClosedByUserId).HasColumnName("closed_by_user_id").HasMaxLength(36);
+            e.Property(x => x.ClosedAt).HasColumnName("closed_at");
+            e.Property(x => x.CloseNote).HasColumnName("close_note").HasMaxLength(4000);
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             e.HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Restrict);
@@ -254,6 +260,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasOne(x => x.RaisedBy).WithMany().HasForeignKey(x => x.RaisedByUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.ResolvedBy).WithMany().HasForeignKey(x => x.ResolvedByUserId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.ClosedBy).WithMany().HasForeignKey(x => x.ClosedByUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasMany(x => x.Events).WithOne().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -316,6 +323,8 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.RepliedByUserId).HasColumnName("replied_by_user_id").HasMaxLength(36);
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.RepliedAt).HasColumnName("replied_at");
+            e.Property(x => x.DueAt).HasColumnName("due_at");
+            e.Property(x => x.EscalatedAt).HasColumnName("escalated_at");
             e.HasIndex(x => new { x.ToDepartmentId, x.Status });
             e.HasIndex(x => new { x.ToUserId, x.Status });
             e.HasOne(x => x.Ticket).WithMany(t => t.Forwards).HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
@@ -331,7 +340,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasKey(x => x.EventId);
             e.Property(x => x.EventId).HasColumnName("event_id").HasMaxLength(36);
             e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36).IsRequired();
-            e.Property(x => x.ActorUserId).HasColumnName("actor_user_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.ActorUserId).HasColumnName("actor_user_id").HasMaxLength(36);
             e.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(20).IsRequired();
             e.Property(x => x.Body).HasColumnName("body").HasMaxLength(4000);
             e.Property(x => x.CreatedAt).HasColumnName("created_at");

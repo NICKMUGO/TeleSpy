@@ -13,6 +13,8 @@ export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
   in_progress: "In progress",
   returned: "Rejected",
   resolved: "Resolved",
+  withdrawn: "Withdrawn",
+  closed: "Closed",
 };
 
 const STATUS_CLASSES: Record<TicketStatus, string> = {
@@ -20,6 +22,8 @@ const STATUS_CLASSES: Record<TicketStatus, string> = {
   in_progress: "border-primary/40 text-primary",
   returned: "border-warning/50 text-warning",
   resolved: "border-success/50 text-success",
+  withdrawn: "text-muted-foreground",
+  closed: "text-muted-foreground",
 };
 
 export function TicketStatusBadge({ status }: { status: TicketStatus }) {
@@ -77,6 +81,7 @@ export const SLA_STATUS_LABELS: Record<SlaStatus, string> = {
   paused: "Paused",
   met: "Met SLA",
   missed: "Missed SLA",
+  none: "No SLA result",
 };
 
 /** One line on where a ticket stands against its deadline: time left,
@@ -89,7 +94,11 @@ export function slaSummary(ticket: Ticket, now: number = Date.now()) {
     case "overdue":
       return `${duration(left)} overdue`;
     case "paused":
-      return "SLA paused while rejected";
+      return ticket.status === "returned"
+        ? "SLA paused while rejected"
+        : "SLA paused while forwarded";
+    case "none":
+      return ticket.status === "withdrawn" ? "Withdrawn" : "Closed";
     case "met":
     case "missed": {
       const late =
@@ -111,6 +120,7 @@ const SLA_CLASSES: Record<SlaStatus, string> = {
   paused: "text-muted-foreground",
   met: "border-success/50 text-success",
   missed: "border-destructive/50 text-destructive",
+  none: "text-muted-foreground",
 };
 
 export function SlaBadge({ ticket }: { ticket: Ticket }) {

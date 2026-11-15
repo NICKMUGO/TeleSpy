@@ -119,16 +119,14 @@ export default function SlaReportPage() {
 
             <SectionCard
               title="By priority"
-              description="Targets are set by an Admin in Settings."
+              description="Each ticket's deadline is set by whoever raised it."
               bodyClassName="px-0 pb-0"
             >
               <FiguresTable
                 firstHeader="Priority"
-                extraHeader="Target"
                 rows={r.by_priority.map((row) => ({
                   key: row.priority,
                   first: <PriorityBadge priority={row.priority} />,
-                  extra: `within ${duration(row.target_hours * 60)}`,
                   overdue: row.overdue_open,
                   figures: row,
                 }))}

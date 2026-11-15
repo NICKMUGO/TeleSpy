@@ -452,7 +452,15 @@ export interface ApiErrorBody {
 
 // --- Customer service tickets ---------------------------------------------
 
-export type TicketStatus = "open" | "in_progress" | "returned" | "resolved";
+export type TicketStatus =
+  | "open"
+  | "in_progress"
+  | "returned"
+  | "resolved"
+  /** The raiser no longer needs it. Final. */
+  | "withdrawn"
+  /** An Admin closed it. Final. */
+  | "closed";
 
 /** Why a handling team rejects a ticket (stored as status "returned"). */
 export type TicketRejectReason = "wrong_department" | "duplicate" | "invalid";
@@ -466,8 +474,10 @@ export const REJECT_REASON_LABELS: Record<TicketRejectReason, string> = {
 export type TicketPriority = "high" | "medium" | "low";
 
 /** Where a ticket stands against its SLA deadline. "paused" while it's
- * returned to the raiser — the clock stops until it's sent again. */
-export type SlaStatus = "on_track" | "overdue" | "paused" | "met" | "missed";
+ * rejected back to the raiser or out on a forward; "none" once withdrawn or
+ * closed without being resolved. */
+export type SlaStatus =
+  "on_track" | "overdue" | "paused" | "met" | "missed" | "none";
 
 export interface TicketCategory {
   id: string;
@@ -497,6 +507,10 @@ export interface TicketForward {
   to_user_name: string | null;
   message: string;
   status: "pending" | "returned" | "recalled";
+  /** When they should send it back by (null on old forwards). */
+  due_at: string | null;
+  /** Still out and past due_at. */
+  overdue: boolean;
   reply_note: string | null;
   replied_by_name: string | null;
   created_at: string;
@@ -517,7 +531,14 @@ export interface TicketEvent {
     | "transferred"
     | "forwarded"
     | "forward_returned"
-    | "forward_recalled";
+    | "forward_recalled"
+    | "withdrawn"
+    | "reopened"
+    | "closed"
+    /** TeleSpy alerted the Manager: past the deadline. No actor. */
+    | "escalated"
+    /** TeleSpy alerted people: a forward is past its reply-by time. No actor. */
+    | "forward_overdue";
   body: string | null;
   /** Absent on a message still being sent (shown at once, before the
    * server confirms it). */
@@ -560,6 +581,14 @@ export interface Ticket {
   resolution_minutes: number | null;
   resolution_note: string | null;
   return_count: number;
+  /** Times the raiser reopened it after it was resolved. */
+  reopen_count: number;
+  /** When the Manager was alerted that it's past its deadline. */
+  escalated_at: string | null;
+  /** Withdrawn by the raiser, or closed by an Admin. */
+  closed_by_name: string | null;
+  closed_at: string | null;
+  close_note: string | null;
   /** Out with someone else right now (a pending forward). */
   forwarded: boolean;
   /** Every time it was forwarded, oldest first. */
@@ -633,13 +662,6 @@ export interface TicketStats {
   } | null;
 }
 
-/** GET /tickets/sla-targets — hours to resolve, per priority. */
-export interface SlaTargets {
-  high_hours: number;
-  medium_hours: number;
-  low_hours: number;
-}
-
 export interface SlaFigures {
   resolved: number;
   met: number;
@@ -687,11 +709,9 @@ export interface FeedbackView {
 /** GET /tickets/sla — the organisation against the SLA for a month. */
 export interface SlaReport {
   month: string;
-  targets: SlaTargets;
   totals: SlaFigures & { overdue_open: number };
   by_priority: (SlaFigures & {
     priority: TicketPriority;
-    target_hours: number;
     overdue_open: number;
   })[];
   by_department: (SlaFigures &

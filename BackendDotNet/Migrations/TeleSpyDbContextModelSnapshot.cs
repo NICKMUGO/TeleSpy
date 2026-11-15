@@ -816,6 +816,20 @@ namespace TeleSpy.Migrations
                         .HasColumnType("character varying(36)")
                         .HasColumnName("claimed_by_user_id");
 
+                    b.Property<string>("CloseNote")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("close_note");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<string>("ClosedByUserId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("closed_by_user_id");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("created_at");
@@ -856,12 +870,20 @@ namespace TeleSpy.Migrations
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("due_at");
 
+                    b.Property<DateTime?>("EscalatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("escalated_at");
+
                     b.Property<int>("Number")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasColumnName("number");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Number"));
+
+                    b.Property<DateTime?>("PausedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("paused_at");
 
                     b.Property<string>("Priority")
                         .IsRequired()
@@ -876,6 +898,12 @@ namespace TeleSpy.Migrations
                         .HasMaxLength(36)
                         .HasColumnType("character varying(36)")
                         .HasColumnName("raised_by_user_id");
+
+                    b.Property<int>("ReopenCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("reopen_count");
 
                     b.Property<string>("ResolutionNote")
                         .HasMaxLength(4000)
@@ -916,6 +944,8 @@ namespace TeleSpy.Migrations
                     b.HasIndex("CategoryId");
 
                     b.HasIndex("ClaimedByUserId");
+
+                    b.HasIndex("ClosedByUserId");
 
                     b.HasIndex("DueAt");
 
@@ -978,7 +1008,6 @@ namespace TeleSpy.Migrations
                         .HasColumnName("event_id");
 
                     b.Property<string>("ActorUserId")
-                        .IsRequired()
                         .HasMaxLength(36)
                         .HasColumnType("character varying(36)")
                         .HasColumnName("actor_user_id");
@@ -1074,6 +1103,14 @@ namespace TeleSpy.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("DueAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<DateTime?>("EscalatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("escalated_at");
 
                     b.Property<string>("FromUserId")
                         .IsRequired()
@@ -1553,6 +1590,11 @@ namespace TeleSpy.Migrations
                         .HasForeignKey("ClaimedByUserId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("TeleSpy.Models.User", "ClosedBy")
+                        .WithMany()
+                        .HasForeignKey("ClosedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("TeleSpy.Models.Department", "Department")
                         .WithMany()
                         .HasForeignKey("DepartmentId")
@@ -1573,6 +1615,8 @@ namespace TeleSpy.Migrations
                     b.Navigation("Category");
 
                     b.Navigation("ClaimedBy");
+
+                    b.Navigation("ClosedBy");
 
                     b.Navigation("Department");
 
@@ -1597,8 +1641,7 @@ namespace TeleSpy.Migrations
                     b.HasOne("TeleSpy.Models.User", "Actor")
                         .WithMany()
                         .HasForeignKey("ActorUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("TeleSpy.Models.Ticket", null)
                         .WithMany("Events")

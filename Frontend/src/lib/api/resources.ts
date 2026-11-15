@@ -25,7 +25,6 @@ import type {
   RoleRecord,
   SimCard,
   SlaReport,
-  SlaTargets,
   Ticket,
   TicketAccess,
   TicketAssignee,
@@ -449,6 +448,8 @@ export interface TicketPassBody {
   assigned_to_user_id?: string;
   /** Transfer: optional context. Forward: what's needed (required). */
   note?: string;
+  /** Forward only: hours they have to send it back (required). */
+  reply_hours?: number;
 }
 
 // --- Customer feedback (public: the emailed rating link) ------------------
@@ -550,6 +551,25 @@ export const ticketsApi = {
       `/tickets/${id}/forwards/${forwardId}/recall`,
       { method: "POST" },
     ),
+  withdraw: (id: string, note?: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/withdraw`, {
+      method: "POST",
+      body: { note },
+    }),
+  reopen: (
+    id: string,
+    body: { reason: string; sla_hours?: number; due_at?: string },
+  ) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/reopen`, {
+      method: "POST",
+      body,
+    }),
+  /** Admin only. */
+  close: (id: string, note: string) =>
+    apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/close`, {
+      method: "POST",
+      body: { note },
+    }),
   release: (id: string) =>
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/release`, {
       method: "POST",
@@ -565,12 +585,6 @@ export const ticketsApi = {
   ) =>
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/resend`, {
       method: "POST",
-      body,
-    }),
-  slaTargets: () => apiRequest<ApiEnvelope<SlaTargets>>("/tickets/sla-targets"),
-  updateSlaTargets: (body: Partial<SlaTargets>) =>
-    apiRequest<ApiEnvelope<SlaTargets>>("/tickets/sla-targets", {
-      method: "PATCH",
       body,
     }),
   slaReport: (month?: string) =>

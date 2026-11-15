@@ -80,6 +80,7 @@ builder.Services.AddHostedService<MailSender>();
 builder.Services.AddScoped<IMailService, MailService>();
 builder.Services.AddSingleton<PushQueue>();
 builder.Services.AddHostedService<PushSender>();
+builder.Services.AddHostedService<TicketDeadlines>();
 builder.Services.AddScoped<IPushService, PushService>();
 builder.Services.AddScoped<IAllocationService, AllocationService>();
 builder.Services.AddScoped<IStepUpService, StepUpService>();

@@ -371,19 +371,12 @@ public class BillingSettings
     // 0703083370. Not a billing figure, but this row is the organisation's
     // one settings record. Admin-editable via PATCH /settings/number-format.
     public string CompanyNumberPrefix { get; set; } = BillingConstants.DefaultCompanyNumberPrefix;
-    // Ticket SLA targets, in hours from raising to resolved, per priority.
-    // Admin-editable via PATCH /tickets/sla-targets.
+    // Old per-priority ticket SLA targets. No longer used: whoever raises a
+    // ticket sets its deadline. Kept so the table needs no migration.
     public int SlaHighHours { get; set; } = BillingConstants.DefaultSlaHighHours;
     public int SlaMediumHours { get; set; } = BillingConstants.DefaultSlaMediumHours;
     public int SlaLowHours { get; set; } = BillingConstants.DefaultSlaLowHours;
     public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
-
-    public int SlaHoursFor(string priority) => priority switch
-    {
-        TicketPriority.High => SlaHighHours,
-        TicketPriority.Low => SlaLowHours,
-        _ => SlaMediumHours,
-    };
 
     /// <summary>Excise is charged on the amount, then VAT on amount + excise
     /// — 1.15 x 1.16 = 1.334 at the default rates.</summary>
@@ -792,10 +785,20 @@ public static class TicketStatus
     /// the agent fixes it and sends it again.</summary>
     public const string Returned = "returned";
     /// <summary>Closed with a resolution note: a successful escalation for
-    /// the agent who raised it.</summary>
+    /// the agent who raised it. The raiser can reopen it for a while after.</summary>
     public const string Resolved = "resolved";
+    /// <summary>The raiser took it back: no longer needed. Final.</summary>
+    public const string Withdrawn = "withdrawn";
+    /// <summary>An Admin closed it (cleanup, duplicate, gone stale). Final.</summary>
+    public const string Closed = "closed";
 
-    public static readonly string[] All = [Open, InProgress, Returned, Resolved];
+    public static readonly string[] All = [Open, InProgress, Returned, Resolved, Withdrawn, Closed];
+
+    /// <summary>Someone in the handling team still has to act on it.</summary>
+    public static bool IsActive(string status) => status is Open or InProgress;
+
+    /// <summary>Nothing more happens to it (bar reopening a resolved one).</summary>
+    public static bool IsFinished(string status) => status is Resolved or Withdrawn or Closed;
 }
 
 /// <summary>How urgent a ticket is, which sets its SLA target.</summary>
@@ -815,8 +818,11 @@ public static class SlaStatus
     public const string OnTrack = "on_track";
     /// <summary>Still being worked, deadline passed.</summary>
     public const string Overdue = "overdue";
-    /// <summary>Back with the raiser: the clock stops until it's sent again.</summary>
+    /// <summary>Back with the raiser, or out with someone on a forward: the
+    /// clock stops until it's with the handler again.</summary>
     public const string Paused = "paused";
+    /// <summary>Withdrawn or closed without being resolved: no SLA result.</summary>
+    public const string NotApplicable = "none";
     /// <summary>Resolved by the deadline.</summary>
     public const string Met = "met";
     /// <summary>Resolved after the deadline.</summary>
@@ -880,6 +886,19 @@ public class Ticket
     /// <summary>How many times it came back to the desk — a resolved ticket
     /// is still a success, this just shows how cleanly it went.</summary>
     public int ReturnCount { get; set; }
+    /// <summary>How many times the raiser reopened it after it was resolved.</summary>
+    public int ReopenCount { get; set; }
+    /// <summary>When the SLA clock stopped (rejected to the raiser, or out on
+    /// a forward); null while it runs. On restarting, DueAt moves on by the
+    /// time it stood still.</summary>
+    public DateTime? PausedAt { get; set; }
+    /// <summary>When the handling department's Manager was alerted that it
+    /// went past its deadline — once per deadline.</summary>
+    public DateTime? EscalatedAt { get; set; }
+    /// <summary>Withdrawn by the raiser or closed by an Admin.</summary>
+    public string? ClosedByUserId { get; set; }
+    public DateTime? ClosedAt { get; set; }
+    public string? CloseNote { get; set; }
 
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
     public DateTime UpdatedAt { get; set; } = Clock.UtcNow();
@@ -889,6 +908,7 @@ public class Ticket
     public User? RaisedBy { get; set; }
     public User? ClaimedBy { get; set; }
     public User? ResolvedBy { get; set; }
+    public User? ClosedBy { get; set; }
     public List<TicketEvent> Events { get; set; } = [];
     public List<TicketForward> Forwards { get; set; } = [];
     public TicketFeedback? Feedback { get; set; }
@@ -902,9 +922,25 @@ public class Ticket
     public string SlaStatusAt(DateTime now) => Status switch
     {
         TicketStatus.Resolved => ResolvedAt <= DueAt ? SlaStatus.Met : SlaStatus.Missed,
+        TicketStatus.Withdrawn or TicketStatus.Closed => SlaStatus.NotApplicable,
         TicketStatus.Returned => SlaStatus.Paused,
+        _ when PausedAt is not null || IsForwarded => SlaStatus.Paused,
         _ => now > DueAt ? SlaStatus.Overdue : SlaStatus.OnTrack,
     };
+
+    /// <summary>Stop the SLA clock (rejected, or forwarded). No-op if it's
+    /// already stopped.</summary>
+    public void PauseSla(DateTime now) => PausedAt ??= now;
+
+    /// <summary>Restart the clock once it's back with the handling team —
+    /// not rejected and nothing still out on a forward — moving the deadline
+    /// on by however long it stood still.</summary>
+    public void ResumeSla(DateTime now)
+    {
+        if (PausedAt is not { } since || Status == TicketStatus.Returned || IsForwarded) return;
+        DueAt += now - since;
+        PausedAt = null;
+    }
 
     /// <summary>Minutes from raised to resolved, null until resolved.</summary>
     public int? ResolutionMinutes() =>
@@ -941,6 +977,11 @@ public class Ticket
             ["resolution_minutes"] = ResolutionMinutes(),
             ["resolution_note"] = ResolutionNote,
             ["return_count"] = ReturnCount,
+            ["reopen_count"] = ReopenCount,
+            ["escalated_at"] = UtcTime.Iso(EscalatedAt),
+            ["closed_by_name"] = ClosedBy?.Employee?.FullName ?? ClosedBy?.Email,
+            ["closed_at"] = UtcTime.Iso(ClosedAt),
+            ["close_note"] = CloseNote,
             ["forwarded"] = IsForwarded,
             ["forwards"] = Forwards.OrderBy(f => f.CreatedAt).Select(f => f.ToDict()).ToList(),
             ["created_at"] = UtcTime.Iso(CreatedAt),
@@ -1036,6 +1077,12 @@ public class TicketForward
     public string? ReplyNote { get; set; }
     public string? RepliedByUserId { get; set; }
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+    /// <summary>When the other side should send it back by. Null on
+    /// forwards from before reply deadlines existed.</summary>
+    public DateTime? DueAt { get; set; }
+    /// <summary>When the forwarder and the other side's Manager were told it
+    /// went past DueAt — once.</summary>
+    public DateTime? EscalatedAt { get; set; }
     public DateTime? RepliedAt { get; set; }
 
     public Ticket? Ticket { get; set; }
@@ -1058,6 +1105,8 @@ public class TicketForward
         ["reply_note"] = ReplyNote,
         ["replied_by_name"] = RepliedBy?.Employee?.FullName ?? RepliedBy?.Email,
         ["created_at"] = UtcTime.Iso(CreatedAt),
+        ["due_at"] = UtcTime.Iso(DueAt),
+        ["overdue"] = Status == TicketForwardStatus.Pending && DueAt < Clock.UtcNow(),
         ["replied_at"] = UtcTime.Iso(RepliedAt),
     };
 }
@@ -1066,7 +1115,8 @@ public class TicketEvent
 {
     public string EventId { get; set; } = Guid.NewGuid().ToString();
     public string TicketId { get; set; } = "";
-    public string ActorUserId { get; set; } = "";
+    /// <summary>Null for what TeleSpy does on its own (deadline alerts).</summary>
+    public string? ActorUserId { get; set; }
     public string Kind { get; set; } = "";
     public string? Body { get; set; }
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();

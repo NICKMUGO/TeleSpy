@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
+  Archive,
   ArrowLeft,
   Check,
   CheckCheck,
@@ -19,7 +20,9 @@ import {
   CornerUpLeft,
   Forward,
   Hand,
+  Lock,
   MoveRight,
+  RotateCcw,
   Send,
   Undo2,
   Users,
@@ -49,16 +52,19 @@ import {
   TicketStatusBadge,
 } from "@/features/tickets/ticket-status";
 import { useTicketLive } from "@/features/tickets/use-ticket-live";
+import { SLA_WINDOWS } from "@/features/tickets/new-ticket-dialog";
 import { ApiError } from "@/lib/api/client";
 import { ticketsApi } from "@/lib/api/resources";
 import {
   useAddTicketNote,
   useClaimTicket,
+  useCloseTicket,
   useDepartments,
   useForwardTicket,
   useRecallForward,
   useRejectTicket,
   useReleaseTicket,
+  useReopenTicket,
   useResendTicket,
   useResolveTicket,
   useReturnForward,
@@ -67,6 +73,7 @@ import {
   useTicketAssignees,
   useTicketCategories,
   useTransferTicket,
+  useWithdrawTicket,
 } from "@/lib/api/hooks";
 import {
   REJECT_REASON_LABELS,
@@ -93,7 +100,30 @@ const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   forwarded: "forwarded it",
   forward_returned: "sent it back",
   forward_recalled: "recalled it",
+  withdrawn: "withdrew it",
+  reopened: "reopened it",
+  closed: "closed it",
+  escalated: "escalated it to the Manager",
+  forward_overdue: "flagged an overdue reply",
 };
+
+/** How long after it's resolved the raiser can reopen it (the API's
+ * TicketsController.ReopenDays). */
+const REOPEN_DAYS = 14;
+
+/** How long whoever a ticket is forwarded to has to send it back. */
+const REPLY_WINDOWS: { hours: number; label: string }[] = [
+  { hours: 1, label: "1 hour" },
+  { hours: 2, label: "2 hours" },
+  { hours: 4, label: "4 hours" },
+  { hours: 8, label: "8 hours" },
+  { hours: 24, label: "1 day" },
+  { hours: 48, label: "2 days" },
+  { hours: 72, label: "3 days" },
+];
+
+const isActive = (t: Ticket) =>
+  t.status === "open" || t.status === "in_progress";
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
@@ -189,6 +219,22 @@ export default function TicketPage() {
           </Alert>
         ) : null}
 
+        {t.status === "withdrawn" || t.status === "closed" ? (
+          <Alert>
+            <Archive aria-hidden="true" />
+            <AlertTitle>
+              {t.status === "withdrawn" ? "Withdrawn" : "Closed by an Admin"}
+              {t.closed_by_name ? ` · ${t.closed_by_name}` : ""}
+              {t.closed_at ? ` · ${dateTime(t.closed_at)}` : ""}
+            </AlertTitle>
+            {t.close_note ? (
+              <AlertDescription className="whitespace-pre-wrap">
+                {t.close_note}
+              </AlertDescription>
+            ) : null}
+          </Alert>
+        ) : null}
+
         <div className="grid items-start gap-4 lg:grid-cols-3">
           <div className="flex flex-col gap-4 lg:col-span-2">
             <SectionCard
@@ -203,13 +249,16 @@ export default function TicketPage() {
               <SendBackForm key={f.id} ticket={t} forward={f} />
             ))}
 
+            {canResend ? <RaiserActions ticket={t} /> : null}
+
             <TicketActions
               ticket={t}
               onTeam={onTeam}
               canClose={canClose}
-              canResend={canResend}
               isRaiser={isRaiser}
             />
+
+            {me.is_admin ? <AdminClose ticket={t} /> : null}
 
             <Conversation
               ticketId={t.id}
@@ -230,7 +279,8 @@ export default function TicketPage() {
                     >
                       <p className="text-sm">
                         <span className="font-medium">
-                          {event.actor_name ?? "Someone"}
+                          {event.actor_name ??
+                            (event.actor_user_id ? "Someone" : "TeleSpy")}
                         </span>{" "}
                         {EVENT_LABELS[event.kind]}
                         <span className="text-muted-foreground">
@@ -284,7 +334,7 @@ export default function TicketPage() {
               <Detail label="Priority">{PRIORITY_LABELS[t.priority]}</Detail>
               <Detail label="Resolve by (SLA)">
                 {dateTime(t.due_at)}
-                {t.status === "resolved" ? null : (
+                {!isActive(t) && t.status !== "returned" ? null : (
                   <span className="text-muted-foreground block text-xs">
                     {slaSummary(t)}
                   </span>
@@ -293,6 +343,19 @@ export default function TicketPage() {
               {t.resolution_minutes !== null ? (
                 <Detail label="Time to resolve">
                   {duration(t.resolution_minutes)}
+                </Detail>
+              ) : null}
+              {t.escalated_at && isActive(t) ? (
+                <Detail label="Escalated">
+                  <span className="text-destructive">Manager alerted</span>
+                  <span className="text-muted-foreground block text-xs">
+                    {dateTime(t.escalated_at)}
+                  </span>
+                </Detail>
+              ) : null}
+              {t.reopen_count > 0 ? (
+                <Detail label="Reopened">
+                  {t.reopen_count === 1 ? "Once" : `${t.reopen_count} times`}
                 </Detail>
               ) : null}
               <Detail label="Handled by">
@@ -307,6 +370,19 @@ export default function TicketPage() {
                     <span className="text-muted-foreground block text-xs">
                       Since {dateTime(f.created_at)}
                     </span>
+                    {f.due_at ? (
+                      <span
+                        className={cn(
+                          "block text-xs",
+                          f.overdue
+                            ? "text-destructive"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {f.overdue ? "Overdue · was due" : "Due back"}{" "}
+                        {dateTime(f.due_at)}
+                      </span>
+                    ) : null}
                   </Detail>
                 ))}
               {t.return_count > 0 ? (
@@ -338,13 +414,11 @@ function TicketActions({
   ticket,
   onTeam,
   canClose,
-  canResend,
   isRaiser,
 }: {
   ticket: Ticket;
   onTeam: boolean;
   canClose: boolean;
-  canResend: boolean;
   isRaiser: boolean;
 }) {
   const claim = useClaimTicket();
@@ -353,10 +427,7 @@ function TicketActions({
     "resolve" | "return" | "transfer" | "forward" | null
   >(null);
 
-  if (ticket.status === "returned" && canResend) {
-    return <ResendForm ticket={ticket} />;
-  }
-  if (!onTeam || ticket.status === "resolved" || ticket.status === "returned") {
+  if (!onTeam || !isActive(ticket)) {
     return null;
   }
 
@@ -512,11 +583,13 @@ function PassForm({
   const [departmentId, setDepartmentId] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [note, setNote] = useState("");
+  const [replyHours, setReplyHours] = useState("");
   const assignees = useTicketAssignees(departmentId);
   const myId = useSession((s) => s.user?.id);
   const pending = forward.isPending || transfer.isPending;
   const isForward = kind === "forward";
-  const ready = !!departmentId && (!isForward || !!note.trim());
+  const ready =
+    !!departmentId && (!isForward || (!!note.trim() && !!replyHours));
   const department = departments.data?.data.find((d) => d.id === departmentId);
   const person = assignees.data?.data.find((p) => p.user_id === assigneeId);
   const to = person
@@ -532,6 +605,7 @@ function PassForm({
       department_id: departmentId,
       assigned_to_user_id: assigneeId || undefined,
       note: note.trim() || undefined,
+      reply_hours: isForward ? Number(replyHours) : undefined,
     };
     try {
       if (isForward) {
@@ -623,6 +697,35 @@ function PassForm({
           }
         />
       </div>
+      {isForward ? (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="pass-forward-reply">Send back within</Label>
+          <SelectNative
+            id="pass-forward-reply"
+            value={replyHours}
+            onChange={(e) => setReplyHours(e.target.value)}
+            required
+            className="sm:w-48"
+            aria-describedby="pass-forward-reply-note"
+          >
+            <option value="" disabled>
+              Choose a time
+            </option>
+            {REPLY_WINDOWS.map((w) => (
+              <option key={w.hours} value={String(w.hours)}>
+                {w.label}
+              </option>
+            ))}
+          </SelectNative>
+          <p
+            id="pass-forward-reply-note"
+            className="text-muted-foreground text-xs"
+          >
+            Your SLA clock stops while it&apos;s with them. If they miss this,
+            you and their Manager are told.
+          </p>
+        </div>
+      ) : null}
       <Button
         type="submit"
         className="w-fit"
@@ -677,6 +780,18 @@ function OutWithOthers({ ticket }: { ticket: Ticket }) {
                 {" "}
                 · since {dateTime(f.created_at)}
               </span>
+              {f.due_at ? (
+                <span
+                  className={cn(
+                    "block text-xs",
+                    f.overdue ? "text-destructive" : "text-muted-foreground",
+                  )}
+                >
+                  {f.overdue
+                    ? `Overdue: was due back ${dateTime(f.due_at)}. Their Manager has been told.`
+                    : `Due back ${dateTime(f.due_at)}`}
+                </span>
+              ) : null}
             </p>
             <p className="text-muted-foreground text-sm whitespace-pre-wrap">
               {f.message}
@@ -732,7 +847,12 @@ function SendBackForm({
   return (
     <SectionCard
       title={`${forward.from_name ?? "Someone"} needs something from you`}
-      className="border-info/50"
+      description={
+        forward.overdue
+          ? "This is overdue. Send it back as soon as you can."
+          : undefined
+      }
+      className={forward.overdue ? "border-destructive/50" : "border-info/50"}
     >
       <form onSubmit={submit} className="flex flex-col gap-3">
         <Alert>
@@ -740,6 +860,9 @@ function SendBackForm({
           <AlertTitle>
             Forwarded to {forwardTarget(forward)} ·{" "}
             {dateTime(forward.created_at)}
+            {forward.due_at
+              ? ` · send back by ${dateTime(forward.due_at)}`
+              : ""}
           </AlertTitle>
           <AlertDescription className="whitespace-pre-wrap">
             {forward.message}
@@ -988,6 +1111,258 @@ function ResendForm({ ticket }: { ticket: Ticket }) {
           {resend.isPending ? "Sending…" : "Send again"}
         </Button>
       </form>
+      <div className="border-border-subtle mt-4 border-t pt-4">
+        <WithdrawForm ticket={ticket} />
+      </div>
+    </SectionCard>
+  );
+}
+
+/** What the raiser (or the desk Manager, or an Admin) can do once a ticket
+ * is back with them: fix and resend a rejected one (or withdraw it),
+ * withdraw one nobody has taken yet, or reopen a resolved one. */
+function RaiserActions({ ticket }: { ticket: Ticket }) {
+  // When the page opened is close enough for a 14-day window.
+  const [now] = useState(() => Date.now());
+  if (ticket.status === "returned") return <ResendForm ticket={ticket} />;
+  if (ticket.status === "open") {
+    return (
+      <SectionCard
+        title="No longer needed?"
+        description="Nobody has taken it yet, so you can still withdraw it."
+      >
+        <WithdrawForm ticket={ticket} />
+      </SectionCard>
+    );
+  }
+  if (
+    ticket.status === "resolved" &&
+    ticket.resolved_at &&
+    now - new Date(ticket.resolved_at).getTime() < REOPEN_DAYS * 86_400_000
+  ) {
+    return <ReopenForm ticket={ticket} />;
+  }
+  return null;
+}
+
+function WithdrawForm({ ticket }: { ticket: Ticket }) {
+  const withdraw = useWithdrawTicket();
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await withdraw.mutateAsync({
+        id: ticket.id,
+        note: note.trim() || undefined,
+      });
+      toast.success(`${ticket.number} withdrawn.`);
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't withdraw it."));
+    }
+  }
+
+  if (!open) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        className="w-fit"
+        onClick={() => setOpen(true)}
+      >
+        <Archive aria-hidden="true" />
+        Withdraw ticket
+      </Button>
+    );
+  }
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-2">
+      <Label htmlFor="withdraw-note">Why? (optional)</Label>
+      <Textarea
+        id="withdraw-note"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={2}
+        maxLength={4000}
+        placeholder="e.g. The customer sorted it out at the airport."
+      />
+      <p className="text-muted-foreground text-xs">
+        A withdrawn ticket is closed for good. Raise a new one if it&apos;s
+        needed again.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="submit"
+          variant="destructive"
+          disabled={withdraw.isPending}
+        >
+          <Archive aria-hidden="true" />
+          {withdraw.isPending ? "Withdrawing…" : "Withdraw it"}
+        </Button>
+        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/** It wasn't actually fixed: back to the department's queue, with a reason
+ * and a new deadline the raiser sets. */
+function ReopenForm({ ticket }: { ticket: Ticket }) {
+  const reopen = useReopenTicket();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [hours, setHours] = useState("");
+  const ready = !!reason.trim() && !!hours;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!ready) return;
+    try {
+      await reopen.mutateAsync({
+        id: ticket.id,
+        body: { reason: reason.trim(), sla_hours: Number(hours) },
+      });
+      toast.success(
+        `${ticket.number} reopened and sent back to ${ticket.department_name ?? "the team"}.`,
+      );
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't reopen it."));
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Not actually fixed?"
+      description={`You can reopen it for up to ${REOPEN_DAYS} days after it was resolved. It goes back to ${ticket.department_name ?? "the team"}'s queue.`}
+    >
+      {open ? (
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="reopen-reason">What&apos;s still wrong?</Label>
+            <Textarea
+              id="reopen-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={3}
+              maxLength={4000}
+              required
+              placeholder="e.g. The refund still hasn't reached the customer's card."
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="reopen-window">New deadline</Label>
+            <SelectNative
+              id="reopen-window"
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              required
+              className="sm:w-56"
+            >
+              <option value="" disabled>
+                Choose a deadline…
+              </option>
+              {SLA_WINDOWS.map((w) => (
+                <option key={w.hours} value={String(w.hours)}>
+                  {w.label}
+                </option>
+              ))}
+            </SelectNative>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={!ready || reopen.isPending}>
+              <RotateCcw aria-hidden="true" />
+              {reopen.isPending ? "Reopening…" : "Reopen ticket"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-fit"
+          onClick={() => setOpen(true)}
+        >
+          <RotateCcw aria-hidden="true" />
+          Reopen ticket
+        </Button>
+      )}
+    </SectionCard>
+  );
+}
+
+/** Admin: close a ticket that's still going, for good. */
+function AdminClose({ ticket }: { ticket: Ticket }) {
+  const close = useCloseTicket();
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState("");
+  if (!isActive(ticket) && ticket.status !== "returned") return null;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!note.trim()) return;
+    try {
+      await close.mutateAsync({ id: ticket.id, note: note.trim() });
+      toast.success(`${ticket.number} closed.`);
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't close it."));
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Admin"
+      description="Close it for good: a duplicate nobody rejected, raised in error, or gone stale. The raiser is emailed."
+    >
+      {open ? (
+        <form onSubmit={submit} className="flex flex-col gap-2">
+          <Label htmlFor="admin-close-note">Why close it?</Label>
+          <Textarea
+            id="admin-close-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={2}
+            maxLength={4000}
+            required
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              variant="destructive"
+              disabled={!note.trim() || close.isPending}
+            >
+              <Lock aria-hidden="true" />
+              {close.isPending ? "Closing…" : "Close ticket"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-fit"
+          onClick={() => setOpen(true)}
+        >
+          <Lock aria-hidden="true" />
+          Close ticket
+        </Button>
+      )}
     </SectionCard>
   );
 }
