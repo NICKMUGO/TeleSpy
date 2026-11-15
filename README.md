@@ -3,10 +3,15 @@
 AI-driven SIM management and telecom cost accountability system, built for
 Kenya Airways as a university capstone project.
 
-TeleSpy tracks which employee holds which SIM card and desk extension, turns
-raw PBX call detail records (CDRs) into per-employee and per-department costs
-in KES, and uses machine learning to flag unusual calling behaviour, group
-employees by usage pattern, and forecast next month's departmental spend.
+TeleSpy tracks which employee holds which phone line (SIM card, desk
+extension and company number), turns raw PBX call detail records (CDRs) into
+per-employee and per-department costs in KES, and uses machine learning to
+flag unusual calling behaviour, group employees by usage pattern, and
+forecast next month's departmental spend. It also runs a customer service
+ticketing desk with SLA tracking and customer ratings.
+
+The development data (the PBX CDR export and the itemised Safaricom bills
+behind the default call rates) comes from KenyaRe.
 
 ## Contents
 
@@ -29,8 +34,11 @@ employees by usage pattern, and forecast next month's departmental spend.
 
 ## Features
 
-- **SIM inventory and allocation** — register SIM cards, assign them to
-  employees, unassign them, and keep the full allocation history.
+- **Lines and allocation** — register SIM cards, extensions and company
+  numbers and keep the full allocation history. A person holds at most one
+  line and a SIM has one holder (enforced in the database). Lines are handed
+  over by swapping or removing the current holder; removal needs a step-up
+  check and emails HR, and spend on unheld lines is still tracked.
 - **Employees and departments** — manage staff, their extension codes, and
   each department's telecom budget.
 - **CDR ingestion** — pull call records from Cisco CUCM (SFTP), Avaya
@@ -46,6 +54,26 @@ employees by usage pattern, and forecast next month's departmental spend.
 - **Spend forecasting** — Prophet forecasts next-period spend per department.
 - **Budgets and invoices** — per-role monthly cost ceilings, over-limit
   reports, and monthly invoice emails.
+- **Bill reconciliation** — each month's computed bill side by side with the
+  telco's actual invoice.
+- **Customer service tickets** — the customer service desk raises tickets for
+  customers; anyone else raises internal tickets. A ticket has a quick
+  category (which routes it to a department) or a custom reason, a priority,
+  and a deadline the raiser sets. Handlers claim, resolve, reject, hand back,
+  transfer, or forward it for action with a reply-by time. The raiser can
+  resend or withdraw a rejected ticket and reopen a resolved one (up to 14
+  days, with a reason and a new deadline); an Admin can close any ticket.
+  The SLA clock pauses while a ticket is rejected or forwarded. Past a
+  deadline, the handling department's Manager is alerted (overdue forwards
+  alert the forwarder and the other side's Manager). Each ticket has a live
+  chat thread with read ticks, a full history, and email and web push
+  notifications.
+- **SLA report and customer ratings** — compliance by priority, department
+  and person, a desk scorecard, what's overdue now, and CSAT: customers rate
+  a resolved ticket 1–5 from a one-tap email link.
+- **Guided tour** — an in-app tutorial for each role.
+- **Installable app** — a PWA for desktop, Android and iPhone/iPad, with push
+  notifications.
 - **Secure sign-in** — email OTP as a second factor, account lockout,
   password history, and one active session per user.
 
@@ -73,7 +101,7 @@ The three parts are deliberately separate:
 | Part            | Responsibility                                                                                   |
 | --------------- | ------------------------------------------------------------------------------------------------ |
 | `Frontend/`     | Presentation only. A role-gated Next.js client with no business logic.                           |
-| `BackendDotNet/` | The REST API. Owns authentication, access control, the database schema, and all CRUD.            |
+| `BackendDotNet/` | The REST API. Owns authentication, access control, the database schema, business rules, and live ticket updates (SignalR). |
 | `ML/`           | Batch jobs. Fetches and cleans CDRs, prices calls, and writes ML results straight into the database. |
 
 The API does not run any ML in-process. The ML jobs write their results
@@ -85,7 +113,7 @@ the same database the API reads from, each on its own schedule.
 | Layer    | Technology                                                                                           |
 | -------- | ---------------------------------------------------------------------------------------------------- |
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4, shadcn/ui, TanStack Query and Table, Zustand, Zod, Recharts |
-| Backend  | ASP.NET Core on .NET 10, Entity Framework Core 10, JWT, BCrypt                                        |
+| Backend  | ASP.NET Core on .NET 10, Entity Framework Core 10, SignalR, Web Push, JWT, BCrypt                     |
 | Data     | PostgreSQL (SQLite also supported for local development), Redis                                       |
 | ML       | Python, pandas, NumPy, scikit-learn (Isolation Forest, KMeans), Prophet, Paramiko                     |
 | Tooling  | pnpm, Vitest, Playwright, axe-core, ESLint, Prettier, Husky, GitHub Actions                           |
@@ -98,13 +126,13 @@ TeleSpy/
 │   ├── Api/                Controllers, one per domain
 │   ├── Core/               Config, JWT, middleware, role attributes, startup bootstrap
 │   ├── Models/             EF Core entities and DbContext
-│   ├── Services/           Allocation, cache, mail, call classification, password reset
+│   ├── Services/           Allocation, cache, mail, notifications, push, step-up, call classification
 │   ├── Migrations/         EF Core migrations
 │   ├── Program.cs          Application entry point
 │   └── Seed.cs             Demo data generator
 ├── Frontend/               Next.js web client
 │   ├── src/app/            Routes (dashboard, SIMs, employees, analytics, ...)
-│   ├── src/features/       Feature modules (auth, billing, anomalies, ingestion)
+│   ├── src/features/       Feature modules (auth, billing, anomalies, ingestion, tickets, ...)
 │   ├── src/components/     Shared UI and layout
 │   ├── src/lib/            API client, auth session store, helpers
 │   └── tests/              Playwright end-to-end tests
@@ -294,6 +322,13 @@ hides navigation a role cannot use, but only as a convenience.
 | Resolve anomalies                      |  Yes  |   No    |    No    |
 | Edit call rates and role cost limits   |  Yes  |   No    |    No    |
 | Send monthly invoices                  |  Yes  |   No    |    No    |
+| Raise internal tickets                 |  Yes  |   Yes   |   Yes    |
+| Handle tickets sent to own department  |  Yes  |   Yes   |   Yes    |
+| Manage ticket categories, choose the customer service desk |  Yes  |   No    |    No    |
+
+Tickets for customers are raised only by people in the customer service
+desk department (one department is the desk, chosen in Settings). Nobody
+can assign a ticket to themselves.
 
 There is no self-registration: every account, whatever its role, is created
 by an Admin (Employees → Add employee), and the new employee sets their own
@@ -322,6 +357,10 @@ All routes except the sign-in routes and `/health` require a bearer token.
 | Invoices    | `POST /invoices/send-monthly`                                                                                 |
 | Reports     | `GET /reports/monthly?month=YYYY-MM` (the printable monthly report; Manager: own department only)          |
 | Numbers     | `GET` `PATCH /settings/number-format` (Admin: the company number prefix; extension = last 3 digits)          |
+| Tickets     | `GET` `POST /tickets`, `GET /tickets/{id}`, `GET /tickets/me`, `GET /tickets/stats`, `GET /tickets/sla`, `GET /tickets/assignees`, `GET` `POST /tickets/categories`, `PATCH /tickets/categories/{id}` |
+| Ticket actions | `POST /tickets/{id}/` `claim`, `notes`, `read`, `resolve`, `return`, `release`, `resend`, `withdraw`, `reopen`, `close` (Admin), `transfer`, `forward`; `POST /tickets/{id}/forwards/{forwardId}/return`, `/recall` |
+| Live updates | SignalR hub for ticket threads and queues; `GET /push/key`, `POST /push/subscribe`, `POST /push/unsubscribe` |
+| Ratings     | `GET /feedback/r`, `POST /feedback` (public, token-gated: the customer's one-tap rating page) |
 | Account     | `GET` `PATCH /settings/me`, `GET` `POST /tutorial/progress`, `POST /tutorial/restart`, `POST /tutorial/dismiss` |
 | Health      | `GET /health`                                                                                                 |
 
@@ -436,6 +475,8 @@ tests.
 ## Deployment
 
 Production runs on one Azure VM (the Azure for Students free B1s), with
-Docker Compose. Caddy serves the frontend at `/` and the API at `/api`
-over HTTPS. GitHub Actions builds the images and redeploys on every push
-to `main`. For the one-time setup, see [`deploy/README.md`](deploy/README.md).
+Docker Compose: Caddy, the Next.js web app, the .NET API, PostgreSQL, Redis,
+and the ML jobs on cron. Caddy serves the frontend at `/` and the API at
+`/api` over HTTPS. On every push to `main`, GitHub Actions
+(`.github/workflows/deploy.yml`) rebuilds only the images whose code
+changed, pushes them to GHCR and rolls the server forward. For the one-time setup, see [`deploy/README.md`](deploy/README.md).
