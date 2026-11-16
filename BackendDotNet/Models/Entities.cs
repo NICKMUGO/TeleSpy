@@ -1111,6 +1111,32 @@ public class TicketForward
     };
 }
 
+/// <summary>A file someone added to a ticket's conversation. The bytes live
+/// on disk (Services/TicketFiles.cs), named by AttachmentId; this row says
+/// what it is. Deleted with the conversation once the ticket is finished.</summary>
+public class TicketAttachment
+{
+    public string AttachmentId { get; set; } = Guid.NewGuid().ToString();
+    public string TicketId { get; set; } = "";
+    /// <summary>The conversation entry (kind "attachment") it appears as.</summary>
+    public string EventId { get; set; } = "";
+    public string UploadedByUserId { get; set; } = "";
+    /// <summary>As uploaded, cleaned: shown and used for the download.</summary>
+    public string FileName { get; set; } = "";
+    /// <summary>Decided by the server from the file's contents.</summary>
+    public string ContentType { get; set; } = "";
+    public long SizeBytes { get; set; }
+    public DateTime CreatedAt { get; set; } = Clock.UtcNow();
+
+    public Dictionary<string, object?> ToDict() => new()
+    {
+        ["id"] = AttachmentId,
+        ["file_name"] = FileName,
+        ["content_type"] = ContentType,
+        ["size_bytes"] = SizeBytes,
+    };
+}
+
 public class TicketEvent
 {
     public string EventId { get; set; } = Guid.NewGuid().ToString();
@@ -1122,12 +1148,15 @@ public class TicketEvent
     public DateTime CreatedAt { get; set; } = Clock.UtcNow();
 
     public User? Actor { get; set; }
+    /// <summary>Kind "attachment" only: the file.</summary>
+    public TicketAttachment? Attachment { get; set; }
 
     public Dictionary<string, object?> ToDict() => new()
     {
         ["id"] = EventId,
         ["kind"] = Kind,
         ["body"] = Body,
+        ["attachment"] = Attachment?.ToDict(),
         ["actor_user_id"] = ActorUserId,
         ["actor_name"] = Actor?.Employee?.FullName ?? Actor?.Email,
         ["created_at"] = UtcTime.Iso(CreatedAt),

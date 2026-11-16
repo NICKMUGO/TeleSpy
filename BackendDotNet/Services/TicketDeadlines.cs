@@ -5,6 +5,8 @@
 // - a forward past its reply-by time: whoever forwarded it, whoever it went
 //   to, and that department's Manager are told — once (TicketForward.EscalatedAt).
 // Each alert is written to the ticket's history with no actor (TeleSpy did it).
+// It also sweeps up any finished ticket's leftover conversation and files
+// (Services/TicketFiles.cs).
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using TeleSpy.Api;
@@ -45,6 +47,20 @@ public class TicketDeadlines(IServiceScopeFactory scopes, ILogger<TicketDeadline
         var push = scope.ServiceProvider.GetRequiredService<IPushService>();
         var hub = scope.ServiceProvider.GetRequiredService<IHubContext<TicketsHub>>();
         var now = Clock.UtcNow();
+
+        // Finished tickets that still have a conversation (from before this
+        // was done on the spot, or a clean-up that failed): delete it.
+        var finished = new[] { TicketStatus.Resolved, TicketStatus.Withdrawn, TicketStatus.Closed };
+        var leftovers = await db.TicketEvents
+            .Where(e => (e.Kind == "note" || e.Kind == "attachment") &&
+                        db.Tickets.Any(t => t.TicketId == e.TicketId && finished.Contains(t.Status)))
+            .Select(e => e.TicketId).Distinct().Take(200)
+            .ToListAsync(cancellationToken);
+        await TicketFiles.PurgeConversationAsync(db, leftovers, logger, cancellationToken);
+        if (leftovers.Count > 0)
+        {
+            logger.LogInformation("Cleared the conversation of {Count} finished ticket(s)", leftovers.Count);
+        }
 
         var overdue = await db.Tickets
             .Include(t => t.Department)

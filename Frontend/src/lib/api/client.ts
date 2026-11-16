@@ -146,6 +146,48 @@ async function rawRequest<T>(
   return parsed as T;
 }
 
+async function errorFrom(response: Response) {
+  const parsed = await response.json().catch(() => null);
+  return new ApiError(
+    parsed ?? {
+      error_type: "unknown_error",
+      message:
+        response.status === 413
+          ? "That file is too large. The limit is 20 MB per file."
+          : `Request failed with status ${response.status}.`,
+      status: response.status,
+    },
+  );
+}
+
+/** Sends a file (multipart form) — apiRequest only speaks JSON. */
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(buildUrl(path), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${await freshAccessToken()}` },
+    body: form,
+  });
+  if (!response.ok) throw await errorFrom(response);
+  return (await response.json()) as T;
+}
+
+/** Fetches a file the API only gives to signed-in people, and saves it
+ * under `fileName` (a plain link can't carry the Bearer token). */
+export async function apiDownload(path: string, fileName: string) {
+  const response = await fetch(buildUrl(path), {
+    headers: { Authorization: `Bearer ${await freshAccessToken()}` },
+  });
+  if (!response.ok) throw await errorFrom(response);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 /** The one place every API call goes through: attaches auth, retries once
  * after a token refresh on 401, and signs the session out if that refresh
  * also fails (expired/revoked refresh token). */

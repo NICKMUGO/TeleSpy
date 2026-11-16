@@ -41,6 +41,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
     public DbSet<TicketForward> TicketForwards => Set<TicketForward>();
     public DbSet<TicketFeedback> TicketFeedback => Set<TicketFeedback>();
     public DbSet<TicketRead> TicketReads => Set<TicketRead>();
+    public DbSet<TicketAttachment> TicketAttachments => Set<TicketAttachment>();
     public DbSet<PushDevice> PushDevices => Set<PushDevice>();
 
     // All DateTime values in this app are naive UTC wall-clock (see
@@ -332,6 +333,26 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.HasOne(x => x.ToDepartment).WithMany().HasForeignKey(x => x.ToDepartmentId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.ToUser).WithMany().HasForeignKey(x => x.ToUserId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.RepliedBy).WithMany().HasForeignKey(x => x.RepliedByUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TicketAttachment>(e =>
+        {
+            e.ToTable("ticket_attachments");
+            e.HasKey(x => x.AttachmentId);
+            e.Property(x => x.AttachmentId).HasColumnName("attachment_id").HasMaxLength(36);
+            e.Property(x => x.TicketId).HasColumnName("ticket_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => x.TicketId);
+            e.Property(x => x.EventId).HasColumnName("event_id").HasMaxLength(36).IsRequired();
+            e.HasIndex(x => x.EventId).IsUnique();
+            e.Property(x => x.UploadedByUserId).HasColumnName("uploaded_by_user_id").HasMaxLength(36).IsRequired();
+            e.Property(x => x.FileName).HasColumnName("file_name").HasMaxLength(160).IsRequired();
+            e.Property(x => x.ContentType).HasColumnName("content_type").HasMaxLength(100).IsRequired();
+            e.Property(x => x.SizeBytes).HasColumnName("size_bytes");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<TicketEvent>().WithOne(x => x.Attachment).HasForeignKey<TicketAttachment>(x => x.EventId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UploadedByUserId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TicketEvent>(e =>

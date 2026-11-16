@@ -85,6 +85,13 @@ public static class Config
             ? $"{origin.TrimEnd('/')}/api"
             : "http://localhost:5299").TrimEnd('/');
 
+    /// <summary>Where ticket attachments are kept on disk (a Docker volume in
+    /// production, deploy/docker-compose.yml).</summary>
+    public static string AttachmentsDir { get; } =
+        Path.GetFullPath(Environment.GetEnvironmentVariable("ATTACHMENTS_DIR") is { Length: > 0 } dir
+            ? dir
+            : Path.Combine(AppContext.BaseDirectory, "attachments"));
+
     // --- Mail ------------------------------------------------------------------
     public static string MailServer { get; } = Environment.GetEnvironmentVariable("MAIL_SERVER") ?? "localhost";
     public static int MailPort { get; } = ToInt("MAIL_PORT", "587");

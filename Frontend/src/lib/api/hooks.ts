@@ -721,6 +721,12 @@ export function useClaimTicket() {
   );
 }
 
+export function useUploadAttachment() {
+  return useTicketMutation(({ id, file }: { id: string; file: File }) =>
+    ticketsApi.uploadAttachment(id, file),
+  );
+}
+
 export function useAddTicketNote() {
   return useTicketMutation(
     ({ id, body }: { id: string; body: string }) =>

@@ -517,10 +517,21 @@ export interface TicketForward {
   replied_at: string | null;
 }
 
+/** A file in a ticket's conversation. Deleted with the conversation once
+ * the ticket is resolved, withdrawn or closed. */
+export interface TicketAttachment {
+  id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+}
+
 export interface TicketEvent {
   id: string;
   kind:
     | "raised"
+    /** A file in the conversation (see attachment). */
+    | "attachment"
     | "assigned"
     | "claimed"
     | "note"
@@ -540,6 +551,8 @@ export interface TicketEvent {
     /** TeleSpy alerted people: a forward is past its reply-by time. No actor. */
     | "forward_overdue";
   body: string | null;
+  /** Kind "attachment" only. */
+  attachment?: TicketAttachment | null;
   /** Absent on a message still being sent (shown at once, before the
    * server confirms it). */
   actor_user_id?: string;

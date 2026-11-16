@@ -40,6 +40,7 @@ services:
       DOTNET_GCConserveMemory: "5"
     volumes:
       - ./data:/app/ML/data:ro      # CDR dataset, only read by `--seed`
+      - attachments:/app/attachments  # ticket files, deleted once a ticket is finished
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
@@ -81,6 +82,7 @@ services:
     logging: *logging
 
 volumes:
+  attachments:
   pgdata:
   redisdata:
   caddydata:

@@ -2,8 +2,9 @@
 // are snake_case (RequestBody.JsonOptions uses JsonNamingPolicy.SnakeCaseLower
 // — confirmed against BackendDotNet/Core/RequestBody.cs), matching the
 // snake_case response shapes already documented in ./types.ts.
-import { apiRequest } from "@/lib/api/client";
+import { apiDownload, apiRequest, apiUpload } from "@/lib/api/client";
 import type {
+  TicketAttachment,
   AnomalyFlag,
   ApiEnvelope,
   CdrIngestBatch,
@@ -511,6 +512,19 @@ export const ticketsApi = {
     apiRequest<ApiEnvelope<Ticket>>(`/tickets/${id}/claim`, {
       method: "POST",
     }),
+  uploadAttachment: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return apiUpload<ApiEnvelope<TicketAttachment>>(
+      `/tickets/${id}/attachments`,
+      form,
+    );
+  },
+  downloadAttachment: (id: string, attachment: TicketAttachment) =>
+    apiDownload(
+      `/tickets/${id}/attachments/${attachment.id}`,
+      attachment.file_name,
+    ),
   addNote: (id: string, body: string) =>
     apiRequest<ApiEnvelope<{ ticket_id: string }>>(`/tickets/${id}/notes`, {
       method: "POST",

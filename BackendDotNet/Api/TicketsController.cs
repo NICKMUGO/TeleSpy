@@ -297,6 +297,7 @@ public class TicketsController(
         var access = await LoadAccessAsync();
         var ticket = await TicketsWithIncludes()
             .Include(t => t.Events).ThenInclude(e => e.Actor).ThenInclude(u => u!.Employee)
+            .Include(t => t.Events).ThenInclude(e => e.Attachment)
             .FirstOrDefaultAsync(t => t.TicketId == ticketId);
         // Not found and not visible look the same: a ticket's existence is
         // itself customer information.
@@ -1026,6 +1027,14 @@ public class TicketsController(
     {
         var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
         if (problem is not null) return problem;
+        // The conversation ends with the ticket. A resolved one can be
+        // reopened to pick it up again.
+        if (TicketStatus.IsFinished(ticket!.Status))
+        {
+            return Error("ticket_finished", ticket.Status == TicketStatus.Resolved
+                ? "This ticket is resolved, so the conversation is closed. Reopen it to continue."
+                : $"This ticket is {ticket.Status}, so the conversation is closed.", 409, "status");
+        }
         var data = await RequestBody.ReadJsonSilentAsync<TicketNoteRequest>(Request);
         var body = Clean(data.Body, 4000);
         if (body is null) return Error("validation_error", "Write the note first.", 422, "body");
@@ -1034,6 +1043,102 @@ public class TicketsController(
         await BroadcastChangedAsync(ticketId);
         await PushMessageAsync(ticket!, access.Viewer, body);
         return StatusCode(201, new { data = new { ticket_id = ticketId } });
+    }
+
+    // --- Attachments (Services/TicketFiles.cs) -----------------------------------
+
+    /// <summary>Adds a file to the conversation: an image, PDF, Word/Excel
+    /// document or text file, up to 20 MB, at most 5 per ticket. Anyone who
+    /// can see the ticket, while it's still going.</summary>
+    [HttpPost("/tickets/{ticketId}/attachments")]
+    [RequestSizeLimit(TicketFiles.MaxBytes + 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = TicketFiles.MaxBytes + 1024 * 1024)]
+    public async Task<IActionResult> UploadAttachment(string ticketId, IFormFile? file)
+    {
+        var (ticket, access, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        if (TicketStatus.IsFinished(ticket!.Status))
+        {
+            return Error("ticket_finished", "This ticket is finished, so files can't be added.", 409, "status");
+        }
+        if (file is null || file.Length == 0)
+        {
+            return Error("validation_error", "Choose a file to attach.", 422, "file");
+        }
+        if (file.Length > TicketFiles.MaxBytes)
+        {
+            return Error("file_too_large",
+                $"That file is {file.Length / (1024.0 * 1024.0):0.#} MB; the limit is {TicketFiles.MaxBytes / (1024 * 1024)} MB per file. " +
+                "Compress it, or send a smaller one.", 413, "file");
+        }
+        if (await db.TicketAttachments.CountAsync(a => a.TicketId == ticketId) >= TicketFiles.MaxPerTicket)
+        {
+            return Error("too_many_files",
+                $"This ticket already has {TicketFiles.MaxPerTicket} files, the most a ticket can hold. " +
+                "Describe the rest in a message instead.", 409, "file");
+        }
+        var fileName = TicketFiles.CleanName(file.FileName);
+        var head = new byte[16];
+        await using (var peek = file.OpenReadStream())
+        {
+            var read = await peek.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
+            if (read < head.Length) head = head[..read];
+        }
+        if (TicketFiles.ContentTypeFor(fileName, head) is not { } contentType)
+        {
+            return Error("file_type_not_allowed",
+                "Only photos (JPG, PNG, GIF, WebP, HEIC), PDFs, Word, Excel, CSV and text files can be attached.",
+                415, "file", "If it's one of those, the file may be damaged or have the wrong extension.");
+        }
+
+        var eventId = Guid.NewGuid().ToString();
+        var attachment = new TicketAttachment
+        {
+            TicketId = ticketId, EventId = eventId, UploadedByUserId = access.Viewer.UserId,
+            FileName = fileName, ContentType = contentType, SizeBytes = file.Length,
+        };
+        var path = TicketFiles.PathFor(ticketId, attachment.AttachmentId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var partial = path + ".part";
+        await using (var target = System.IO.File.Create(partial))
+        {
+            await file.CopyToAsync(target);
+        }
+        System.IO.File.Move(partial, path, overwrite: true);
+
+        db.TicketEvents.Add(new TicketEvent
+        {
+            EventId = eventId, TicketId = ticketId, ActorUserId = access.Viewer.UserId, Kind = "attachment", Body = fileName,
+        });
+        db.TicketAttachments.Add(attachment);
+        ticket.UpdatedAt = Clock.UtcNow();
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch
+        {
+            System.IO.File.Delete(path);
+            throw;
+        }
+        await BroadcastChangedAsync(ticketId);
+        await PushMessageAsync(ticket, access.Viewer, $"Sent a file: {fileName}");
+        return StatusCode(201, new { data = attachment.ToDict() });
+    }
+
+    [HttpGet("/tickets/{ticketId}/attachments/{attachmentId}")]
+    public async Task<IActionResult> DownloadAttachment(string ticketId, string attachmentId)
+    {
+        var (_, _, problem) = await LoadVisibleTicketAsync(ticketId);
+        if (problem is not null) return problem;
+        var attachment = await db.TicketAttachments.FirstOrDefaultAsync(a => a.AttachmentId == attachmentId && a.TicketId == ticketId);
+        var path = attachment is null ? null : TicketFiles.PathFor(ticketId, attachment.AttachmentId);
+        if (attachment is null || !System.IO.File.Exists(path))
+        {
+            return Error("attachment_not_found", "That file is gone — files are deleted once a ticket is finished.", 404);
+        }
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return PhysicalFile(path!, attachment.ContentType, attachment.FileName);
     }
 
     [HttpPost("/tickets/{ticketId}/resolve")]
@@ -1071,6 +1176,8 @@ public class TicketsController(
         ticket.ResolutionNote = note;
         AddEvent(ticket, access.Viewer, "resolved", note);
         await db.SaveChangesAsync();
+        // Done: the conversation and its files go, to save space.
+        await TicketFiles.PurgeConversationAsync(db, [ticketId], logger);
         await BroadcastChangedAsync(ticketId);
         if (ticket.RaisedBy is not null)
         {
@@ -1466,6 +1573,7 @@ public class TicketsController(
         ticket.PausedAt = null;
         AddEvent(ticket, access.Viewer, "withdrawn", note);
         await db.SaveChangesAsync();
+        await TicketFiles.PurgeConversationAsync(db, [ticketId], logger);
         await BroadcastChangedAsync(ticketId);
         if (wasWaiting)
         {
@@ -1573,6 +1681,7 @@ public class TicketsController(
         ticket.PausedAt = null;
         AddEvent(ticket, access.Viewer, "closed", note);
         await db.SaveChangesAsync();
+        await TicketFiles.PurgeConversationAsync(db, [ticketId], logger);
         await BroadcastChangedAsync(ticketId);
         var number = Ticket.FormatNumber(ticket.Number);
         if (ticket.RaisedBy is not null && ticket.RaisedByUserId != access.Viewer.UserId)

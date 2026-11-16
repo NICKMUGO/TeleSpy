@@ -22,6 +22,7 @@ import {
   Hand,
   Lock,
   MoveRight,
+  Paperclip,
   RotateCcw,
   Send,
   Undo2,
@@ -73,6 +74,7 @@ import {
   useTicketAssignees,
   useTicketCategories,
   useTransferTicket,
+  useUploadAttachment,
   useWithdrawTicket,
 } from "@/lib/api/hooks";
 import {
@@ -105,7 +107,23 @@ const EVENT_LABELS: Record<TicketEvent["kind"], string> = {
   closed: "closed it",
   escalated: "escalated it to the Manager",
   forward_overdue: "flagged an overdue reply",
+  attachment: "attached a file",
 };
+
+/** In the conversation: messages and files. Everything else is history. */
+const inChat = (e: TicketEvent) => e.kind === "note" || e.kind === "attachment";
+
+/** What the 📎 button accepts (the API's TicketFiles.Extensions). */
+const ATTACH_ACCEPT =
+  "image/jpeg,image/png,image/gif,image/webp,.heic,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /** How long after it's resolved the raiser can reopen it (the API's
  * TicketsController.ReopenDays). */
@@ -262,16 +280,27 @@ export default function TicketPage() {
 
             <Conversation
               ticketId={t.id}
-              messages={(t.events ?? []).filter((e) => e.kind === "note")}
+              messages={(t.events ?? []).filter(inChat)}
               reads={t.reads ?? []}
               myId={user?.id}
               live={live}
+              closedReason={
+                t.status === "resolved"
+                  ? canResend
+                    ? "This ticket is resolved, so its messages and files were deleted. Reopen it above if it isn't fixed; it starts a new conversation."
+                    : "This ticket is resolved, so its messages and files were deleted."
+                  : t.status === "withdrawn"
+                    ? "This ticket was withdrawn, so its messages and files were deleted."
+                    : t.status === "closed"
+                      ? "An Admin closed this ticket, so its messages and files were deleted."
+                      : null
+              }
             />
 
             <SectionCard title="History" bodyClassName="px-0 pb-0">
               <ol className="divide-border-subtle border-border-subtle divide-y border-t">
                 {(t.events ?? [])
-                  .filter((e) => e.kind !== "note")
+                  .filter((e) => !inChat(e))
                   .map((event) => (
                     <li
                       key={event.id}
@@ -1377,15 +1406,51 @@ function Conversation({
   reads,
   myId,
   live,
+  closedReason,
 }: {
   ticketId: string;
   messages: TicketEvent[];
   reads: TicketRead[];
   myId: string | undefined;
   live: ReturnType<typeof useTicketLive>;
+  /** Set once the ticket is finished: no more messages, just this. */
+  closedReason: string | null;
 }) {
   const addNote = useAddTicketNote();
+  const upload = useUploadAttachment();
+  const fileInput = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState("");
+  const fileCount = messages.filter((m) => m.kind === "attachment").length;
+
+  async function attach(file: File | undefined) {
+    if (!file) return;
+    if (fileCount >= MAX_FILES) {
+      toast.error(`This ticket already has ${MAX_FILES} files`, {
+        description: `That's the most a ticket can hold, so ${file.name} wasn't sent. Describe the rest in a message instead.`,
+      });
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      toast.error(`${file.name} is too large`, {
+        description: `It's ${fileSize(file.size)}; the limit is 20 MB per file. Compress it or send a smaller one.`,
+      });
+      return;
+    }
+    try {
+      await upload.mutateAsync({ id: ticketId, file });
+    } catch (error) {
+      toast.error(errorMessage(error, `Couldn't attach ${file.name}.`));
+    }
+  }
+
+  async function download(message: TicketEvent) {
+    if (!message.attachment) return;
+    try {
+      await ticketsApi.downloadAttachment(ticketId, message.attachment);
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't download the file."));
+    }
+  }
   const endRef = useRef<HTMLDivElement>(null);
 
   // Keep the newest message in view as they arrive.
@@ -1472,85 +1537,175 @@ function Conversation({
         </div>
       }
     >
-      <div
-        className="border-border-subtle flex max-h-[28rem] flex-col gap-3 overflow-y-auto border-t px-4 py-4"
-        role="log"
-        aria-live="polite"
-        aria-label="Conversation"
-      >
-        {messages.length === 0 ? (
-          <p className="text-muted-foreground py-6 text-center text-sm">
-            No messages yet. Ask a question or give an update — everyone on this
-            ticket sees it straight away.
-          </p>
-        ) : (
-          messages.map((message) => {
-            const mine = !!myId && message.actor_user_id === myId;
-            const pending = message.id.startsWith("pending-");
-            return (
-              <div
-                key={message.id}
-                className={cn(
-                  "flex max-w-[85%] flex-col gap-1",
-                  mine ? "items-end self-end" : "items-start self-start",
-                )}
-              >
-                <span className="text-muted-foreground flex items-center gap-1 text-xs">
-                  {mine ? "You" : (message.actor_name ?? "Someone")} ·{" "}
-                  {pending ? "sending…" : dateTime(message.created_at)}
-                  {mine && !pending ? (
-                    <ReadTicks seenBy={seenBy(message)} />
-                  ) : null}
-                </span>
-                <p
+      {closedReason && messages.length === 0 ? null : (
+        <div
+          className="border-border-subtle flex max-h-[28rem] flex-col gap-3 overflow-y-auto border-t px-4 py-4"
+          role="log"
+          aria-live="polite"
+          aria-label="Conversation"
+        >
+          {messages.length === 0 ? (
+            <p className="text-muted-foreground py-6 text-center text-sm">
+              No messages yet. Ask a question or give an update — everyone on
+              this ticket sees it straight away.
+            </p>
+          ) : (
+            messages.map((message) => {
+              const mine = !!myId && message.actor_user_id === myId;
+              const pending = message.id.startsWith("pending-");
+              return (
+                <div
+                  key={message.id}
                   className={cn(
-                    "rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
-                    mine
-                      ? "bg-primary text-primary-foreground rounded-br-sm"
-                      : "bg-muted rounded-bl-sm",
-                    pending && "opacity-70",
+                    "flex max-w-[85%] flex-col gap-1",
+                    mine ? "items-end self-end" : "items-start self-start",
                   )}
                 >
-                  {message.body}
-                </p>
-              </div>
-            );
-          })
-        )}
-        <div ref={endRef} />
-      </div>
-      <p className="text-muted-foreground h-5 px-4 text-xs" aria-live="polite">
-        {live.typingName ? `${live.typingName} is typing…` : ""}
-      </p>
-      <form
-        onSubmit={send}
-        className="border-border-subtle flex items-end gap-2 border-t p-4"
-      >
-        <Label htmlFor="ticket-message" className="sr-only">
-          Message
-        </Label>
-        <Textarea
-          id="ticket-message"
-          value={body}
-          onChange={(e) => {
-            setBody(e.target.value);
-            if (e.target.value.trim()) live.sendTyping();
-          }}
-          onKeyDown={onKeyDown}
-          rows={2}
-          maxLength={4000}
-          placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
-          className="min-h-11 flex-1"
-        />
-        <Button
-          type="submit"
-          size="lg"
-          disabled={!body.trim()}
-          aria-label="Send message"
-        >
-          <Send aria-hidden="true" />
-        </Button>
-      </form>
+                  <span className="text-muted-foreground flex items-center gap-1 text-xs">
+                    {mine ? "You" : (message.actor_name ?? "Someone")} ·{" "}
+                    {pending ? "sending…" : dateTime(message.created_at)}
+                    {mine && !pending ? (
+                      <ReadTicks seenBy={seenBy(message)} />
+                    ) : null}
+                  </span>
+                  {message.kind === "attachment" && message.attachment ? (
+                    <button
+                      type="button"
+                      onClick={() => void download(message)}
+                      className={cn(
+                        "flex max-w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm",
+                        "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+                        mine
+                          ? "bg-primary text-primary-foreground rounded-br-sm"
+                          : "bg-muted rounded-bl-sm",
+                      )}
+                      title={`Download ${message.attachment.file_name}`}
+                    >
+                      <Paperclip
+                        aria-hidden="true"
+                        className="size-4 shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium underline-offset-2 hover:underline">
+                          {message.attachment.file_name}
+                        </span>
+                        <span className="block text-xs opacity-80">
+                          {fileSize(message.attachment.size_bytes)}
+                        </span>
+                      </span>
+                    </button>
+                  ) : (
+                    <p
+                      className={cn(
+                        "rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
+                        mine
+                          ? "bg-primary text-primary-foreground rounded-br-sm"
+                          : "bg-muted rounded-bl-sm",
+                        pending && "opacity-70",
+                      )}
+                    >
+                      {message.body}
+                    </p>
+                  )}
+                </div>
+              );
+            })
+          )}
+          <div ref={endRef} />
+        </div>
+      )}
+      {closedReason ? (
+        <p className="border-border-subtle text-muted-foreground flex items-center gap-2 border-t p-4 text-sm">
+          <Lock aria-hidden="true" className="size-4 shrink-0" />
+          {closedReason}
+        </p>
+      ) : (
+        <>
+          <p
+            className="text-muted-foreground h-5 px-4 text-xs"
+            aria-live="polite"
+          >
+            {live.typingName ? `${live.typingName} is typing…` : ""}
+          </p>
+          <form
+            onSubmit={send}
+            className="border-border-subtle flex items-end gap-2 border-t p-4"
+          >
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ATTACH_ACCEPT}
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(e) => {
+                void attach(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              disabled={upload.isPending}
+              onClick={() => {
+                if (fileCount >= MAX_FILES) {
+                  toast.error(`This ticket already has ${MAX_FILES} files`, {
+                    description:
+                      "That's the most a ticket can hold, so no more can be attached. Describe the rest in a message instead.",
+                  });
+                  return;
+                }
+                fileInput.current?.click();
+              }}
+              aria-label={
+                fileCount >= MAX_FILES
+                  ? `Attach a file (limit of ${MAX_FILES} reached)`
+                  : "Attach a file"
+              }
+              title={
+                fileCount >= MAX_FILES
+                  ? `A ticket can have up to ${MAX_FILES} files`
+                  : `Attach a photo, PDF, Word or Excel file (up to 20 MB, ${MAX_FILES - fileCount} of ${MAX_FILES} left)`
+              }
+            >
+              <Paperclip
+                aria-hidden="true"
+                className={cn(upload.isPending && "animate-pulse")}
+              />
+            </Button>
+            <Label htmlFor="ticket-message" className="sr-only">
+              Message
+            </Label>
+            <Textarea
+              id="ticket-message"
+              value={body}
+              onChange={(e) => {
+                setBody(e.target.value);
+                if (e.target.value.trim()) live.sendTyping();
+              }}
+              onKeyDown={onKeyDown}
+              rows={2}
+              maxLength={4000}
+              placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
+              className="min-h-11 flex-1"
+            />
+            <Button
+              type="submit"
+              size="lg"
+              disabled={!body.trim()}
+              aria-label="Send message"
+            >
+              <Send aria-hidden="true" />
+            </Button>
+          </form>
+          <p className="text-muted-foreground px-4 pb-3 text-xs">
+            {fileCount >= MAX_FILES
+              ? `File limit reached: this ticket has ${MAX_FILES} of ${MAX_FILES} files.`
+              : `Files: ${fileCount} of ${MAX_FILES} used · up to 20 MB each.`}
+          </p>
+        </>
+      )}
     </SectionCard>
   );
 }

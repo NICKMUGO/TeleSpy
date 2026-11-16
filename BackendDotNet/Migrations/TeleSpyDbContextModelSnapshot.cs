@@ -963,6 +963,63 @@ namespace TeleSpy.Migrations
                     b.ToTable("tickets", (string)null);
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.TicketAttachment", b =>
+                {
+                    b.Property<string>("AttachmentId")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("attachment_id");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EventId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)")
+                        .HasColumnName("file_name");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("TicketId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("ticket_id");
+
+                    b.Property<string>("UploadedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)")
+                        .HasColumnName("uploaded_by_user_id");
+
+                    b.HasKey("AttachmentId");
+
+                    b.HasIndex("EventId")
+                        .IsUnique();
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("UploadedByUserId");
+
+                    b.ToTable("ticket_attachments", (string)null);
+                });
+
             modelBuilder.Entity("TeleSpy.Models.TicketCategory", b =>
                 {
                     b.Property<string>("CategoryId")
@@ -1625,6 +1682,27 @@ namespace TeleSpy.Migrations
                     b.Navigation("ResolvedBy");
                 });
 
+            modelBuilder.Entity("TeleSpy.Models.TicketAttachment", b =>
+                {
+                    b.HasOne("TeleSpy.Models.TicketEvent", null)
+                        .WithOne("Attachment")
+                        .HasForeignKey("TeleSpy.Models.TicketAttachment", "EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TeleSpy.Models.User", null)
+                        .WithMany()
+                        .HasForeignKey("UploadedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TeleSpy.Models.TicketCategory", b =>
                 {
                     b.HasOne("TeleSpy.Models.Department", "Department")
@@ -1816,6 +1894,11 @@ namespace TeleSpy.Migrations
                     b.Navigation("Feedback");
 
                     b.Navigation("Forwards");
+                });
+
+            modelBuilder.Entity("TeleSpy.Models.TicketEvent", b =>
+                {
+                    b.Navigation("Attachment");
                 });
 
             modelBuilder.Entity("TeleSpy.Models.UsageEvent", b =>

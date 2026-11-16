@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out .
+# Ticket attachments (a volume in production: deploy/docker-compose.yml).
+RUN mkdir -p /app/attachments
 ENV ASPNETCORE_URLS=http://+:8080 ASPNETCORE_ENVIRONMENT=Production
 EXPOSE 8080
 # Apply pending migrations, then serve. --seed / --reencrypt are run by
