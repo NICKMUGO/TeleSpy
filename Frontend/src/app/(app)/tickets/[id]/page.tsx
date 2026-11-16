@@ -22,11 +22,13 @@ import {
   Hand,
   Lock,
   MoveRight,
+  Camera,
   Paperclip,
   RotateCcw,
   Send,
   Undo2,
   Users,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ErrorBanner } from "@/components/data/error-banner";
@@ -52,6 +54,8 @@ import {
   slaSummary,
   TicketStatusBadge,
 } from "@/features/tickets/ticket-status";
+import { AttachmentPhoto, isPhoto } from "@/features/tickets/attachment-photo";
+import { CameraDialog, canUseCamera } from "@/features/tickets/camera-capture";
 import { useTicketLive } from "@/features/tickets/use-ticket-live";
 import { SLA_WINDOWS } from "@/features/tickets/new-ticket-dialog";
 import { ApiError } from "@/lib/api/client";
@@ -118,6 +122,13 @@ const ATTACH_ACCEPT =
   "image/jpeg,image/png,image/gif,image/webp,.heic,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt";
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+/** A file waiting above the message box; `url` previews a photo. */
+interface Staged {
+  key: string;
+  file: File;
+  url: string | null;
+}
 
 function fileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -1419,28 +1430,105 @@ function Conversation({
   const addNote = useAddTicketNote();
   const upload = useUploadAttachment();
   const fileInput = useRef<HTMLInputElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [body, setBody] = useState("");
-  const fileCount = messages.filter((m) => m.kind === "attachment").length;
+  // Files picked or photos taken, waiting above the box until Send.
+  const [staged, setStaged] = useState<Staged[]>([]);
+  const [sending, setSending] = useState(false);
+  const sentCount = messages.filter((m) => m.kind === "attachment").length;
+  const fileCount = sentCount + staged.length;
 
-  async function attach(file: File | undefined) {
-    if (!file) return;
-    if (fileCount >= MAX_FILES) {
-      toast.error(`This ticket already has ${MAX_FILES} files`, {
-        description: `That's the most a ticket can hold, so ${file.name} wasn't sent. Describe the rest in a message instead.`,
+  // Free the previews if the page closes with files still waiting.
+  const stagedRef = useRef(staged);
+  useEffect(() => {
+    stagedRef.current = staged;
+  }, [staged]);
+  useEffect(
+    () => () =>
+      stagedRef.current.forEach((s) => s.url && URL.revokeObjectURL(s.url)),
+    [],
+  );
+
+  /** Puts files above the box, saying why any can't go. */
+  function stage(files: File[]) {
+    let room = MAX_FILES - fileCount;
+    const added: Staged[] = [];
+    for (const file of files) {
+      if (room <= 0) {
+        toast.error(`This ticket can only have ${MAX_FILES} files`, {
+          description: `${file.name} wasn't added: that's the most a ticket can hold. Describe the rest in a message instead.`,
+        });
+        continue;
+      }
+      if (file.size > MAX_FILE_BYTES) {
+        toast.error(`${file.name} is too large`, {
+          description: `It's ${fileSize(file.size)}; the limit is 20 MB per file. Compress it or send a smaller one.`,
+        });
+        continue;
+      }
+      room -= 1;
+      added.push({
+        key: `${Date.now()}-${Math.random()}`,
+        file,
+        url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
       });
-      return;
     }
-    if (file.size > MAX_FILE_BYTES) {
-      toast.error(`${file.name} is too large`, {
-        description: `It's ${fileSize(file.size)}; the limit is 20 MB per file. Compress it or send a smaller one.`,
-      });
-      return;
-    }
-    try {
-      await upload.mutateAsync({ id: ticketId, file });
-    } catch (error) {
-      toast.error(errorMessage(error, `Couldn't attach ${file.name}.`));
-    }
+    if (added.length) setStaged((current) => [...current, ...added]);
+  }
+
+  function unstage(key: string) {
+    setStaged((current) => {
+      const gone = current.find((s) => s.key === key);
+      if (gone?.url) URL.revokeObjectURL(gone.url);
+      return current.filter((s) => s.key !== key);
+    });
+  }
+
+  /** Says why, and returns true, when the ticket can't take more files. */
+  function refuseWhenFull() {
+    if (fileCount < MAX_FILES) return false;
+    toast.error(`This ticket already has ${MAX_FILES} files`, {
+      description:
+        "That's the most a ticket can hold, so no more can be attached. Describe the rest in a message instead.",
+    });
+    return true;
+  }
+
+  function openCamera() {
+    if (refuseWhenFull()) return;
+    // The camera inside the page where the browser allows it; otherwise the
+    // phone's own camera app.
+    if (canUseCamera()) setCameraOpen(true);
+    else photoInput.current?.click();
+  }
+
+  /** A file in the chat: name and size; tap to download. */
+  function fileBubble(message: TicketEvent, mine: boolean) {
+    return (
+      <button
+        type="button"
+        onClick={() => void download(message)}
+        className={cn(
+          "flex max-w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm",
+          "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+          mine
+            ? "bg-primary text-primary-foreground rounded-br-sm"
+            : "bg-muted rounded-bl-sm",
+        )}
+        title={`Download ${message.attachment!.file_name}`}
+      >
+        <Paperclip aria-hidden="true" className="size-4 shrink-0" />
+        <span className="min-w-0">
+          <span className="block truncate font-medium underline-offset-2 hover:underline">
+            {message.attachment!.file_name}
+          </span>
+          <span className="block text-xs opacity-80">
+            {fileSize(message.attachment!.size_bytes)}
+          </span>
+        </span>
+      </button>
+    );
   }
 
   async function download(message: TicketEvent) {
@@ -1486,15 +1574,32 @@ function Conversation({
   async function send(event?: FormEvent) {
     event?.preventDefault();
     const text = body.trim();
-    if (!text) return;
-    // The message appears at once; it comes back into the box only if the
-    // server refuses it.
-    setBody("");
+    if ((!text && staged.length === 0) || sending) return;
+    setSending(true);
     try {
-      await addNote.mutateAsync({ id: ticketId, body: text });
-    } catch (error) {
-      setBody(text);
-      toast.error(errorMessage(error, "Couldn't send the message."));
+      // Files first, in order, then the words under them. A file the
+      // server refuses stays above the box (with the message) to retry.
+      for (const item of staged) {
+        try {
+          await upload.mutateAsync({ id: ticketId, file: item.file });
+          unstage(item.key);
+        } catch (error) {
+          toast.error(errorMessage(error, `Couldn't send ${item.file.name}.`));
+          return;
+        }
+      }
+      if (!text) return;
+      // The message appears at once; it comes back into the box only if
+      // the server refuses it.
+      setBody("");
+      try {
+        await addNote.mutateAsync({ id: ticketId, body: text });
+      } catch (error) {
+        setBody(text);
+        toast.error(errorMessage(error, "Couldn't send the message."));
+      }
+    } finally {
+      setSending(false);
     }
   }
 
@@ -1568,32 +1673,18 @@ function Conversation({
                       <ReadTicks seenBy={seenBy(message)} />
                     ) : null}
                   </span>
-                  {message.kind === "attachment" && message.attachment ? (
-                    <button
-                      type="button"
-                      onClick={() => void download(message)}
-                      className={cn(
-                        "flex max-w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm",
-                        "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
-                        mine
-                          ? "bg-primary text-primary-foreground rounded-br-sm"
-                          : "bg-muted rounded-bl-sm",
-                      )}
-                      title={`Download ${message.attachment.file_name}`}
-                    >
-                      <Paperclip
-                        aria-hidden="true"
-                        className="size-4 shrink-0"
-                      />
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium underline-offset-2 hover:underline">
-                          {message.attachment.file_name}
-                        </span>
-                        <span className="block text-xs opacity-80">
-                          {fileSize(message.attachment.size_bytes)}
-                        </span>
-                      </span>
-                    </button>
+                  {message.kind === "attachment" &&
+                  message.attachment &&
+                  isPhoto(message.attachment) ? (
+                    <AttachmentPhoto
+                      ticketId={ticketId}
+                      attachment={message.attachment}
+                      mine={mine}
+                      onDownload={() => void download(message)}
+                      fallback={fileBubble(message, mine)}
+                    />
+                  ) : message.kind === "attachment" && message.attachment ? (
+                    fileBubble(message, mine)
                   ) : (
                     <p
                       className={cn(
@@ -1627,19 +1718,65 @@ function Conversation({
           >
             {live.typingName ? `${live.typingName} is typing…` : ""}
           </p>
+          {staged.length > 0 ? (
+            <ul
+              className="border-border-subtle flex gap-2 overflow-x-auto border-t px-4 pt-3"
+              aria-label="Files to send"
+            >
+              {staged.map((item) => (
+                <li key={item.key} className="relative shrink-0">
+                  {item.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- a local preview
+                    <img
+                      src={item.url}
+                      alt={item.file.name}
+                      className="size-16 rounded-lg object-cover"
+                    />
+                  ) : (
+                    <span className="bg-muted flex h-16 w-36 flex-col justify-center rounded-lg px-2 text-xs">
+                      <span className="flex items-center gap-1 truncate font-medium">
+                        <Paperclip
+                          aria-hidden="true"
+                          className="size-3 shrink-0"
+                        />
+                        <span className="truncate">{item.file.name}</span>
+                      </span>
+                      <span className="text-muted-foreground">
+                        {fileSize(item.file.size)}
+                      </span>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => unstage(item.key)}
+                    disabled={sending}
+                    className="bg-foreground text-background focus-visible:ring-ring absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full focus-visible:ring-2 focus-visible:outline-none"
+                    aria-label={`Remove ${item.file.name}`}
+                    title="Remove"
+                  >
+                    <X aria-hidden="true" className="size-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <form
             onSubmit={send}
-            className="border-border-subtle flex items-end gap-2 border-t p-4"
+            className={cn(
+              "border-border-subtle flex items-end gap-2 p-4",
+              staged.length === 0 && "border-t",
+            )}
           >
             <input
               ref={fileInput}
               type="file"
               accept={ATTACH_ACCEPT}
+              multiple
               className="sr-only"
               tabIndex={-1}
               aria-hidden="true"
               onChange={(e) => {
-                void attach(e.target.files?.[0]);
+                stage(Array.from(e.target.files ?? []));
                 e.target.value = "";
               }}
             />
@@ -1647,16 +1784,9 @@ function Conversation({
               type="button"
               size="lg"
               variant="outline"
-              disabled={upload.isPending}
+              disabled={sending}
               onClick={() => {
-                if (fileCount >= MAX_FILES) {
-                  toast.error(`This ticket already has ${MAX_FILES} files`, {
-                    description:
-                      "That's the most a ticket can hold, so no more can be attached. Describe the rest in a message instead.",
-                  });
-                  return;
-                }
-                fileInput.current?.click();
+                if (!refuseWhenFull()) fileInput.current?.click();
               }}
               aria-label={
                 fileCount >= MAX_FILES
@@ -1671,9 +1801,38 @@ function Conversation({
             >
               <Paperclip
                 aria-hidden="true"
-                className={cn(upload.isPending && "animate-pulse")}
+                className={cn(sending && "animate-pulse")}
               />
             </Button>
+            <input
+              ref={photoInput}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(e) => {
+                stage(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              disabled={sending}
+              onClick={openCamera}
+              aria-label="Take a photo"
+              title="Take a photo with your camera"
+            >
+              <Camera aria-hidden="true" />
+            </Button>
+            <CameraDialog
+              open={cameraOpen}
+              onOpenChange={setCameraOpen}
+              onSend={(file) => stage([file])}
+            />
             <Label htmlFor="ticket-message" className="sr-only">
               Message
             </Label>
@@ -1693,7 +1852,7 @@ function Conversation({
             <Button
               type="submit"
               size="lg"
-              disabled={!body.trim()}
+              disabled={sending || (!body.trim() && staged.length === 0)}
               aria-label="Send message"
             >
               <Send aria-hidden="true" />

@@ -171,6 +171,17 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** Fetches a file the API only gives to signed-in people, as a Blob (to
+ * show a photo in the page). */
+export async function apiBlob(path: string, signal?: AbortSignal) {
+  const response = await fetch(buildUrl(path), {
+    headers: { Authorization: `Bearer ${await freshAccessToken()}` },
+    signal,
+  });
+  if (!response.ok) throw await errorFrom(response);
+  return response.blob();
+}
+
 /** Fetches a file the API only gives to signed-in people, and saves it
  * under `fileName` (a plain link can't carry the Bearer token). */
 export async function apiDownload(path: string, fileName: string) {

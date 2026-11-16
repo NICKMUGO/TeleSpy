@@ -2,7 +2,7 @@
 // are snake_case (RequestBody.JsonOptions uses JsonNamingPolicy.SnakeCaseLower
 // — confirmed against BackendDotNet/Core/RequestBody.cs), matching the
 // snake_case response shapes already documented in ./types.ts.
-import { apiDownload, apiRequest, apiUpload } from "@/lib/api/client";
+import { apiBlob, apiDownload, apiRequest, apiUpload } from "@/lib/api/client";
 import type {
   TicketAttachment,
   AnomalyFlag,
@@ -520,6 +520,11 @@ export const ticketsApi = {
       form,
     );
   },
+  attachmentBlob: (
+    id: string,
+    attachment: TicketAttachment,
+    signal?: AbortSignal,
+  ) => apiBlob(`/tickets/${id}/attachments/${attachment.id}`, signal),
   downloadAttachment: (id: string, attachment: TicketAttachment) =>
     apiDownload(
       `/tickets/${id}/attachments/${attachment.id}`,

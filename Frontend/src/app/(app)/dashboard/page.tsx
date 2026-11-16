@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { CalendarDays, FileText } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
@@ -29,6 +29,7 @@ import {
   useUsageSummary,
 } from "@/lib/api/hooks";
 import { TicketDesk } from "@/features/tickets/ticket-desk";
+import { cn } from "@/lib/utils";
 import { HIGH_SEVERITY_THRESHOLD } from "@/lib/anomaly-severity";
 import { useSession } from "@/lib/auth/session-store";
 import {
@@ -58,9 +59,65 @@ export default function DashboardPage() {
       </div>
     );
   }
-  if (ticketAccess.data?.data.on_desk) return <TicketDesk />;
+  const usageView = isSelfService ? <EmployeeDashboard /> : <OrgDashboard />;
+  if (ticketAccess.data?.data.on_desk) {
+    return (
+      <DeskDashboard
+        usage={usageView}
+        usageLabel={isSelfService ? "My usage" : "Telecom"}
+      />
+    );
+  }
+  return usageView;
+}
 
-  return isSelfService ? <EmployeeDashboard /> : <OrgDashboard />;
+/** The customer service desk opens on its tickets, with a switch to the
+ * same usage view everyone else gets (their own SIM usage, or — for the
+ * desk's Manager — the department's). */
+function DeskDashboard({
+  usage,
+  usageLabel,
+}: {
+  usage: ReactNode;
+  usageLabel: string;
+}) {
+  const [view, setView] = useState<"tickets" | "usage">("tickets");
+  return (
+    <>
+      <div className="flex justify-center px-4 pt-4 sm:justify-start sm:px-6">
+        <div
+          role="tablist"
+          aria-label="Dashboard view"
+          className="bg-muted inline-flex rounded-lg p-1 text-sm"
+        >
+          {(
+            [
+              ["tickets", "Ticket desk"],
+              ["usage", usageLabel],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={view === value}
+              onClick={() => setView(value)}
+              className={cn(
+                "rounded-md px-3 py-1.5 font-medium transition-colors",
+                "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
+                view === value
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === "tickets" ? <TicketDesk /> : usage}
+    </>
+  );
 }
 
 // --- Org view (Admin / Manager) -----------------------------------------

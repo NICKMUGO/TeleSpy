@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Headset,
   Inbox,
-  LayoutDashboard,
+  House,
   MoreHorizontal,
   Settings,
   TriangleAlert,
@@ -45,7 +45,7 @@ export function MobileTabBar() {
   const tabs: Tab[] =
     role === "Admin" || role === "Manager"
       ? [
-          { title: "Home", href: "/dashboard", icon: LayoutDashboard },
+          { title: "Home", href: "/dashboard", icon: House },
           // SIMs is under More.
           tickets,
           { title: "Staff", href: "/employees", icon: Users },
@@ -56,7 +56,7 @@ export function MobileTabBar() {
           },
         ]
       : [
-          { title: "Home", href: "/dashboard", icon: LayoutDashboard },
+          { title: "Home", href: "/dashboard", icon: House },
           tickets,
           { title: "Settings", href: "/settings", icon: Settings },
         ];
