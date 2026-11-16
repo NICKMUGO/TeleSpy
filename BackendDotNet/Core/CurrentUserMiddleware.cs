@@ -30,6 +30,9 @@ public class CurrentUserMiddleware(RequestDelegate next)
         // the link's token is the only credential (Api/FeedbackController).
         "/feedback",
         "/feedback/r",
+        // The ML job's automatic CDR ingest: checks its own shared key
+        // (Api/CdrController.IngestAutomatic).
+        TeleSpy.Api.CdrController.AutomaticIngestPath,
     ];
 
     /// <summary>HttpContext.Items key holding the signed-in user's id, for

@@ -214,6 +214,14 @@ namespace TeleSpy.Migrations
                         .HasColumnType("timestamp without time zone")
                         .HasColumnName("occured_at");
 
+                    b.Property<int>("SkippedDuplicates")
+                        .HasColumnType("integer")
+                        .HasColumnName("skipped_duplicates");
+
+                    b.Property<int>("SkippedInvalid")
+                        .HasColumnType("integer")
+                        .HasColumnName("skipped_invalid");
+
                     b.Property<int>("SkippedUnanswered")
                         .HasColumnType("integer")
                         .HasColumnName("skipped_unanswered");

@@ -43,9 +43,16 @@ public static partial class CallClassification
         if (!normalized.StartsWith('9') || normalized.Length < 2) return Constants.CallClassUnknown;
         var rest = normalized[1..]; // drop the trunk-access digit
         if (KenyanLocalRegex().IsMatch(rest)) return Constants.CallClassExternal;
-        // Kenya's own country code, dialled in full international form —
-        // bill as a local Kenyan call, not International.
-        if (KenyanInternationalPrefixRegex().IsMatch(rest)) return Constants.CallClassExternal;
+        // Kenya's own country code, dialled in full international form
+        // (with or without +/00/000) — bill as a local Kenyan call, not
+        // International, if it makes a real 10-digit local number; a
+        // garbled one is Unknown. Same rule as ML/training/billing.py.
+        if (KenyanInternationalPrefixRegex().Match(rest) is { Success: true } kenyan)
+        {
+            return KenyanLocalRegex().IsMatch("0" + kenyan.Groups[1].Value)
+                ? Constants.CallClassExternal
+                : Constants.CallClassUnknown;
+        }
         if (InternationalRegex().IsMatch(rest)) return Constants.CallClassInternational;
         return Constants.CallClassUnknown;
     }

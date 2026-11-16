@@ -16,7 +16,13 @@ export const CDR_COLUMNS = [
   "charge",
 ] as const;
 
-const REQUIRED_COLUMNS = ["orig", "dest", "duration_sec", "date"] as const;
+const REQUIRED_COLUMNS = [
+  "orig",
+  "dest",
+  "duration_sec",
+  "date",
+  "orig_time",
+] as const;
 
 export interface RejectedRow {
   line: number;
@@ -60,6 +66,76 @@ function splitCsvLine(line: string): string[] {
   return out.map((value) => value.trim());
 }
 
+/** Other spellings of the columns seen in carrier exports — the same
+ * aliases ML/preprocessing/run_preprocessing.py (RAW_COLUMNS) accepts. */
+const COLUMN_ALIASES: Record<string, string> = {
+  "orig.": "orig",
+  "orig. time": "orig_time",
+  "orig time": "orig_time",
+  "dest.": "dest",
+  "duration (sec)": "duration_sec",
+  duration: "duration_sec",
+};
+
+/** The PBX is in Nairobi (UTC+3, no daylight saving). */
+const NAIROBI_OFFSET_SEC = 3 * 60 * 60;
+
+/** A Cisco CallManager (CUCM) export, in its own column names? */
+function isCucmExport(headers: string[]) {
+  return (
+    headers.includes("datetimeorigination") &&
+    headers.includes("callingpartynumber")
+  );
+}
+
+/** One raw CUCM row → the upload's columns, the same way
+ * run_preprocessing.py (derive_cucm_fields) does it:
+ * - the call's time is when it was **answered** (dateTimeConnect), not
+ *   when the handset went off-hook — duration runs from answer to hang-up,
+ *   so peak/off-peak is decided from the same moment; a call that never
+ *   connected (dateTimeConnect 0) keeps its origination time;
+ * - CUCM times are UTC epoch seconds → Nairobi wall-clock time;
+ * - the destination is where the call finally went (after a forward),
+ *   else the number dialled. */
+function fromCucm(
+  get: (column: string) => string | undefined,
+): Record<string, string> | string {
+  const origination = Number(get("datetimeorigination"));
+  const connect = Number(get("datetimeconnect") ?? 0);
+  const epoch = connect > 0 ? connect : origination;
+  if (!Number.isFinite(epoch) || epoch <= 0) return "no call time";
+  const local = new Date((epoch + NAIROBI_OFFSET_SEC) * 1000).toISOString();
+  const orig = get("callingpartynumber");
+  const dest =
+    get("finalcalledpartynumber") || get("originalcalledpartynumber");
+  const duration = get("duration");
+  const row: Record<string, string> = {
+    date: local.slice(0, 10),
+    orig_time: local.slice(11, 19),
+  };
+  if (orig) row.orig = orig;
+  if (dest) row.dest = dest;
+  if (duration !== undefined) row.duration_sec = duration;
+  return row;
+}
+
+/** "2026-07-15" or "15/07/2026" → "2026-07-15". */
+function normaliseDate(value: string): string | null {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (iso) return value;
+  const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+  if (dmy)
+    return `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}`;
+  return null;
+}
+
+/** "9:05" or "09:05:07" → "09:05:07". */
+function normaliseTime(value: string): string | null {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match || Number(match[1]) > 23) return null;
+  return `${match[1].padStart(2, "0")}:${match[2]}:${match[3] ?? "00"}`;
+}
+
 export function parseCdrCsv(text: string): ParsedBatch {
   const lines = text
     .split(/\r?\n/)
@@ -69,8 +145,14 @@ export function parseCdrCsv(text: string): ParsedBatch {
     return { records: [], rejected: [], totalRows: 0, missingColumns: [] };
   }
 
-  const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
-  const missingColumns = REQUIRED_COLUMNS.filter((c) => !headers.includes(c));
+  const rawHeaders = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
+  const cucm = isCucmExport(rawHeaders);
+  const headers = cucm
+    ? rawHeaders
+    : rawHeaders.map((h) => COLUMN_ALIASES[h] ?? h);
+  const missingColumns = cucm
+    ? []
+    : REQUIRED_COLUMNS.filter((c) => !headers.includes(c));
   if (missingColumns.length > 0) {
     return {
       records: [],
@@ -86,20 +168,25 @@ export function parseCdrCsv(text: string): ParsedBatch {
   lines.slice(1).forEach((line, index) => {
     const lineNumber = index + 2; // 1-based, and line 1 is the header
     const values = splitCsvLine(line);
-    const row: Record<string, unknown> = {};
+    const get = (column: string) => {
+      const i = headers.indexOf(column);
+      const value = i < 0 ? undefined : values[i];
+      return value === "" ? undefined : value;
+    };
 
-    headers.forEach((header, i) => {
-      const value = values[i];
-      if (value === undefined || value === "") return;
-      if (header === "duration_sec" || header === "charge") {
-        const parsed = Number(value);
-        if (!Number.isNaN(parsed)) row[header] = parsed;
-      } else {
-        row[header] = value;
+    let source: Record<string, string | undefined>;
+    if (cucm) {
+      const converted = fromCucm(get);
+      if (typeof converted === "string") {
+        rejected.push({ line: lineNumber, reason: converted });
+        return;
       }
-    });
+      source = converted;
+    } else {
+      source = Object.fromEntries(CDR_COLUMNS.map((c) => [c, get(c)]));
+    }
 
-    const missing = REQUIRED_COLUMNS.filter((c) => row[c] === undefined);
+    const missing = REQUIRED_COLUMNS.filter((c) => source[c] === undefined);
     if (missing.length > 0) {
       rejected.push({
         line: lineNumber,
@@ -107,12 +194,42 @@ export function parseCdrCsv(text: string): ParsedBatch {
       });
       return;
     }
-    if (typeof row.duration_sec !== "number") {
+    const duration = Number(source.duration_sec);
+    if (Number.isNaN(duration)) {
       rejected.push({
         line: lineNumber,
         reason: "duration_sec is not a number",
       });
       return;
+    }
+    if (duration < 0) {
+      rejected.push({ line: lineNumber, reason: "duration_sec is negative" });
+      return;
+    }
+    // The time decides peak or off-peak, so a row without a real one is
+    // refused rather than guessed.
+    const date = normaliseDate(source.date!);
+    const time = normaliseTime(source.orig_time!);
+    if (!date || !time) {
+      rejected.push({
+        line: lineNumber,
+        reason: !date
+          ? `date "${source.date}" isn't YYYY-MM-DD or DD/MM/YYYY`
+          : `time "${source.orig_time}" isn't HH:MM:SS`,
+      });
+      return;
+    }
+
+    const row: Record<string, unknown> = {
+      orig: source.orig,
+      dest: source.dest,
+      duration_sec: duration,
+      date,
+      orig_time: time,
+    };
+    const charge = Number(source.charge);
+    if (source.charge !== undefined && !Number.isNaN(charge)) {
+      row.charge = charge;
     }
     records.push(row);
   });

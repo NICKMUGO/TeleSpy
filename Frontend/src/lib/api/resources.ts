@@ -409,6 +409,12 @@ export const cdrApi = {
         ingested: number;
         attributed: number;
         unattributed: number;
+        skipped_unanswered: number;
+        /** Calls already stored by an earlier upload — not added again,
+         * so they're never billed twice. */
+        skipped_duplicates: number;
+        /** Rows with no readable date and time. */
+        skipped_invalid: number;
         /** Lines set up for extensions this batch was the first to
          * mention: a SIM, plus a generated stand-in employee holding it. */
         lines_created: number;

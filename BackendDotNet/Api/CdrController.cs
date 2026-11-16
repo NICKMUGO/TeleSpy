@@ -9,6 +9,7 @@
 // (ML/training/anomaly_detection.py) still runs against usage_events
 // independently of cost. Mirrors Backend/api/cdr.py 1:1.
 using System.Globalization;
+using System.Security.Cryptography;
 using Bogus;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -40,24 +41,76 @@ public class CdrController(
     IViewerContext viewerContext,
     INotificationService notifications) : ControllerBase
 {
+    /// <summary>An Admin's upload from the Ingestion page.</summary>
     [HttpPost("/cdr/ingest")]
     [RoleIdRequired("admin")]
     public async Task<IActionResult> Ingest()
     {
         var actor = await viewerContext.LoadedUserAsync();
         var data = await RequestBody.ReadJsonSilentAsync<CdrIngestRequest>(Request);
-        var records = data.Records ?? [];
-        var sourceFile = data.SourceFile;
+        return await IngestAsync(data.Records ?? [], data.SourceFile, actor!.UserId, actor.Role?.RoleName);
+    }
 
-        int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0;
+    /// <summary>The automatic path: CDR files the ML/ingestion fetchers
+    /// land, after ML/preprocessing/run_preprocessing.py has converted
+    /// them, sent here so they're stored, attributed and billed exactly
+    /// like an upload. No user signs in — the caller proves itself with
+    /// the CDR_INGEST_KEY shared secret (X-Ingest-Key). Off (404) unless
+    /// that key is set; Caddy also refuses this path from outside, so only
+    /// the ML job on the server's own network reaches it.</summary>
+    [HttpPost(AutomaticIngestPath)]
+    public async Task<IActionResult> IngestAutomatic()
+    {
+        if (string.IsNullOrEmpty(Config.CdrIngestKey)) return NotFound();
+        var given = Request.Headers["X-Ingest-Key"].ToString();
+        if (!CryptographicOperations.FixedTimeEquals(
+                System.Text.Encoding.UTF8.GetBytes(given), System.Text.Encoding.UTF8.GetBytes(Config.CdrIngestKey)))
+        {
+            return StatusCode(401, new { error_type = "invalid_ingest_key", message = "Wrong or missing X-Ingest-Key." });
+        }
+        var data = await RequestBody.ReadJsonSilentAsync<CdrIngestRequest>(Request);
+        return await IngestAsync(data.Records ?? [], data.SourceFile, null, AutomaticUploaderRole);
+    }
+
+    public const string AutomaticIngestPath = "/cdr/ingest/automatic";
+    /// <summary>What the Ingestion history shows as the uploader of a
+    /// batch the fetchers brought in.</summary>
+    public const string AutomaticUploaderRole = "Automatic";
+
+    private async Task<IActionResult> IngestAsync(List<CdrRecordDto> records, string? sourceFile,
+        string? uploadedByUserId, string? uploadedByRole)
+    {
+
+        int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0, skippedDuplicates = 0, skippedInvalid = 0;
         var createdExtensions = new List<string>();
         var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
         // When each extension's earliest answered call in this batch was —
         // a line created for a new extension is allocated from before it.
         var firstCallByExtension = records
-            .Where(r => (r.DurationSec ?? 0) > 0)
+            .Where(r => (r.DurationSec ?? 0) > 0 && ParseOccuredAt(r) is not null)
             .GroupBy(r => r.Orig ?? "")
-            .ToDictionary(g => g.Key, g => g.Min(r => ParseOccuredAt(r)));
+            .ToDictionary(g => g.Key, g => g.Min(r => ParseOccuredAt(r)!.Value));
+
+        // Calls already stored (the same file uploaded twice, or two files
+        // that overlap) are skipped, so billing — which prices whatever is
+        // in usage_events — never charges a call twice. A call is the same
+        // call if it's from the same extension, to the same number, at the
+        // same second, for the same length.
+        var times = records.Select(ParseOccuredAt).OfType<DateTime>().ToList();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (times.Count > 0)
+        {
+            var from = times.Min();
+            var to = times.Max();
+            var stored = await db.UsageEvents
+                .Where(e => e.OccuredAt >= from && e.OccuredAt <= to)
+                .Select(e => new { e.MsisdnPbx, e.Destination, e.OccuredAt, e.DurationMinutes })
+                .ToListAsync();
+            foreach (var e in stored)
+            {
+                seen.Add(CallKey(e.MsisdnPbx, e.Destination, e.OccuredAt, (int)Math.Round(e.DurationMinutes * 60)));
+            }
+        }
 
         // One transaction for the whole batch, mirroring Flask/SQLAlchemy's
         // single db.session.commit() at the end of the loop (with
@@ -83,11 +136,21 @@ public class CdrController(
                 skippedUnanswered++;
                 continue;
             }
+            // A row with no readable date and time can't be priced (peak or
+            // off-peak depends on it) — refused rather than guessed.
+            if (ParseOccuredAt(row) is not { } occuredAt)
+            {
+                skippedInvalid++;
+                continue;
+            }
+            if (!seen.Add(CallKey(orig, dest, occuredAt, durationSec)))
+            {
+                skippedDuplicates++;
+                continue;
+            }
             var durationMinutes = durationSec / 60.0;
             var callClassification = CallClassification.ClassifyCall(orig, dest);
             var excluded = CallClassification.IsExcludedFromAnomalyDetection(orig, dest, callClassification);
-
-            var occuredAt = ParseOccuredAt(row);
 
             // Resolve MSISDN (the CDR's own extension, `orig`) to the SIM
             // allocation that was active at the time of the call.
@@ -141,13 +204,15 @@ public class CdrController(
 
         db.CdrIngestBatches.Add(new CdrIngestBatch
         {
-            UploadedByUserId = actor!.UserId,
-            UploadedByRole = actor.Role?.RoleName,
+            UploadedByUserId = uploadedByUserId,
+            UploadedByRole = uploadedByRole,
             SourceFile = sourceFile,
             Ingested = ingested,
             Attributed = attributed,
             Unattributed = unattributed,
             SkippedUnanswered = skippedUnanswered,
+            SkippedDuplicates = skippedDuplicates,
+            SkippedInvalid = skippedInvalid,
             LinesCreated = createdExtensions.Count,
         });
         await db.SaveChangesAsync();
@@ -159,19 +224,34 @@ public class CdrController(
             data = new
             {
                 ingested, attributed, unattributed, skipped_unanswered = skippedUnanswered,
+                skipped_duplicates = skippedDuplicates, skipped_invalid = skippedInvalid,
                 lines_created = createdExtensions.Count, new_extensions = createdExtensions,
             },
-            message = skippedUnanswered > 0
-                ? $"CDR batch ingested. {skippedUnanswered} unanswered call(s) with zero duration were skipped."
-                : "CDR batch ingested.",
+            message = IngestMessage(ingested, skippedUnanswered, skippedDuplicates, skippedInvalid),
         });
     }
 
-    private static DateTime ParseOccuredAt(CdrRecordDto row) =>
+    /// <summary>The call's time — when it was answered, in Nairobi time, as
+    /// the browser's parser (Frontend cdr-parser.ts) or
+    /// ML/preprocessing/run_preprocessing.py produced it. Null if the row
+    /// has no readable date and time.</summary>
+    private static DateTime? ParseOccuredAt(CdrRecordDto row) =>
         DateTime.TryParseExact($"{row.Date} {row.OrigTime}", "yyyy-MM-dd HH:mm:ss",
             CultureInfo.InvariantCulture, DateTimeStyles.None, out var occuredAt)
             ? occuredAt
-            : Clock.UtcNow();
+            : null;
+
+    private static string CallKey(string orig, string dest, DateTime at, int durationSec) =>
+        $"{orig}|{dest}|{at:yyyy-MM-dd HH:mm:ss}|{durationSec}";
+
+    private static string IngestMessage(int ingested, int unanswered, int duplicates, int invalid)
+    {
+        var parts = new List<string> { $"{ingested} call(s) added." };
+        if (duplicates > 0) parts.Add($"{duplicates} were already uploaded and were skipped, so nothing is billed twice.");
+        if (unanswered > 0) parts.Add($"{unanswered} unanswered call(s) (zero duration) were skipped.");
+        if (invalid > 0) parts.Add($"{invalid} row(s) had no readable date and time and were skipped.");
+        return string.Join(" ", parts);
+    }
 
     /// <summary>Sets up a line for an extension first seen in a CDR batch,
     /// the way the seed does for every extension in its dataset: a SIM

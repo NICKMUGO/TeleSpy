@@ -115,6 +115,25 @@ export function BatchDetailSheet({
                 {unattributed.toLocaleString("en-KE")}
               </span>
             </div>
+            {(
+              [
+                ["Already uploaded before (skipped)", entry.skipped_duplicates],
+                ["No date/time (skipped)", entry.skipped_invalid],
+                ["Unanswered (skipped)", entry.skipped_unanswered],
+              ] as const
+            ).map(([label, count]) =>
+              count ? (
+                <div
+                  key={label}
+                  className="text-muted-foreground mt-1 flex items-baseline justify-between text-xs"
+                >
+                  <span>{label}</span>
+                  <span className="font-tabular">
+                    {count.toLocaleString("en-KE")}
+                  </span>
+                </div>
+              ) : null,
+            )}
           </section>
 
           <Button
@@ -131,6 +150,8 @@ export function BatchDetailSheet({
                   ["Ingested", ingested],
                   ["Attributed", attributed],
                   ["Unattributed", unattributed],
+                  ["Already uploaded (skipped)", entry.skipped_duplicates],
+                  ["No date/time (skipped)", entry.skipped_invalid],
                   ["Uploaded by", entry.uploaded_by_role ?? ""],
                   ["Occurred at", entry.occured_at],
                 ],

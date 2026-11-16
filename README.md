@@ -390,6 +390,16 @@ the result to `ML/data/processed/cdr_preprocessed.csv`, and moves the source
 files to `archive/`. `cdr_preprocessing.ipynb` is the same logic for
 interactive exploration.
 
+Before archiving, it sends the new calls to the API (`POST
+/cdr/ingest/automatic`), the same path an upload on the Ingestion page takes,
+so fetched calls are stored, attributed, checked for repeats and billed like
+uploaded ones. It needs `CDR_INGEST_KEY` set in `BackendDotNet/.env` (the API
+reads the same value) and, outside Docker, `TELESPY_API_URL`. If the API can't
+take the calls, the files stay in `cdr_incoming/` for the next run. Use
+`--csv-only` to update the CSV without sending anything. The fetchers and
+preprocessing are not scheduled yet; they'll be added to `deploy/ml.crontab`
+once the live CUCM/Avaya feeds are connected.
+
 ### Training jobs
 
 Each job is a standalone script, so each can be scheduled independently.
@@ -397,7 +407,7 @@ The production schedule is in `deploy/ml.crontab`.
 
 | Job                    | Model                                 | Writes to           | Suggested schedule |
 | ---------------------- | ------------------------------------- | ------------------- | ------------------ |
-| `billing.py`           | Rule-based rating                     | `usage_summaries`   | Monthly            |
+| `billing.py`           | Rule-based rating                     | `usage_summaries`   | Within 15 minutes of an upload or rate change, plus monthly |
 | `anomaly_detection.py` | Isolation Forest                      | `anomaly_flags`     | Every 24 hours     |
 | `usage_profiling.py`   | KMeans, 3 clusters                    | `usage_profiles`    | Every 3 months     |
 | `forecasting.py`       | Prophet, with a log-linear fallback   | `forecast_results`  | Every 3 months     |
@@ -423,6 +433,14 @@ used for an outside line:
 | International | `+`, `00`, or `000` followed by a non-Kenyan country code |   Yes   |
 | Unknown       | Anything else                                  |   No    |
 
+Billing prices every call stored in `usage_events`: the seed dataset and
+every CDR uploaded on the Ingestion page. A call's time is when it was
+answered, in Nairobi time, so peak or off-peak is decided from pickup, not
+ringing. The upload converts raw Cisco (CUCM) exports the same way the
+preprocessing stage does, and skips calls that are already stored, so no call
+is billed twice. Each call is charged to whoever held the line when it was
+made; calls on a pool line nobody held are shown on the bill on their own.
+
 Cost is call duration multiplied by a list rate, less the contract discount
 for that call type. Everything is read from the database:
 
@@ -440,8 +458,8 @@ Each employee's monthly figure is stored both at list price and after the
 discount. The line's fixed monthly charge (KES 26,086.96 before 15% excise and
 16% VAT by default) is a company-level cost and is not charged to anyone.
 
-Admins can change all of this from the web UI, under Settings. A change takes
-effect the next time `billing.py` runs. The rate tables are filled with
+Admins can change all of this from the web UI, under Settings. A change, or a
+new CDR upload, is picked up by `billing.py` within 15 minutes. The rate tables are filled with
 defaults on first startup and are never overwritten after that.
 
 **Bill reconciliation** (Admin) rebuilds each month's bill from these figures

@@ -3,10 +3,13 @@
 
 The single source of truth for call rates (local/internal/external/
 international) and for turning a raw CDR dataset row into a KES cost
-figure. Recomputes usage_summaries.total_cost (+ extension_code) directly
-from the CDR dataset CSV — not from the live usage_events table — for
-every employee whose extension_code appears as a call's origin anywhere
-in that dataset ("calculate based on origin").
+figure. Recomputes usage_summaries.total_cost (+ extension_code) from the
+calls in usage_events — every call ever ingested, whether from the seed
+dataset or a CDR uploaded on the Ingestion page — for every employee whose
+extension_code appears as a call's origin ("calculate based on origin").
+The call times there are already when the call was answered, in Nairobi
+time (the upload and ML/preprocessing/run_preprocessing.py convert raw
+Cisco CDRs the same way), so peak/off-peak is rated from pickup, not ring.
 
 This supersedes Backend/services/billing.py and
 BackendDotNet/Services/Billing.cs, which have been removed: CdrIngest /
@@ -39,10 +42,18 @@ PATCH /call-rates/local or /call-rates/international/<country_code> edit
 takes effect the next time this script runs.
 
 Run standalone:
-    python billing.py
+    python billing.py            # always recompute
+    python billing.py --if-new   # only if calls or rates changed since the last run
+                                 # (cron runs this every few minutes, so an
+                                 # upload is billed the same day)
 """
+# hashlib/json/sys: the --if-new check (a fingerprint of what billing
+# reads, kept in a small state file between runs).
+import hashlib
+import json
 # re: used throughout for the phone-number classification regexes.
 import re
+import sys
 
 # pandas: used to load/transform the CDR dataset as a DataFrame.
 import pandas as pd
@@ -52,8 +63,9 @@ import pandas as pd
 # connection; REPO_ROOT: absolute path of the repository root.
 from common import Backend, new_id, now_str, open_backend_connections, REPO_ROOT
 
-# Full path to the parsed CDR CSV this whole module reads from.
-CDR_DATASET_PATH = REPO_ROOT / "ML" / "data" / "processed" / "cdr_preprocessed.csv"
+# Where --if-new remembers what the last run billed (ML/data is a writable
+# volume on the server, so it survives between cron runs).
+STATE_PATH = REPO_ROOT / "ML" / "data" / ".billing_state.json"
 
 # --- Call classification -------------------------------------------------
 # The real dial plan behind this data (confirmed against the actual
@@ -481,8 +493,8 @@ def compute_call_cost(call_classification: str, duration_minutes: float, destina
 
 def _filter_for_classification(df: pd.DataFrame) -> pd.DataFrame:
     """Two rows never reach classify_call(), dropped in-memory here (the
-    CDR dataset CSV on disk — the parsed extract — is never rewritten, so
-    this is reproducible on every run rather than a one-off cleanup):
+    stored calls are never rewritten, so this is reproducible on every run
+    rather than a one-off cleanup):
 
     - Zero-duration: the call never connected, so there's nothing to
       classify — not "Unknown", just out of scope.
@@ -508,7 +520,7 @@ def _filter_for_classification(df: pd.DataFrame) -> pd.DataFrame:
 
     # Log the dataset size and each rule's impact before returning the
     # filtered frame.
-    print(f"[CDR pipeline] {len(df)} parsed record(s) loaded from {CDR_DATASET_PATH.name}")
+    print(f"[CDR pipeline] {len(df)} call(s) loaded from usage_events")
     print(f"[CDR pipeline] dropped {zero_duration.sum()} zero-duration row(s) (call never connected)")
     print(f"[CDR pipeline] dropped {unparseable_dest.sum()} row(s) with an unparseable destination "
           f"(PBX-extension origin, unrecognisable dest)")
@@ -521,11 +533,35 @@ def _filter_for_classification(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[~drop].copy()
 
 
-def _load_dataset(billing_settings: dict, intl_rates: dict[str, float]) -> pd.DataFrame:
-    # Read the CSV into a DataFrame; force these four columns to stay
-    # strings (not auto-inferred as numbers) since leading zeros / exact
-    # digit sequences matter for classification.
-    df = pd.read_csv(CDR_DATASET_PATH, dtype={"orig": str, "dest": str, "date": str, "orig_time": str})
+_CALLS_SQL = """
+    SELECT ev.msisdn_pbx, ev.destination,
+           to_char(ev.occured_at, 'YYYY-MM-DD'), to_char(ev.occured_at, 'HH24:MI:SS'),
+           ev.duration_minutes, al.employee_id, count(*)
+    FROM usage_events ev
+    LEFT JOIN sim_allocations al ON al.allocation_id = ev.allocation_id
+    GROUP BY ev.msisdn_pbx, ev.destination, ev.occured_at, ev.duration_minutes, al.employee_id
+"""
+
+
+def _load_calls(backend: Backend) -> pd.DataFrame:
+    """Every stored call, in the columns the rating below works on (the
+    same ones the preprocessed CDR CSV has: orig, dest, duration_sec, date,
+    orig_time), plus employee_id: who held the line when the call was made
+    (the allocation the upload attributed it to; None for a line nobody
+    held). A call stored more than once (an overlapping upload from before
+    the upload started refusing repeats) is counted once."""
+    rows = backend.execute(_CALLS_SQL).fetchall()
+    df = pd.DataFrame(rows, columns=["orig", "dest", "date", "orig_time", "duration_minutes", "employee_id", "copies"])
+    repeats = int((df["copies"] - 1).sum()) if len(df) else 0
+    if repeats:
+        print(f"[CDR pipeline] {repeats} repeated copy(ies) of already-stored calls ignored")
+    # Stored as seconds / 60; back to whole seconds, as the CDR had them.
+    df["duration_sec"] = (df["duration_minutes"].astype(float) * 60).round().astype(int)
+    return df.drop(columns=["duration_minutes", "copies"])
+
+
+def _load_dataset(backend: Backend, billing_settings: dict, intl_rates: dict[str, float]) -> pd.DataFrame:
+    df = _load_calls(backend)
     # Drop zero-duration / unparseable-destination rows before anything
     # else touches them.
     df = _filter_for_classification(df)
@@ -554,32 +590,27 @@ def _load_dataset(billing_settings: dict, intl_rates: dict[str, float]) -> pd.Da
 
 
 def run(backend: Backend) -> int:
-    """Full recompute (not incremental) of every employee-month total that
-    the dataset has origin traffic for: sums computed_cost per (orig
-    extension, month), then upserts into usage_summaries for whichever
-    employee currently owns that extension_code. Employees whose
-    extension_code never appears as an origin in the dataset are left
-    untouched. Returns the number of usage_summaries rows written/updated.
+    """Full recompute (not incremental) of every employee-month total from
+    the stored calls. Returns the number of usage_summaries rows written.
 
-    An extension nobody holds any more is still billed somewhere, never
-    dropped: to whoever's usage_summaries row already carries that
-    extension for that month (the person who held it then — e.g. someone
-    since removed), else to unassigned_line_usage — a line in the pool that
-    was still being used. Those rows are rebuilt from scratch every run,
-    and GET /reconciliation counts them into the month's bill.
+    Each call is billed to whoever held the line when it was made (the
+    allocation the upload attributed it to) — so a line handed over
+    mid-month splits between the two holders, and a person since removed
+    keeps the calls they made. A call on a line nobody held at the time
+    (a pool line still in use) goes to unassigned_line_usage, rebuilt from
+    scratch every run; GET /reconciliation counts it into the month's bill.
+    A bill row an earlier run wrote that no call supports any more is set
+    to 0, so no call is ever on two bills.
 
     Only rows whose `orig` is a bare 3-digit PBX extension are ever billed
-    to an employee — the organization only bears the cost of calls its own
-    staff dialled out. A small number of chargeable rows in the raw
-    dataset carry a non-extension value in `orig` instead (e.g. the dialled
-    "9..." digits appear to have landed in `orig` rather than `dest` for
-    some records) — those are real telco spend, but with no employee to
-    attribute it to, so they're excluded here rather than guessed at."""
+    — the organization only bears the cost of calls its own staff dialled
+    out. A chargeable row with a non-extension `orig` is real telco spend
+    with no one to attribute it to, so it's reported and left out."""
     # Load the current DB-backed rates for this backend.
     billing_settings = _load_billing_settings(backend)
     intl_rates = _load_international_rates(backend)
     # Build the full classified/costed dataset.
-    dataset = _load_dataset(billing_settings, intl_rates)
+    dataset = _load_dataset(backend, billing_settings, intl_rates)
     # Subset: only rows that actually cost something (External/International).
     chargeable = dataset[dataset["computed_cost"] > 0]
     # Boolean mask: chargeable rows whose `orig` is NOT a valid 3-digit
@@ -592,68 +623,61 @@ def run(backend: Backend) -> int:
         print(f"[{backend.name}] Billing: {not_pbx_origin.sum()} chargeable row(s) "
               f"({unattributable} KES) have no 3-digit PBX origin — excluded, not billed to anyone.")
 
-    # Sum computed_cost, grouped by (originating extension, month) — one
-    # total per employee per month.
-    by_origin = dataset.groupby(["orig", "month"])[["computed_cost", "list_cost"]].sum()
-    calls_by_origin = dataset.groupby(["orig", "month"]).size()
+    # Each call is billed to whoever held the line when it was made (its
+    # allocation), so a line that changed hands mid-month splits between
+    # the two holders, and a removed person keeps the calls they made.
+    from_extension = dataset["orig"].fillna("").str.match(INTERNAL_EXTENSION_REGEX)
+    held = dataset[from_extension & dataset["employee_id"].notna()]
+    pool = dataset[from_extension & dataset["employee_id"].isna()]
 
-    # Fetch every employee that currently has an extension_code assigned.
-    employees = backend.execute(
-        "SELECT employee_id, extension_code FROM employees "
-        "WHERE extension_code IS NOT NULL AND removed_at IS NULL"
-    ).fetchall()
-    # Build an extension_code -> employee_id lookup dict.
-    employee_by_extension = {extension_code: employee_id for employee_id, extension_code in employees}
+    by_employee = held.groupby(["employee_id", "month"])[["computed_cost", "list_cost"]].sum()
+    # The extension shown on the bill row: the one they made most calls
+    # from that month (someone who swapped lines mid-month had two).
+    main_extension = (
+        held.groupby(["employee_id", "month", "orig"]).size()
+        .reset_index(name="calls")
+        .sort_values(["calls", "orig"], ascending=[False, True])
+        .drop_duplicates(["employee_id", "month"])
+        .set_index(["employee_id", "month"])["orig"]
+    )
 
-    # Full recompute of pool-line spend, like everything else here.
+    # Full recompute of pool-line spend, like everything else here: calls
+    # on a line nobody held at the time — still on the telco's bill.
     backend.execute("DELETE FROM unassigned_line_usage")
     unassigned_total = 0.0
-
-    written = 0
-    # Iterate every (extension, month) group and its summed cost.
-    for (extension_code, month), totals in by_origin.iterrows():
-        if not _INTERNAL_RE.match(extension_code):
-            continue  # not a 3-digit PBX extension — never billed to an employee
-        # Look up which employee (if any) currently owns this extension.
-        employee_id = employee_by_extension.get(extension_code)
-        # Round the summed costs to 2 decimal places.
+    pool_totals = pool.groupby(["orig", "month"])[["computed_cost", "list_cost"]].sum()
+    pool_calls = pool.groupby(["orig", "month"]).size()
+    for (extension_code, month), totals in pool_totals.iterrows():
         total_cost = round(float(totals["computed_cost"]), 2)
         list_cost = round(float(totals["list_cost"]), 2)
-        if employee_id is None:
-            # Nobody holds it now: keep it with whoever held it that month...
-            previous = backend.execute(
-                "SELECT employee_id FROM usage_summaries WHERE extension_code = ? AND month = ?",
-                (extension_code, month),
-            ).fetchone()
-            if previous:
-                employee_id = previous[0]
-            else:
-                # ...or, if nobody did, it's a pool line that was used.
-                if total_cost > 0 or list_cost > 0:
-                    backend.execute(
-                        """INSERT INTO unassigned_line_usage
-                           (usage_id, extension_code, month, total_cost, list_cost, calls, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (new_id(), extension_code, month, total_cost, list_cost,
-                         int(calls_by_origin[(extension_code, month)]), now_str()),
-                    )
-                    unassigned_total += total_cost
-                continue
-        # Check whether a usage_summaries row already exists for this
-        # employee+month.
+        if total_cost > 0 or list_cost > 0:
+            backend.execute(
+                """INSERT INTO unassigned_line_usage
+                   (usage_id, extension_code, month, total_cost, list_cost, calls, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (new_id(), extension_code, month, total_cost, list_cost,
+                 int(pool_calls[(extension_code, month)]), now_str()),
+            )
+            unassigned_total += total_cost
+
+    written = 0
+    billed = set()
+    for (employee_id, month), totals in by_employee.iterrows():
+        total_cost = round(float(totals["computed_cost"]), 2)
+        list_cost = round(float(totals["list_cost"]), 2)
+        extension_code = main_extension[(employee_id, month)]
+        billed.add((employee_id, month))
         existing = backend.execute(
             "SELECT summary_id FROM usage_summaries WHERE employee_id = ? AND month = ?",
             (employee_id, month),
         ).fetchone()
         if existing:
-            # Update the existing row's total_cost/extension_code/updated_at.
             backend.execute(
                 "UPDATE usage_summaries SET total_cost = ?, list_cost = ?, extension_code = ?, updated_at = ? "
                 "WHERE summary_id = ?",
                 (total_cost, list_cost, extension_code, now_str(), existing[0]),
             )
         else:
-            # No row yet — insert a brand new one with a fresh UUID.
             backend.execute(
                 """INSERT INTO usage_summaries
                    (summary_id, employee_id, month, total_cost, list_cost, extension_code, updated_at)
@@ -661,6 +685,22 @@ def run(backend: Backend) -> int:
                 (new_id(), employee_id, month, total_cost, list_cost, extension_code, now_str()),
             )
         written += 1
+
+    # A bill row from an earlier run that no call supports any more (e.g.
+    # a line's calls used to be charged to whoever held it later) is
+    # zeroed, so the same call is never on two people's bills.
+    cleared = 0
+    for summary_id, employee_id, month, total_cost, list_cost in backend.execute(
+        "SELECT summary_id, employee_id, month, total_cost, list_cost FROM usage_summaries"
+    ).fetchall():
+        if (employee_id, month) not in billed and (total_cost or list_cost):
+            backend.execute(
+                "UPDATE usage_summaries SET total_cost = 0, list_cost = 0, updated_at = ? WHERE summary_id = ?",
+                (now_str(), summary_id),
+            )
+            cleared += 1
+    if cleared:
+        print(f"[{backend.name}] Billing: {cleared} earlier bill row(s) no call supports any more — set to 0.")
     if unassigned_total > 0:
         print(f"[{backend.name}] Billing: {round(unassigned_total, 2)} KES on lines nobody held "
               f"— recorded in unassigned_line_usage.")
@@ -669,12 +709,47 @@ def run(backend: Backend) -> int:
     return written
 
 
+def _fingerprint(backend: Backend) -> str:
+    """What billing's result depends on: the stored calls and every rate.
+    Changes when a CDR is uploaded or an Admin edits a rate or discount."""
+    parts = [
+        backend.execute("SELECT count(*), max(ingested_at), sum(duration_minutes) FROM usage_events").fetchone(),
+        backend.execute("SELECT * FROM billing_settings").fetchall(),
+        backend.execute("SELECT count(*), max(updated_at), sum(rate_kes_per_minute) FROM international_call_rates").fetchone(),
+        # Who holds which extension decides whose bill a call lands on.
+        backend.execute(
+            "SELECT md5(coalesce(string_agg(employee_id || ':' || coalesce(extension_code, '') || ':' || "
+            "coalesce(removed_at::text, ''), ',' ORDER BY employee_id), '')) FROM employees"
+        ).fetchone(),
+    ]
+    return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()
+
+
+def _last_fingerprint() -> str | None:
+    try:
+        return json.loads(STATE_PATH.read_text()).get("fingerprint")
+    except (OSError, ValueError):
+        return None
+
+
+def _save_fingerprint(fingerprint: str) -> None:
+    try:
+        STATE_PATH.write_text(json.dumps({"fingerprint": fingerprint, "billed_at": now_str()}))
+    except OSError as exc:
+        print(f"[billing] couldn't save {STATE_PATH.name}: {exc}")
+
+
 def main() -> None:
-    # Run the billing recompute against every currently-reachable backend
-    # (today, just BackendDotNet), printing a one-line summary each.
+    # --if-new: the frequent cron run — skip quietly unless a CDR upload or
+    # a rate edit happened since the last run. Plain runs always recompute.
+    if_new = "--if-new" in sys.argv[1:]
     for backend in open_backend_connections():
+        fingerprint = _fingerprint(backend)
+        if if_new and fingerprint == _last_fingerprint():
+            return
         written = run(backend)
-        print(f"[{backend.name}] Billing: {written} usage_summary row(s) written from the CDR dataset.")
+        _save_fingerprint(fingerprint)
+        print(f"[{backend.name}] Billing: {written} usage_summary row(s) written from usage_events.")
 
 
 # Only run main() when this file is executed directly (`python billing.py`),

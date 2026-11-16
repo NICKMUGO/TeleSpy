@@ -74,10 +74,10 @@ public static class Constants
     public const string InternationalNumberRegex = @"^(?:\+|00|000)(?!254)\d{6,15}$";
 
     // Recognises a Kenyan number dialled in international form
-    // (+254..., 00254..., 000254...), after the leading "9" has been
-    // stripped. Captured group 1 is the national part, re-prefixed with "0"
-    // to get the local form.
-    public const string KenyanInternationalPrefixRegex = @"^(?:\+|00|000)254(\d+)$";
+    // (+254..., 00254..., 000254..., or a bare 254...), after the leading
+    // "9" has been stripped. Captured group 1 is the national part,
+    // re-prefixed with "0" to get the local form.
+    public const string KenyanInternationalPrefixRegex = @"^(?:\+|00|000)?254(\d+)$";
 
     // Internal call: a bare 3-digit extension, e.g. 206, 389, 400. Never
     // charged.

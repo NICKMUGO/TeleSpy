@@ -29,6 +29,11 @@ public static class Config
     // --- Redis (JWT blocklist + MFA OTP cache) -------------------------------
     public static string RedisUrl { get; } = Environment.GetEnvironmentVariable("REDIS_URL") ?? "redis://localhost:6379/0";
 
+    // --- Automatic CDR ingest -------------------------------------------------
+    // Shared secret the ML job (ML/preprocessing/run_preprocessing.py) sends
+    // to POST /cdr/ingest/automatic. Empty = that endpoint is off.
+    public static string CdrIngestKey { get; } = Environment.GetEnvironmentVariable("CDR_INGEST_KEY") ?? "";
+
     // --- JWT ---------------------------------------------------------------
     public static string JwtSecretKey { get; } = Environment.GetEnvironmentVariable("JWT_SECRET_KEY") ?? "";
     public static TimeSpan JwtAccessTokenExpires { get; } = TimeSpan.FromMinutes(ToInt("JWT_ACCESS_TOKEN_EXPIRES_MINUTES", "15"));

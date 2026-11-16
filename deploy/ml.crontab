@@ -10,9 +10,14 @@
 #
 # min hour dom month dow
 
-# Billing — monthly, 1st of the month at 01:00 (writes usage_summaries,
-# which forecasting reads, so it runs first).
-0 1 1 * *      cd /opt/telespy && flock -n /tmp/telespy-billing.lock docker compose run --rm ml python training/billing.py >> /var/log/telespy/billing.log 2>&1
+# Billing — prices every stored call (usage_events) and writes
+# usage_summaries, which forecasting reads.
+# Every 15 minutes, but only does anything when a CDR was uploaded or an
+# Admin changed a rate since the last run (--if-new), so an upload shows in
+# spend, budgets and reconciliation within the quarter hour.
+*/15 * * * *   cd /opt/telespy && flock -n /tmp/telespy-billing.lock docker compose run --rm ml python training/billing.py --if-new >> /var/log/telespy/billing.log 2>&1
+# And a full recompute on the 1st of the month at 01:00, whatever changed.
+0 1 1 * *      cd /opt/telespy && flock /tmp/telespy-billing.lock docker compose run --rm ml python training/billing.py >> /var/log/telespy/billing.log 2>&1
 
 # Anomaly detection — every 24 hours at 02:00.
 0 2 * * *      cd /opt/telespy && flock -n /tmp/telespy-anomaly.lock docker compose run --rm ml python training/anomaly_detection.py >> /var/log/telespy/anomaly.log 2>&1

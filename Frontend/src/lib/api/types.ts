@@ -396,6 +396,8 @@ export interface CdrIngestBatch {
   attributed: number;
   unattributed: number;
   skipped_unanswered: number;
+  skipped_duplicates: number;
+  skipped_invalid: number;
   lines_created: number;
   occured_at: string;
 }

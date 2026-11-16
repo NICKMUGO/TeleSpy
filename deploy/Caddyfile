@@ -8,6 +8,12 @@
 {$SITE_DOMAIN} {
 	encode zstd gzip
 
+	# The ML job's automatic CDR ingest is for the server's own network
+	# only (it calls api:8080 directly); never from outside.
+	handle /api/cdr/ingest/automatic {
+		respond 404
+	}
+
 	handle_path /api/* {
 		reverse_proxy api:8080
 	}

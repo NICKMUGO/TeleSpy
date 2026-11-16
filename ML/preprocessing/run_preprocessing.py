@@ -11,9 +11,28 @@ connectors landing new files and ML/training/billing.py's monthly run, so
 cdr_preprocessed.csv stays continuously up to date rather than piling up a
 month's backlog right before billing runs.
 
+After converting, every new call is also sent to the API's automatic
+CDR ingest (POST /cdr/ingest/automatic) — the same path an upload on the
+Ingestion page takes — so it's stored in usage_events, attributed to
+whoever held the line, checked for repeats, and picked up by billing
+(ML/training/billing.py prices usage_events, not this CSV). Files are only
+archived once the API has taken all of their calls; if it can't be
+reached, they stay in cdr_incoming/ for the next run (repeats are skipped,
+so a retry never bills twice).
+
 Run standalone:
-    python run_preprocessing.py
+    python run_preprocessing.py             # convert, send to the API, append, archive
+    python run_preprocessing.py --csv-only  # convert + append only (e.g. to
+                                            # build the seed dataset locally)
+
+Needs CDR_INGEST_KEY (and TELESPY_API_URL, default http://api:8080) in the
+environment or in BackendDotNet/.env.
 """
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
 # Path: object-oriented filesystem path handling (join with "/", .exists(),
 # .iterdir(), etc.) instead of raw string concatenation.
 from pathlib import Path
@@ -79,6 +98,8 @@ RAW_COLUMNS = {
 # unique values of RAW_COLUMNS above (a set, so duplicates like "orig"
 # appearing twice collapse to one entry).
 REQUIRED_COLUMNS = set(RAW_COLUMNS.values())
+# Filled in when a file doesn't have them (see normalize_columns()).
+OPTIONAL_COLUMN_DEFAULTS = {"charge": 0, "call_classification": "Unknown"}
 # File extensions load_incoming() will attempt to parse; anything else in
 # cdr_incoming/ (e.g. a stray .pdf) is silently ignored.
 SUPPORTED_EXTENSIONS = {".csv", ".txt", ".tsv"}
@@ -167,6 +188,12 @@ def normalize_columns(raw: pd.DataFrame) -> pd.DataFrame:
     # isn't a known alias (so an already-canonical column like "date"
     # passes through unchanged).
     raw = raw.rename(columns={c: RAW_COLUMNS.get(c.strip().lower(), c.strip().lower()) for c in raw.columns})
+    # The carrier's own charge and classification columns are optional:
+    # an Avaya CDR (ML/ingestion/avaya_cdr_listener.py) has neither, and
+    # billing works both out itself from the numbers and duration.
+    for column, default in OPTIONAL_COLUMN_DEFAULTS.items():
+        if column not in raw.columns:
+            raw[column] = default
     # Set difference: any canonical column this file still doesn't have
     # after renaming.
     missing = REQUIRED_COLUMNS - set(raw.columns)
@@ -332,7 +359,77 @@ def encode_and_scale(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def run() -> int:
+# How many calls go to the API per request.
+API_CHUNK_SIZE = 2000
+DOTNET_ENV_PATH = Path(__file__).resolve().parent.parent.parent / "BackendDotNet" / ".env"
+
+
+def _setting(name: str, default: str = "") -> str:
+    """From the environment, else BackendDotNet/.env (mounted into the ML
+    container, where DATABASE_URL already comes from)."""
+    if os.environ.get(name):
+        return os.environ[name]
+    try:
+        for line in DOTNET_ENV_PATH.read_text().splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key.strip() == name and not line.lstrip().startswith("#"):
+                return value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return default
+
+
+def api_records(df: pd.DataFrame) -> dict[str, list[dict]]:
+    """The cleaned calls, per source file, in the shape POST /cdr/ingest
+    takes: orig, dest, duration_sec, and date + orig_time as one Nairobi
+    wall-clock moment (already the answer time for a CUCM export). Rows
+    without a caller or a destination are left out, as the upload page
+    leaves them out."""
+    batches: dict[str, list[dict]] = {}
+    for row in df.itertuples(index=False):
+        orig = "" if pd.isna(row.orig) else str(row.orig).strip()
+        dest = "" if pd.isna(row.dest) else str(row.dest).strip()
+        if not orig or not dest or pd.isna(row.duration_sec):
+            continue
+        batches.setdefault(row.source_file, []).append({
+            "orig": orig,
+            "dest": dest,
+            "duration_sec": int(row.duration_sec),
+            "date": row.call_timestamp.strftime("%Y-%m-%d"),
+            "orig_time": row.call_timestamp.strftime("%H:%M:%S"),
+        })
+    return batches
+
+
+def send_to_api(batches: dict[str, list[dict]]) -> None:
+    """Hands every call to the API. Raises if any part is refused or the
+    API can't be reached, so the caller keeps the files for a retry."""
+    key = _setting("CDR_INGEST_KEY")
+    if not key:
+        raise RuntimeError(
+            "CDR_INGEST_KEY isn't set, so the calls can't be sent to TeleSpy "
+            "(use --csv-only to only update the CSV)."
+        )
+    url = _setting("TELESPY_API_URL", "http://api:8080").rstrip("/") + "/cdr/ingest/automatic"
+    for source_file, records in batches.items():
+        for start in range(0, len(records), API_CHUNK_SIZE):
+            chunk = records[start:start + API_CHUNK_SIZE]
+            body = json.dumps({"records": chunk, "source_file": f"auto__{source_file}"}).encode()
+            request = urllib.request.Request(
+                url, data=body, method="POST",
+                headers={"Content-Type": "application/json", "X-Ingest-Key": key},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=600) as response:
+                    print(f"{source_file} [{start + 1}-{start + len(chunk)}]: "
+                          f"{json.load(response).get('message', 'sent')}")
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"the API refused {source_file}: {exc.code} {exc.read()[:300]!r}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(f"couldn't reach the API at {url}: {exc}") from exc
+
+
+def run(csv_only: bool = False) -> int:
     """Returns the number of records appended to cdr_preprocessed.csv."""
     # Read + normalize every file currently sitting in cdr_incoming/.
     df, files = load_incoming()
@@ -345,6 +442,10 @@ def run() -> int:
     # Run the cleaning pipeline stage by stage, each step returning a new
     # (or same, mutated) DataFrame for the next step to build on.
     df = clean(df)
+    # Into TeleSpy first: if the API won't take them, stop here — nothing
+    # appended, nothing archived — so the next run tries the same files.
+    if not csv_only:
+        send_to_api(api_records(df))
     df = flag_outliers(df)
     df = drop_redundant_columns(df)
     df = encode_and_scale(df)
@@ -400,7 +501,11 @@ def run() -> int:
 
 def main() -> None:
     # Run the whole pipeline once and report how many records it wrote.
-    written = run()
+    try:
+        written = run(csv_only="--csv-only" in sys.argv[1:])
+    except RuntimeError as exc:
+        print(f"Preprocessing stopped, files left in cdr_incoming/ for the next run: {exc}")
+        sys.exit(1)
     print(f"Preprocessing: {written} record(s) appended to cdr_preprocessed.csv.")
 
 

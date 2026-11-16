@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 ingestion/.env
 ingestion/state/
+
+# billing.py --if-new remembers its last run here
+data/.billing_state.json

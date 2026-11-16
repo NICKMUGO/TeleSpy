@@ -53,6 +53,8 @@ export default function IngestionPage() {
     ingested: number;
     attributed: number;
     unattributed: number;
+    skipped_duplicates: number;
+    skipped_invalid: number;
     lines_created: number;
   } | null>(null);
   const [openBatch, setOpenBatch] = useState<CdrIngestBatch | null>(null);
@@ -291,6 +293,19 @@ export default function IngestionPage() {
                       value={result.unattributed}
                       tone={result.unattributed > 0 ? "warning" : undefined}
                     />
+                    {result.skipped_duplicates > 0 ? (
+                      <Row
+                        label="Already uploaded (skipped)"
+                        value={result.skipped_duplicates}
+                      />
+                    ) : null}
+                    {result.skipped_invalid > 0 ? (
+                      <Row
+                        label="No date/time (skipped)"
+                        value={result.skipped_invalid}
+                        tone="warning"
+                      />
+                    ) : null}
                     {result.lines_created > 0 ? (
                       <Row
                         label="New extensions set up"
