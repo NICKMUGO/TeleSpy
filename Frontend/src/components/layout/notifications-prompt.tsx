@@ -1,74 +1,64 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Bell, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect } from "react";
+import { toast } from "sonner";
 import { enablePush, pushState } from "@/lib/push";
 
-const DISMISSED_KEY = "telespy-push-prompt-dismissed";
+const ASKED_KEY = "telespy-push-asked";
 
-/** A one-line offer to turn notifications on, shown in the app until the
- * person answers it. Asking the browser needs a click (Safari won't ask
- * otherwise), hence a button rather than asking on page load. */
+/**
+ * Asks once per device, with the browser's own question ("Allow / Block",
+ * or "Allow / Don't Allow" on iPhone) — no banner of ours. Browsers only
+ * show it in response to a tap or click, so it waits for the first one
+ * anywhere in the app. Never asks again after that, whatever the answer;
+ * Settings → Notifications turns them on or off later.
+ */
 export function NotificationsPrompt() {
-  const [show, setShow] = useState(false);
-
   useEffect(() => {
-    let dismissed = false;
+    let asked = false;
     try {
-      dismissed = localStorage.getItem(DISMISSED_KEY) === "1";
+      asked = localStorage.getItem(ASKED_KEY) === "1";
     } catch {
-      // Storage blocked: just offer it.
+      // Storage blocked: ask anyway.
     }
-    if (dismissed) return;
+    if (asked) return;
+
+    let armed = false;
+    const ask = () => {
+      document.removeEventListener("click", ask, true);
+      try {
+        localStorage.setItem(ASKED_KEY, "1");
+      } catch {
+        // Fine: it may ask again next time.
+      }
+      // Called straight from the click, so the browser shows its question.
+      enablePush()
+        .then((state) => {
+          if (state === "on") toast.success("Notifications are on.");
+        })
+        .catch((error: unknown) => {
+          toast.error(
+            error instanceof Error
+              ? `Couldn't turn notifications on: ${error.message}`
+              : "Couldn't turn notifications on. Try again from Settings.",
+          );
+        });
+    };
+
     void pushState().then((state) => {
       if (
         state === "off" &&
         "Notification" in window &&
         Notification.permission === "default"
       ) {
-        setShow(true);
+        armed = true;
+        document.addEventListener("click", ask, true);
       }
     });
+    return () => {
+      if (armed) document.removeEventListener("click", ask, true);
+    };
   }, []);
 
-  function dismiss() {
-    setShow(false);
-    try {
-      localStorage.setItem(DISMISSED_KEY, "1");
-    } catch {
-      // Fine: it'll offer again next time.
-    }
-  }
-
-  if (!show) return null;
-  return (
-    <div className="border-border-subtle bg-muted/50 flex items-center gap-3 border-b px-4 py-2 text-sm sm:px-6">
-      <Bell
-        aria-hidden="true"
-        className="text-muted-foreground size-4 shrink-0"
-      />
-      <p className="min-w-0 flex-1">
-        Get notified about new tickets and messages when TeleSpy isn&apos;t
-        open.
-      </p>
-      <Button
-        size="sm"
-        onClick={() => {
-          void enablePush().finally(dismiss);
-        }}
-      >
-        Turn on
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-8"
-        aria-label="Not now"
-        onClick={dismiss}
-      >
-        <X aria-hidden="true" />
-      </Button>
-    </div>
-  );
+  return null;
 }

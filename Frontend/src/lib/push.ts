@@ -69,20 +69,44 @@ export async function pushState(): Promise<PushState> {
   return subscription && Notification.permission === "granted" ? "on" : "off";
 }
 
+/** Fails with `message` if `promise` hasn't settled in `ms` — the push
+ * service on some phones never answers, and the button must not hang. */
+function within<T>(promise: Promise<T>, ms: number, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(message)), ms),
+    ),
+  ]);
+}
+
 /** Asks the browser, then registers this device. Must run from a click
- * (Safari only asks in response to one). */
+ * (Safari only asks in response to one). Throws with a readable message if
+ * the device can't be registered. */
 export async function enablePush(): Promise<PushState> {
-  const [reg, key] = await Promise.all([registration(), publicKey()]);
-  if (!reg || !key) return "unavailable";
+  if (!supported()) return "unavailable";
+  // Ask first, while this still counts as part of the click.
   const permission = await Notification.requestPermission();
   if (permission === "denied") return "blocked";
   if (permission !== "granted") return "off";
+  const key = await publicKey();
+  if (!key) return "unavailable";
+  // Subscribing needs an active service worker, not just a registered one.
+  const reg = await within(
+    navigator.serviceWorker.ready,
+    10_000,
+    "The app's background service isn't running yet. Reload the page and try again.",
+  );
   const subscription =
     (await reg.pushManager.getSubscription()) ??
-    (await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: keyBytes(key),
-    }));
+    (await within(
+      reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: keyBytes(key),
+      }),
+      20_000,
+      "This browser's notification service didn't answer. Check your connection and try again.",
+    ));
   const json = subscription.toJSON();
   await apiRequest("/push/subscribe", {
     method: "POST",

@@ -33,8 +33,13 @@ export function NotificationsCard() {
       if (on && next === "on")
         toast.success("Notifications are on for this device.");
       if (!on) toast.success("Notifications are off for this device.");
-    } catch {
-      toast.error("Couldn't change notifications. Try again.");
+      if (on && next !== "on" && next !== "off") toast.message(HELP[next]);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? `Couldn't change notifications: ${error.message}`
+          : "Couldn't change notifications. Try again.",
+      );
     } finally {
       setBusy(false);
     }

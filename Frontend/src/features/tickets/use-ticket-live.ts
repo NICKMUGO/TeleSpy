@@ -61,7 +61,11 @@ export function useTicketLive(ticketId: string) {
       .build();
     connectionRef.current = connection;
 
-    const visible = () => document.visibilityState === "visible";
+    // In front of them: shown AND focused. On a laptop a window behind
+    // others still counts as "visible", and they'd miss notifications
+    // about the very ticket they aren't looking at.
+    const visible = () =>
+      document.visibilityState === "visible" && document.hasFocus();
     const join = async () => {
       const joined = await connection.invoke<boolean>(
         "JoinTicket",
@@ -77,6 +81,8 @@ export function useTicketLive(ticketId: string) {
         .catch(() => undefined);
     };
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onVisibility);
+    window.addEventListener("blur", onVisibility);
 
     connection.on("ticketChanged", (message: { ticket_id: string }) => {
       if (message.ticket_id !== ticketId) return;
@@ -139,6 +145,8 @@ export function useTicketLive(ticketId: string) {
       stopped = true;
       connectionRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onVisibility);
+      window.removeEventListener("blur", onVisibility);
       if (connection.state !== HubConnectionState.Disconnected) {
         void connection.stop();
       }
