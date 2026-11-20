@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -44,6 +45,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchSelect } from "@/components/ui/search-select";
 import { SelectNative } from "@/components/ui/select-native";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -700,23 +702,24 @@ function PassForm({
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor={`pass-${kind}-person`}>Person</Label>
-          <SelectNative
+          <SearchSelect
             id={`pass-${kind}-person`}
             value={assigneeId}
-            onChange={(e) => setAssigneeId(e.target.value)}
+            onChange={setAssigneeId}
             disabled={!departmentId}
-          >
-            <option value="">
-              {department ? `Everyone in ${department.name}` : "—"}
-            </option>
-            {assignees.data?.data
-              .filter((p) => !isForward || p.user_id !== myId)
-              .map((p) => (
-                <option key={p.user_id} value={p.user_id}>
-                  {p.name}
-                </option>
-              ))}
-          </SelectNative>
+            isLoading={assignees.isLoading}
+            placeholder="—"
+            emptyText={`No one in ${department?.name ?? "that department"} by that name.`}
+            options={[
+              {
+                value: "",
+                label: department ? `Everyone in ${department.name}` : "—",
+              },
+              ...(assignees.data?.data ?? [])
+                .filter((p) => !isForward || p.user_id !== myId)
+                .map((p) => ({ value: p.user_id, label: p.name })),
+            ]}
+          />
         </div>
       </div>
       <div className="flex flex-col gap-2">
@@ -1477,6 +1480,29 @@ function Conversation({
     if (added.length) setStaged((current) => [...current, ...added]);
   }
 
+  /** A screenshot (or a copied file) pasted into the message box is
+   * attached, the same as choosing it with the paperclip. Pasted text is
+   * left to paste as normal. */
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    if (refuseWhenFull()) return;
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    stage(
+      files.map((file, i) =>
+        // Screenshots arrive named just "image.png"; give each its own name.
+        /^image\.\w+$/.test(file.name)
+          ? new File(
+              [file],
+              `screenshot-${stamp}${files.length > 1 ? `-${i + 1}` : ""}.${file.name.split(".").pop()}`,
+              { type: file.type },
+            )
+          : file,
+      ),
+    );
+  }
+
   function unstage(key: string) {
     setStaged((current) => {
       const gone = current.find((s) => s.key === key);
@@ -1844,6 +1870,7 @@ function Conversation({
                 if (e.target.value.trim()) live.sendTyping();
               }}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               rows={2}
               maxLength={4000}
               placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"

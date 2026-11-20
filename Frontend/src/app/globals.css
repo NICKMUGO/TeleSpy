@@ -143,6 +143,10 @@
 }
 
 :root {
+  /* "only" stops a phone in dark mode (Android Chrome's auto-dark,
+   * Samsung Internet) from force-darkening the light theme, which made
+   * Light look the same as Dark there. */
+  color-scheme: only light;
   /* The iOS grouped background (#f2f2f7): panels sit on it in white. */
   --background: oklch(0.965 0.004 286);
   --foreground: var(--color-kq-black);
@@ -196,6 +200,7 @@
 }
 
 .dark {
+  color-scheme: only dark;
   /* iOS dark: true black page (#000), panels #1c1c1e, raised #2c2c2e. */
   --background: oklch(0 0 0);
   --foreground: oklch(0.96 0 0);

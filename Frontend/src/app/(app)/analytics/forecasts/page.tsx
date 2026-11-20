@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDepartmentForecast, useDepartments } from "@/lib/api/hooks";
+import { useSession } from "@/lib/auth/session-store";
 import { monthLabel } from "@/lib/format";
 
 function kes(value: number | null | undefined) {
@@ -28,13 +29,21 @@ function kes(value: number | null | undefined) {
 
 export default function ForecastsPage() {
   const departments = useDepartments();
+  const user = useSession((s) => s.user);
+  // A Manager may only see their own department's forecast (the API
+  // refuses any other), so they get no picker — just their department.
+  const ownDepartmentId =
+    user?.role === "Manager" ? (user.department_id ?? null) : null;
   // No explicit selection yet -> default to the first department once
   // it's loaded. Derived directly during render rather than synced via
   // an effect (which would cost an extra render pass for what's really
   // just "pick a fallback value").
   const [explicitDepartmentId, setDepartmentId] = useState<string | null>(null);
   const departmentId =
-    explicitDepartmentId ?? departments.data?.data[0]?.id ?? null;
+    ownDepartmentId ??
+    explicitDepartmentId ??
+    departments.data?.data[0]?.id ??
+    null;
 
   const forecast = useDepartmentForecast(departmentId ?? "");
   const selectedDept = departments.data?.data.find(
@@ -76,23 +85,29 @@ export default function ForecastsPage() {
     <>
       <PageHeader title="Spend forecasts" />
       <div className="flex flex-col gap-4 p-4 sm:p-6">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline" className="w-fit">
-              {selectedDept?.name ?? "Select department"}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {(departments.data?.data ?? []).map((dept) => (
-              <DropdownMenuItem
-                key={dept.id}
-                onSelect={() => setDepartmentId(dept.id)}
-              >
-                {dept.name}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {ownDepartmentId ? (
+          <h2 className="text-base font-medium">
+            {selectedDept?.name ?? detail?.department_name ?? "Your department"}
+          </h2>
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" className="w-fit">
+                {selectedDept?.name ?? "Select department"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {(departments.data?.data ?? []).map((dept) => (
+                <DropdownMenuItem
+                  key={dept.id}
+                  onSelect={() => setDepartmentId(dept.id)}
+                >
+                  {dept.name}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         {forecast.error ? (
           <ErrorBanner

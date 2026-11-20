@@ -17,7 +17,7 @@ import {
   useClosingDialog,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { SelectNative } from "@/components/ui/select-native";
+import { SearchSelect } from "@/components/ui/search-select";
 import {
   DisplacedHolderChoice,
   EMPTY_REMOVAL,
@@ -182,20 +182,24 @@ export function SimHolderDialog({
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="sim-holder">Held by</Label>
-            <SelectNative
+            <SearchSelect
               id="sim-holder"
               value={employeeId}
-              onChange={(e) => pick(e.target.value)}
+              onChange={pick}
               aria-describedby="sim-holder-note"
-            >
-              <option value={NOBODY}>Nobody — unallocated</option>
-              {options.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.full_name}
-                  {e.extension_code ? ` (ext. ${e.extension_code})` : ""}
-                </option>
-              ))}
-            </SelectNative>
+              searchPlaceholder="Type a name or extension…"
+              emptyText="No employee by that name or extension."
+              options={[
+                { value: NOBODY, label: "Nobody — unallocated" },
+                ...options.map((e) => ({
+                  value: e.id,
+                  label: e.full_name,
+                  hint: e.extension_code
+                    ? `ext. ${e.extension_code}`
+                    : undefined,
+                })),
+              ]}
+            />
             <p id="sim-holder-note" className="text-muted-foreground text-xs">
               {note}
             </p>

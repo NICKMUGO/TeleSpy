@@ -81,6 +81,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           attribute="class"
           defaultTheme="system"
           enableSystem
+          // globals.css sets color-scheme ("only light"/"only dark"); the
+          // inline "light" next-themes would add lets phones re-darken it.
+          enableColorScheme={false}
           disableTransitionOnChange
         >
           <AppProviders>
