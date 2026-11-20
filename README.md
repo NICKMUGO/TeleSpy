@@ -28,6 +28,7 @@ behind the default call rates) comes from KenyaRe.
 - [API overview](#api-overview)
 - [ML pipeline in detail](#ml-pipeline-in-detail)
 - [Billing rules](#billing-rules)
+- [Customer service ticketing](#customer-service-ticketing)
 - [Security](#security)
 - [Testing and CI](#testing-and-ci)
 - [Deployment](#deployment)
@@ -464,6 +465,90 @@ defaults on first startup and are never overwritten after that.
 
 **Bill reconciliation** (Admin) rebuilds each month's bill from these figures
 and sets it beside the telco's actual invoice total, which an admin enters.
+
+## Customer service ticketing
+
+TeleSpy includes a ticketing desk for customer issues and internal requests,
+with SLA tracking, live chat on every ticket, and customer ratings.
+
+### Who raises what
+
+- **Customer tickets** are raised only by people in the customer service desk
+  department. An Admin chooses which department is the desk in Settings.
+- **Internal tickets** can be raised by anyone, in any role.
+- Nobody can assign a ticket to themselves.
+
+### Raising a ticket
+
+Every ticket has:
+
+| Field     | Meaning                                                                 |
+| --------- | ----------------------------------------------------------------------- |
+| Category  | A quick category that routes the ticket to a department, or a custom reason |
+| Priority  | How urgent the ticket is; SLA compliance is reported per priority       |
+| Deadline  | Set by the raiser; drives SLA tracking and overdue alerts               |
+
+Admins manage the list of quick categories and the department each one routes
+to.
+
+### Lifecycle
+
+```mermaid
+flowchart LR
+    NEW["Raised"] --> CLAIM["Claimed"]
+    CLAIM --> RES["Resolved"]
+    CLAIM --> REJ["Rejected"]
+    CLAIM -->|transfer| NEW
+    CLAIM -->|forward for action| FWD["Forwarded"]
+    FWD -->|returned| CLAIM
+    REJ -->|resend| NEW
+    REJ -->|withdraw| CLOSED["Closed"]
+    RES -->|reopen, within 14 days| NEW
+    RES --> CLOSED
+```
+
+**Handlers** (anyone in the department the ticket is routed to) can:
+
+- **Claim** a ticket to work on it, or **release** it back to the queue.
+- **Resolve** it, or **reject** it back to the raiser.
+- **Hand back** (return) it, or **transfer** it to another department.
+- **Forward** it to another person or department for action, with a reply-by
+  time. The forward can be returned with a reply or recalled by the forwarder.
+
+**Raisers** can:
+
+- **Resend** or **withdraw** a rejected ticket.
+- **Reopen** a resolved ticket within 14 days, giving a reason and a new
+  deadline.
+
+**Admins** can close any ticket.
+
+### SLA tracking and escalation
+
+- The SLA clock runs from when a ticket is raised to its deadline, and
+  **pauses** while the ticket is rejected or forwarded.
+- When a ticket passes its deadline, the handling department's **Manager is
+  alerted**.
+- When a forward passes its reply-by time, both the **forwarder** and the
+  **Manager on the receiving side** are alerted.
+
+### Collaboration and notifications
+
+- Each ticket has a **live chat thread** (SignalR) with read ticks, plus a
+  full history of every action taken on it.
+- Raisers, handlers and Managers get **email and web push notifications**;
+  the installable PWA receives push on desktop, Android and iPhone/iPad.
+
+### SLA report and customer ratings
+
+The SLA report shows:
+
+- Compliance by **priority**, **department** and **person**
+- A **desk scorecard** for the customer service desk
+- What is **overdue right now**
+- **CSAT**: once a customer ticket is resolved, the customer receives an email
+  with a one-tap link to rate it from 1 to 5. The rating page is public but
+  token-gated, so only that customer can rate that ticket.
 
 ## Security
 
