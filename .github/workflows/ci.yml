@@ -1,0 +1,80 @@
+# Checks every push to main and every pull request: the frontend is linted,
+# format-checked, contrast-checked, type-checked, unit-tested and built, and
+# the .NET API is built. Deploy (deploy.yml) runs separately and doesn't wait
+# for this.
+#
+# The Playwright browser tests aren't run here: they sign in through the
+# local PostgreSQL and Redis (Frontend/tests/e2e/session.ts), which GitHub's
+# runners don't have. Run them locally with `pnpm test:e2e` in Frontend/.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NODE_VERSION: "22"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend — lint, format, contrast, typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: Frontend/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: Frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: WCAG AA contrast check
+        run: pnpm check-contrast
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_URL: /api
+
+  api:
+    name: API — build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: BackendDotNet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        run: dotnet build -c Release

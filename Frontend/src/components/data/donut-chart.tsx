@@ -33,7 +33,8 @@ export function DonutChart({
   formatValue?: (value: number) => string;
 }) {
   const total = data.reduce((sum, slice) => sum + slice.value, 0);
-  const format = formatValue ?? ((value: number) => value.toLocaleString("en-KE"));
+  const format =
+    formatValue ?? ((value: number) => value.toLocaleString("en-KE"));
 
   if (total <= 0) {
     return (

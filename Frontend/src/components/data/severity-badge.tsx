@@ -1,4 +1,8 @@
-import { severityOf, SEVERITY_LABEL, type Severity } from "@/lib/anomaly-severity";
+import {
+  severityOf,
+  SEVERITY_LABEL,
+  type Severity,
+} from "@/lib/anomaly-severity";
 import { cn } from "@/lib/utils";
 
 const SWATCH: Record<Severity, string> = {
