@@ -52,8 +52,10 @@ jobs:
       - name: WCAG AA contrast check
         run: pnpm check-contrast
 
+      # LayoutProps/PageProps come from Next.js's generated route types,
+      # which a fresh checkout doesn't have until something generates them.
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm exec next typegen && pnpm typecheck
 
       - name: Unit tests
         run: pnpm test
