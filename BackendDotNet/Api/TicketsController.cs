@@ -1728,13 +1728,13 @@ public class TicketsController(
         var text =
             $"{greeting}\n\nGood news: your request {number} (\"{ticket.Subject}\") has been resolved by {team}.\n\n" +
             "How did we do? Tap a rating:\n\n" +
-            string.Join("\n", Enumerable.Range(1, 5).Select(r => $"  {new string('*', r)} {labels[r - 1]}: {Link(r)}")) +
+            string.Join("\n", Enumerable.Range(1, 5).Select(r => $"  {r} of 5 ({labels[r - 1]}): {Link(r)}")) +
             $"\n\nIt takes one tap; you can add a comment after. Thank you for flying with us.\n\nCustomer Service";
 
         static string H(string? s) => System.Net.WebUtility.HtmlEncode(s ?? "");
         var starCells = string.Concat(Enumerable.Range(1, 5).Select(r => $"""
             <td align="center" style="padding:0 4px;">
-              <a href="{H(Link(r))}" title="{r} — {H(labels[r - 1])}" style="text-decoration:none;color:#f5a623;font-size:40px;line-height:44px;display:block;">&#9733;</a>
+              <a href="{H(Link(r))}" title="{r} — {H(labels[r - 1])}" style="text-decoration:none;color:#9aa6b5;font-size:40px;line-height:44px;display:block;">&#9734;</a>
               <span style="font-size:12px;color:#5d6878;">{r}</span>
             </td>
             """));

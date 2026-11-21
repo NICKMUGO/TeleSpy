@@ -117,19 +117,11 @@ function Desk({ me }: { me: TicketAccess }) {
   const ratingFigures = overseer
     ? weightedRating(agents)
     : { avg: mine?.csat_avg ?? null, responses: mine?.csat_responses ?? 0 };
-  /** "Team avg 31 · 3rd of 12" under an agent's own figure. */
-  const versus = (
-    avg: number | null | undefined,
-    rank: number | null | undefined,
-    format: (n: number) => string = (n) => String(n),
-  ) => {
-    if (overseer || !team) return undefined;
-    const parts = [];
-    if (avg != null) parts.push(`Team avg ${format(avg)}`);
-    if (rank != null && team.agents > 1)
-      parts.push(`${ordinal(rank)} of ${team.agents}`);
-    return parts.join(" · ") || undefined;
-  };
+  /** "3rd of 12" under an agent's own figure — their place on the desk. */
+  const placing = (rank: number | null | undefined) =>
+    overseer || !team || rank == null || team.agents <= 1
+      ? undefined
+      : `${ordinal(rank)} of ${team.agents}`;
   const returnedTickets = returned.data?.data ?? [];
 
   return (
@@ -189,10 +181,7 @@ function Desk({ me }: { me: TicketAccess }) {
                 label="Successful escalations"
                 value={String(figures?.successful ?? 0)}
                 tone="success"
-                hint={
-                  versus(team?.successful, ranks?.successful) ??
-                  "Resolved, never rejected"
-                }
+                hint={placing(ranks?.successful) ?? "Resolved, never rejected"}
               />
               <StatCard
                 label="Success rate"
@@ -200,17 +189,14 @@ function Desk({ me }: { me: TicketAccess }) {
                   figures?.success_pct == null ? "—" : `${figures.success_pct}%`
                 }
                 hint={
-                  versus(
-                    team?.success_pct,
-                    ranks?.success_pct,
-                    (n) => `${n}%`,
-                  ) ?? "Of tickets resolved this month"
+                  placing(ranks?.success_pct) ??
+                  "Of tickets resolved this month"
                 }
               />
               <StatCard
                 label="Raised"
                 value={String(figures?.raised ?? 0)}
-                hint={versus(team?.raised, null) ?? monthLabel(month)}
+                hint={monthLabel(month)}
               />
               <StatCard
                 label="Rejected"
@@ -230,13 +216,12 @@ function Desk({ me }: { me: TicketAccess }) {
                         ? "warning"
                         : "destructive"
                 }
+                // Only the viewer's own ratings (the desk's, for the
+                // Manager) — no team average beside it.
                 hint={
-                  versus(team?.csat_avg, ranks?.csat_avg, (n) =>
-                    n.toFixed(1),
-                  ) ??
-                  (ratingFigures.responses
+                  ratingFigures.responses
                     ? `${ratingFigures.responses} rating${ratingFigures.responses === 1 ? "" : "s"} in ${monthLabel(month)}`
-                    : "No customer ratings yet")
+                    : "No customer ratings yet"
                 }
               />
             </>
