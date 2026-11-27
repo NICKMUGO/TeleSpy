@@ -36,9 +36,20 @@ export interface ParsedBatch {
   missingColumns: string[];
 }
 
-// Minimal RFC4180 line splitter: handles quoted fields containing commas,
-// which carrier exports do produce in free-text columns.
-function splitCsvLine(line: string): string[] {
+/** The delimiter of a delimited-text export, judged from its header line:
+ * tab (text exports), semicolon (Excel's "CSV" in comma-decimal
+ * locales) or, by default, comma. */
+export function detectDelimiter(headerLine: string): string {
+  const counts = ["\t", ";", ","].map(
+    (d) => [d, headerLine.split(d).length - 1] as const,
+  );
+  const [best, count] = counts.reduce((a, b) => (b[1] > a[1] ? b : a));
+  return count > 0 ? best : ",";
+}
+
+// Minimal RFC4180 line splitter: handles quoted fields containing the
+// delimiter, which carrier exports do produce in free-text columns.
+function splitCsvLine(line: string, delimiter = ","): string[] {
   const out: string[] = [];
   let field = "";
   let inQuotes = false;
@@ -55,7 +66,7 @@ function splitCsvLine(line: string): string[] {
       }
     } else if (char === '"') {
       inQuotes = true;
-    } else if (char === ",") {
+    } else if (char === delimiter) {
       out.push(field);
       field = "";
     } else {
@@ -119,8 +130,10 @@ function fromCucm(
   return row;
 }
 
-/** "2026-07-15" or "15/07/2026" → "2026-07-15". */
-function normaliseDate(value: string): string | null {
+/** "2026-07-15" or "15/07/2026" → "2026-07-15". A trailing time (a
+ * spreadsheet datetime cell) is ignored. */
+function normaliseDate(raw: string): string | null {
+  const value = raw.split(/[ T]/)[0];
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (iso) return value;
   const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
@@ -129,23 +142,42 @@ function normaliseDate(value: string): string | null {
   return null;
 }
 
-/** "9:05" or "09:05:07" → "09:05:07". */
-function normaliseTime(value: string): string | null {
+/** "9:05" or "09:05:07" → "09:05:07". A leading date (a spreadsheet
+ * datetime cell) is ignored. */
+function normaliseTime(raw: string): string | null {
+  const value = raw.trim().split(/[ T]/).pop()!;
   const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value);
   if (!match || Number(match[1]) > 23) return null;
   return `${match[1].padStart(2, "0")}:${match[2]}:${match[3] ?? "00"}`;
 }
 
+/** Delimited text (.csv or .txt — comma, tab or semicolon) → records. */
 export function parseCdrCsv(text: string): ParsedBatch {
-  const lines = text
-    .split(/\r?\n/)
-    .filter((line, index) => index === 0 || line.trim() !== "");
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  const delimiter = detectDelimiter(lines[0] ?? "");
+  return parseCdrRows(
+    lines.map((line) =>
+      line.trim() === "" ? [] : splitCsvLine(line, delimiter),
+    ),
+  );
+}
+
+/** Rows of cell text (the first is the header; an empty row is skipped but
+ * still counts towards line numbers) → validated records. */
+export function parseCdrRows(rows: string[][]): ParsedBatch {
+  const kept = rows
+    .map((row, index) => ({ row, line: index + 1 }))
+    .filter(
+      ({ row }, index) => index === 0 || row.some((c) => c.trim() !== ""),
+    );
+  const lines = kept.map(({ row }) => row);
+  const lineNumbers = kept.map(({ line }) => line);
 
   if (lines.length < 2) {
     return { records: [], rejected: [], totalRows: 0, missingColumns: [] };
   }
 
-  const rawHeaders = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
+  const rawHeaders = lines[0].map((h) => h.trim().toLowerCase());
   const cucm = isCucmExport(rawHeaders);
   const headers = cucm
     ? rawHeaders
@@ -165,12 +197,11 @@ export function parseCdrCsv(text: string): ParsedBatch {
   const records: Record<string, unknown>[] = [];
   const rejected: RejectedRow[] = [];
 
-  lines.slice(1).forEach((line, index) => {
-    const lineNumber = index + 2; // 1-based, and line 1 is the header
-    const values = splitCsvLine(line);
+  lines.slice(1).forEach((values, index) => {
+    const lineNumber = lineNumbers[index + 1]; // 1-based, as in the file
     const get = (column: string) => {
       const i = headers.indexOf(column);
-      const value = i < 0 ? undefined : values[i];
+      const value = i < 0 ? undefined : values[i]?.trim();
       return value === "" ? undefined : value;
     };
 

@@ -60,4 +60,34 @@ describe("parseCdrCsv", () => {
       },
     ]);
   });
+
+  it("reads tab- and semicolon-delimited text exports", () => {
+    for (const d of ["\t", ";"]) {
+      const batch = parseCdrCsv(
+        ["orig", "dest", "duration_sec", "date", "orig_time"].join(d) +
+          "\n" +
+          ["201", "202", "10", "2026-07-15", "10:00"].join(d) +
+          "\n",
+      );
+      expect(batch.missingColumns).toEqual([]);
+      expect(batch.records).toHaveLength(1);
+    }
+  });
+
+  it("ignores a byte-order mark before the header", () => {
+    const batch = parseCdrCsv(
+      "\uFEFForig,dest,duration_sec,date,orig_time\n201,202,10,2026-07-15,10:00\n",
+    );
+    expect(batch.missingColumns).toEqual([]);
+  });
+});
+
+describe("line numbers", () => {
+  it("reports a rejected row by its line in the file, blank lines included", () => {
+    const batch = parseCdrCsv(
+      "orig,dest,duration_sec,date,orig_time\n201,202,10,2026-07-15,10:00\n\n201,202,x,2026-07-15,10:00\n",
+    );
+    expect(batch.records).toHaveLength(1);
+    expect(batch.rejected.map((r) => r.line)).toEqual([4]);
+  });
 });

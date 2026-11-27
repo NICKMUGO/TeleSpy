@@ -67,6 +67,11 @@ export default function IngestionPage() {
 
   async function handleFile(file: File) {
     setResult(null);
+    // Drag-and-drop ignores the input's accept list, so check it here too.
+    if (!/\.(csv|txt)$/i.test(file.name)) {
+      toast.error("Only .csv and .txt files can be uploaded.");
+      return;
+    }
     setFileName(file.name);
     setStage("reading");
     const text = await file.text();
@@ -147,15 +152,16 @@ export default function IngestionPage() {
                 className="text-muted-foreground size-7"
               />
               <p className="text-sm font-medium">
-                Drag and drop a carrier CSV here
+                Drag and drop a carrier CSV or text file here
               </p>
               <p className="text-muted-foreground text-xs">
-                Accepts .csv — parsed in your browser, then sent as records
+                Accepts .csv and .txt (comma, tab or semicolon separated) —
+                parsed in your browser, then sent as records
               </p>
               <input
                 ref={inputRef}
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.txt,text/csv,text/plain"
                 className="sr-only"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
