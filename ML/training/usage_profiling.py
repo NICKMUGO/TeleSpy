@@ -37,6 +37,9 @@ from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silho
 # Cross-validation splitter used during grid search.
 from sklearn.model_selection import RepeatedKFold
 
+# billing: the one place a call is priced — each employee's total_cost
+# feature is the sum of their calls' billed cost, as on their bill.
+import billing
 # Shared DB wrapper/helpers, plus classification label constants used as
 # feature inputs below.
 from common import Backend, CALL_CLASS_EXTERNAL, CALL_CLASS_INTERNATIONAL, new_id, now_str, open_backend_connections
@@ -51,37 +54,41 @@ CV_SPLITS = 5  # k in k-fold
 CV_REPEATS = 3  # how many times the k-fold split is repeated with different shuffles
 MIN_CV_SAMPLES = 15  # below this, folds are too small for silhouette to mean anything
 
-# SQL: every usage_event joined back to the employee who placed it (via
-# their current SIM allocation) — one row per event, employee_id repeated.
-_EMPLOYEE_EVENTS_SQL = """
-    SELECT e.employee_id, ev.duration_minutes, ev.computed_cost, ev.call_classification
-    FROM employees e
-    JOIN sim_allocations sa ON sa.employee_id = e.employee_id
-    JOIN usage_events ev ON ev.allocation_id = sa.allocation_id
-"""
-
-
 def _employee_usage_vectors(backend: Backend) -> dict[str, list[float]]:
-    # Run the join query, returning one row per usage event.
-    events = backend.read_sql(_EMPLOYEE_EVENTS_SQL)
+    """employee_id -> [call count, average duration, total cost, International
+    share, External share], over every call made while they held a line.
+
+    Calls are loaded and priced by billing.py — the same rows, rates and
+    contract discount that produce each person's bill — rather than read
+    from usage_events.computed_cost, which ingestion never fills (it is 0 on
+    every row, so a cost feature built from it carried no information and
+    the clusters could not be ranked low -> high by cost)."""
+    billing_settings = billing._load_billing_settings(backend)
+    intl_rates = billing._load_international_rates(backend)
+    calls = billing._load_dataset(backend, billing_settings, intl_rates)
+    # Only calls someone was holding the line for — a spare (pool) line's
+    # calls belong to no employee.
+    calls = calls[calls["employee_id"].notna()]
     # Result: employee_id -> that employee's feature vector.
     vectors: dict[str, list[float]] = {}
     # Group all rows by employee_id, then compute one feature vector per
-    # employee from their group of events.
-    for employee_id, group in events.groupby("employee_id"):
+    # employee from their group of calls.
+    for employee_id, group in calls.groupby("employee_id"):
         # How many calls this employee made in total.
         total_calls = len(group)
-        # Sum of call durations (missing values treated as 0).
-        total_duration = group["duration_minutes"].fillna(0).sum()
-        # Sum of call costs (missing values treated as 0).
-        total_cost = group["computed_cost"].fillna(0).sum()
+        # Sum of call durations, in minutes.
+        total_duration = group["duration_minutes"].sum()
+        # What their calls cost after the contract discount (KES) — the
+        # figure on their bill.
+        total_cost = group["computed_cost"].sum()
         # Fraction of this employee's calls that were International.
         intl_share = (group["call_classification"] == CALL_CLASS_INTERNATIONAL).sum() / total_calls
         # Fraction that were External (local, off-PBX).
         ext_share = (group["call_classification"] == CALL_CLASS_EXTERNAL).sum() / total_calls
         # 5-number feature vector: call count, average call duration, total
         # cost, International share, External share.
-        vectors[employee_id] = [float(total_calls), total_duration / total_calls, float(total_cost), intl_share, ext_share]
+        vectors[employee_id] = [float(total_calls), float(total_duration / total_calls), float(total_cost),
+                                float(intl_share), float(ext_share)]
     return vectors
 
 
