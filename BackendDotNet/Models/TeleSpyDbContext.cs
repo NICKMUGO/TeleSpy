@@ -591,6 +591,7 @@ public class TeleSpyDbContext(DbContextOptions<TeleSpyDbContext> options) : DbCo
             e.Property(x => x.Attributed).HasColumnName("attributed");
             e.Property(x => x.Unattributed).HasColumnName("unattributed");
             e.Property(x => x.SkippedUnanswered).HasColumnName("skipped_unanswered");
+            e.Property(x => x.SkippedIncoming).HasColumnName("skipped_incoming");
             e.Property(x => x.SkippedDuplicates).HasColumnName("skipped_duplicates");
             e.Property(x => x.SkippedInvalid).HasColumnName("skipped_invalid");
             e.Property(x => x.LinesCreated).HasColumnName("lines_created");

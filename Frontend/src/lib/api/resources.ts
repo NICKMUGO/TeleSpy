@@ -410,6 +410,9 @@ export const cdrApi = {
         attributed: number;
         unattributed: number;
         skipped_unanswered: number;
+        /** Calls into the company from outside (not from a 3-digit
+         * extension) — free to receive and nobody's to bill, so not stored. */
+        skipped_incoming: number;
         /** Calls already stored by an earlier upload — not added again,
          * so they're never billed twice. */
         skipped_duplicates: number;

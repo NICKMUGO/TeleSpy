@@ -120,6 +120,7 @@ export function BatchDetailSheet({
                 ["Already uploaded before (skipped)", entry.skipped_duplicates],
                 ["No date/time (skipped)", entry.skipped_invalid],
                 ["Unanswered (skipped)", entry.skipped_unanswered],
+                ["Incoming from outside (skipped)", entry.skipped_incoming],
               ] as const
             ).map(([label, count]) =>
               count ? (
@@ -152,6 +153,7 @@ export function BatchDetailSheet({
                   ["Unattributed", unattributed],
                   ["Already uploaded (skipped)", entry.skipped_duplicates],
                   ["No date/time (skipped)", entry.skipped_invalid],
+                  ["Incoming from outside (skipped)", entry.skipped_incoming],
                   ["Uploaded by", entry.uploaded_by_role ?? ""],
                   ["Occurred at", entry.occured_at],
                 ],

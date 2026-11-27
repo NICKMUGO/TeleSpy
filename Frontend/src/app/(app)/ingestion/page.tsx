@@ -53,6 +53,7 @@ export default function IngestionPage() {
     ingested: number;
     attributed: number;
     unattributed: number;
+    skipped_incoming: number;
     skipped_duplicates: number;
     skipped_invalid: number;
     lines_created: number;
@@ -293,6 +294,12 @@ export default function IngestionPage() {
                       value={result.unattributed}
                       tone={result.unattributed > 0 ? "warning" : undefined}
                     />
+                    {result.skipped_incoming > 0 ? (
+                      <Row
+                        label="Incoming from outside (skipped)"
+                        value={result.skipped_incoming}
+                      />
+                    ) : null}
                     {result.skipped_duplicates > 0 ? (
                       <Row
                         label="Already uploaded (skipped)"

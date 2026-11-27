@@ -81,7 +81,7 @@ public class CdrController(
         string? uploadedByUserId, string? uploadedByRole)
     {
 
-        int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0, skippedDuplicates = 0, skippedInvalid = 0;
+        int ingested = 0, attributed = 0, unattributed = 0, skippedUnanswered = 0, skippedIncoming = 0, skippedDuplicates = 0, skippedInvalid = 0;
         var createdExtensions = new List<string>();
         var settings = await db.BillingSettings.FindAsync(BillingConstants.BillingSettingsId);
         // When each extension's earliest answered call in this batch was —
@@ -134,6 +134,16 @@ public class CdrController(
             if (durationSec <= 0)
             {
                 skippedUnanswered++;
+                continue;
+            }
+            // A call that didn't come from one of the company's own 3-digit
+            // extensions — a call into the company from outside. Receiving
+            // it is free, nobody placed it, and billing, anomaly detection
+            // and the report all skip it, so it's counted and dropped, the
+            // same as the seed leaves it out.
+            if (CallClassification.ClassifyNumber(orig) != Constants.CallClassInternal)
+            {
+                skippedIncoming++;
                 continue;
             }
             // A row with no readable date and time can't be priced (peak or
@@ -211,6 +221,7 @@ public class CdrController(
             Attributed = attributed,
             Unattributed = unattributed,
             SkippedUnanswered = skippedUnanswered,
+            SkippedIncoming = skippedIncoming,
             SkippedDuplicates = skippedDuplicates,
             SkippedInvalid = skippedInvalid,
             LinesCreated = createdExtensions.Count,
@@ -224,10 +235,11 @@ public class CdrController(
             data = new
             {
                 ingested, attributed, unattributed, skipped_unanswered = skippedUnanswered,
+                skipped_incoming = skippedIncoming,
                 skipped_duplicates = skippedDuplicates, skipped_invalid = skippedInvalid,
                 lines_created = createdExtensions.Count, new_extensions = createdExtensions,
             },
-            message = IngestMessage(ingested, skippedUnanswered, skippedDuplicates, skippedInvalid),
+            message = IngestMessage(ingested, skippedUnanswered, skippedIncoming, skippedDuplicates, skippedInvalid),
         });
     }
 
@@ -244,10 +256,11 @@ public class CdrController(
     private static string CallKey(string orig, string dest, DateTime at, int durationSec) =>
         $"{orig}|{dest}|{at:yyyy-MM-dd HH:mm:ss}|{durationSec}";
 
-    private static string IngestMessage(int ingested, int unanswered, int duplicates, int invalid)
+    private static string IngestMessage(int ingested, int unanswered, int incoming, int duplicates, int invalid)
     {
         var parts = new List<string> { $"{ingested} call(s) added." };
         if (duplicates > 0) parts.Add($"{duplicates} were already uploaded and were skipped, so nothing is billed twice.");
+        if (incoming > 0) parts.Add($"{incoming} incoming call(s) from outside numbers were skipped — they cost nothing and no one placed them.");
         if (unanswered > 0) parts.Add($"{unanswered} unanswered call(s) (zero duration) were skipped.");
         if (invalid > 0) parts.Add($"{invalid} row(s) had no readable date and time and were skipped.");
         return string.Join(" ", parts);

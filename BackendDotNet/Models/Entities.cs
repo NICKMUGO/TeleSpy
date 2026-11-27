@@ -753,6 +753,8 @@ public class CdrIngestBatch
     public int Attributed { get; set; }
     public int Unattributed { get; set; }
     public int SkippedUnanswered { get; set; }
+    // Calls into the company from outside (not from a 3-digit extension).
+    public int SkippedIncoming { get; set; }
     // Calls already stored (an overlapping or repeated upload).
     public int SkippedDuplicates { get; set; }
     // Rows with no readable date/time.
@@ -769,6 +771,7 @@ public class CdrIngestBatch
         ["attributed"] = Attributed,
         ["unattributed"] = Unattributed,
         ["skipped_unanswered"] = SkippedUnanswered,
+        ["skipped_incoming"] = SkippedIncoming,
         ["skipped_duplicates"] = SkippedDuplicates,
         ["skipped_invalid"] = SkippedInvalid,
         ["lines_created"] = LinesCreated,

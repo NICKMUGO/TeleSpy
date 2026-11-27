@@ -218,6 +218,10 @@ namespace TeleSpy.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("skipped_duplicates");
 
+                    b.Property<int>("SkippedIncoming")
+                        .HasColumnType("integer")
+                        .HasColumnName("skipped_incoming");
+
                     b.Property<int>("SkippedInvalid")
                         .HasColumnType("integer")
                         .HasColumnName("skipped_invalid");
