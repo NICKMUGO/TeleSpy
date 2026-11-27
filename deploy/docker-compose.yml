@@ -50,6 +50,10 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40"]
+    # Reachable on the VM's own loopback only — never the internet (the
+    # NSG also only opens 22/80/443) — so an Admin can browse the live data
+    # with DBeaver through an SSH tunnel.
+    ports: ["127.0.0.1:5432:5432"]
     environment:
       POSTGRES_DB: telespy
       POSTGRES_USER: telespy
